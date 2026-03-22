@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - "codex/**"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Restore API dependencies
+        run: dotnet restore apps/api/src/SalesPlanning.Api/SalesPlanning.Api.csproj
+
+      - name: Build API
+        run: dotnet build --no-restore apps/api/src/SalesPlanning.Api/SalesPlanning.Api.csproj
+
+      - name: Run API tests
+        run: dotnet test --no-restore apps/api/tests/SalesPlanning.Api.Tests/SalesPlanning.Api.Tests.csproj
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Build web app
+        working-directory: apps/web
+        run: npm run build
+
+      - name: Install Playwright browser and OS deps
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser interaction tests
+        working-directory: apps/web
+        run: npm run test:e2e
+
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          if-no-files-found: ignore

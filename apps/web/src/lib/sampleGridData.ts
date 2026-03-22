@@ -1,0 +1,161 @@
+import type { GridSliceResponse } from "./types";
+
+export const sampleGridData: GridSliceResponse = {
+  scenarioVersionId: 1,
+  measureId: 1,
+  periods: [
+    { timePeriodId: 202600, label: "FY26", grain: "year", parentTimePeriodId: null, sortOrder: 1 },
+    { timePeriodId: 202601, label: "Jan", grain: "month", parentTimePeriodId: 202600, sortOrder: 2 },
+    { timePeriodId: 202602, label: "Feb", grain: "month", parentTimePeriodId: 202600, sortOrder: 3 },
+    { timePeriodId: 202603, label: "Mar", grain: "month", parentTimePeriodId: 202600, sortOrder: 4 },
+    { timePeriodId: 202604, label: "Apr", grain: "month", parentTimePeriodId: 202600, sortOrder: 5 },
+    { timePeriodId: 202605, label: "May", grain: "month", parentTimePeriodId: 202600, sortOrder: 6 },
+    { timePeriodId: 202606, label: "Jun", grain: "month", parentTimePeriodId: 202600, sortOrder: 7 },
+    { timePeriodId: 202607, label: "Jul", grain: "month", parentTimePeriodId: 202600, sortOrder: 8 },
+    { timePeriodId: 202608, label: "Aug", grain: "month", parentTimePeriodId: 202600, sortOrder: 9 },
+    { timePeriodId: 202609, label: "Sep", grain: "month", parentTimePeriodId: 202600, sortOrder: 10 },
+    { timePeriodId: 202610, label: "Oct", grain: "month", parentTimePeriodId: 202600, sortOrder: 11 },
+    { timePeriodId: 202611, label: "Nov", grain: "month", parentTimePeriodId: 202600, sortOrder: 12 },
+    { timePeriodId: 202612, label: "Dec", grain: "month", parentTimePeriodId: 202600, sortOrder: 13 },
+  ],
+  rows: [
+    {
+      storeId: 101,
+      productNodeId: 2000,
+      label: "Store A",
+      level: 0,
+      path: ["Store A"],
+      isLeaf: false,
+      cells: {
+        202600: { value: 17253, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202601: { value: 1270, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202602: { value: 1440, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202603: { value: 1365, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202604: { value: 1400, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202605: { value: 1430, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202606: { value: 1465, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202607: { value: 1510, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202608: { value: 1525, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202609: { value: 1460, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202610: { value: 1398, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202611: { value: 1440, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202612: { value: 1550, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" }
+      }
+    },
+    {
+      storeId: 101,
+      productNodeId: 2100,
+      label: "Beverages",
+      level: 1,
+      path: ["Store A", "Beverages"],
+      isLeaf: false,
+      cells: {
+        202600: { value: 11930, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202601: { value: 850, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202602: { value: 1010, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202603: { value: 955, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202604: { value: 975, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202605: { value: 990, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202606: { value: 1015, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202607: { value: 1050, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202608: { value: 1055, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202609: { value: 1005, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202610: { value: 958, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202611: { value: 992, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202612: { value: 1075, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" }
+      }
+    },
+    {
+      storeId: 101,
+      productNodeId: 2110,
+      label: "Soft Drinks",
+      level: 2,
+      path: ["Store A", "Beverages", "Soft Drinks"],
+      isLeaf: true,
+      cells: {
+        202600: { value: 8665, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 2, cellKind: "calculated" },
+        202601: { value: 600, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202602: { value: 750, isLocked: true, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202603: { value: 700, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202604: { value: 710, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202605: { value: 720, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202606: { value: 735, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202607: { value: 760, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202608: { value: 770, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202609: { value: 730, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202610: { value: 690, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202611: { value: 720, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202612: { value: 780, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" }
+      }
+    },
+    {
+      storeId: 101,
+      productNodeId: 2120,
+      label: "Tea",
+      level: 2,
+      path: ["Store A", "Beverages", "Tea"],
+      isLeaf: true,
+      cells: {
+        202600: { value: 3265, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 2, cellKind: "calculated" },
+        202601: { value: 250, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202602: { value: 260, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202603: { value: 255, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202604: { value: 265, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202605: { value: 270, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202606: { value: 280, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202607: { value: 290, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202608: { value: 285, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202609: { value: 275, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202610: { value: 268, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202611: { value: 272, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202612: { value: 295, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" }
+      }
+    },
+    {
+      storeId: 101,
+      productNodeId: 2200,
+      label: "Snacks",
+      level: 1,
+      path: ["Store A", "Snacks"],
+      isLeaf: false,
+      cells: {
+        202600: { value: 5323, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202601: { value: 420, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202602: { value: 430, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202603: { value: 410, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202604: { value: 425, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202605: { value: 440, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202606: { value: 450, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202607: { value: 460, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202608: { value: 470, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202609: { value: 455, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202610: { value: 440, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202611: { value: 448, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" },
+        202612: { value: 475, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 1, cellKind: "calculated" }
+      }
+    },
+    {
+      storeId: 101,
+      productNodeId: 2210,
+      label: "Chips",
+      level: 2,
+      path: ["Store A", "Snacks", "Chips"],
+      isLeaf: true,
+      cells: {
+        202600: { value: 5323, isLocked: false, isCalculated: true, isOverride: false, rowVersion: 2, cellKind: "calculated" },
+        202601: { value: 420, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202602: { value: 430, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202603: { value: 410, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202604: { value: 425, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202605: { value: 440, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202606: { value: 450, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202607: { value: 460, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202608: { value: 470, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202609: { value: 455, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202610: { value: 440, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202611: { value: 448, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" },
+        202612: { value: 475, isLocked: false, isCalculated: false, isOverride: false, rowVersion: 2, cellKind: "leaf" }
+      }
+    }
+  ],
+};

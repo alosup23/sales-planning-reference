@@ -1,0 +1,10 @@
+bin/
+obj/
+node_modules/
+dist/
+.DS_Store
+.dotnet-cli/
+apps/web/.tmp/
+apps/web/test-results/
+apps/web/playwright-report/
+tmp-browser-smoke.png
