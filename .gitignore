@@ -1,6 +1,7 @@
 bin/
 obj/
 node_modules/
+apps/api/src/SalesPlanning.Api/App_Data/
 dist/
 .DS_Store
 .dotnet-cli/

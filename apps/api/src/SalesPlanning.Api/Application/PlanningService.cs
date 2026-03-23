@@ -8,7 +8,6 @@ public sealed class PlanningService : IPlanningService
 {
     private readonly IPlanningRepository _repository;
     private readonly ISplashAllocator _splashAllocator;
-    private long _actionSeed = 1000;
 
     public PlanningService(IPlanningRepository repository, ISplashAllocator splashAllocator)
     {
@@ -52,22 +51,17 @@ public sealed class PlanningService : IPlanningService
 
     public async Task<SplashResponse> ApplySplashAsync(SplashRequest request, string userId, CancellationToken cancellationToken)
     {
-        var coordinate = new PlanningCellCoordinate(
+        var deltas = await ApplyScopedAllocationAsync(
             request.ScenarioVersionId,
             request.MeasureId,
-            request.SourceCell.StoreId,
-            request.SourceCell.ProductNodeId,
-            request.SourceCell.TimePeriodId);
-
-        var deltas = await ApplyValueChangeAsync(
-            coordinate,
+            request.SourceCell.TimePeriodId,
             request.TotalValue,
-            "override",
-            null,
             request.Comment,
             "splash",
             request.Method,
             request.ManualWeights,
+            request.ScopeRoots,
+            request.SourceCell,
             cancellationToken);
 
         var actionId = await AppendAuditAsync("splash", request.Method, userId, request.Comment, deltas, cancellationToken);
@@ -357,14 +351,16 @@ public sealed class PlanningService : IPlanningService
         }
         else
         {
-            if (isLeafCoordinate)
-            {
-                ApplyAggregateAllocation(coordinate, newValue, method, manualWeights, workingCells, metadata);
-            }
-            else
-            {
-                ApplyAggregateAllocation(coordinate, newValue, method, manualWeights, workingCells, metadata);
-            }
+            ApplyAggregateAllocation(
+                coordinate.ScenarioVersionId,
+                coordinate.MeasureId,
+                coordinate.TimePeriodId,
+                new[] { new SplashScopeRootDto(coordinate.StoreId, coordinate.ProductNodeId) },
+                newValue,
+                method,
+                manualWeights,
+                workingCells,
+                metadata);
         }
 
         RecalculateAll(workingCells, metadata, coordinate.ScenarioVersionId, coordinate.MeasureId);
@@ -372,26 +368,81 @@ public sealed class PlanningService : IPlanningService
         return deltas;
     }
 
+    private async Task<IReadOnlyList<PlanningCellDeltaAudit>> ApplyScopedAllocationAsync(
+        long scenarioVersionId,
+        long measureId,
+        long timePeriodId,
+        decimal totalValue,
+        string? comment,
+        string changeKind,
+        string method,
+        Dictionary<long, decimal>? manualWeights,
+        IReadOnlyList<SplashScopeRootDto>? requestedScopeRoots,
+        SplashCoordinateDto sourceCell,
+        CancellationToken cancellationToken)
+    {
+        var metadata = await _repository.GetMetadataAsync(cancellationToken);
+        var originalCells = await _repository.GetScenarioCellsAsync(scenarioVersionId, measureId, cancellationToken);
+        var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
+        var scopeRoots = (requestedScopeRoots is { Count: > 0 }
+                ? requestedScopeRoots
+                : new[] { new SplashScopeRootDto(sourceCell.StoreId, sourceCell.ProductNodeId) })
+            .Distinct()
+            .ToList();
+
+        if (scopeRoots.Count == 1)
+        {
+            var directCoordinate = new PlanningCellCoordinate(
+                scenarioVersionId,
+                measureId,
+                scopeRoots[0].StoreId,
+                scopeRoots[0].ProductNodeId,
+                timePeriodId);
+            if (IsLockedBySelfOrAncestor(directCoordinate, workingCells.Values, metadata))
+            {
+                throw new InvalidOperationException($"Cell {directCoordinate.Key} is locked and cannot be changed.");
+            }
+        }
+
+        ApplyAggregateAllocation(
+            scenarioVersionId,
+            measureId,
+            timePeriodId,
+            scopeRoots,
+            totalValue,
+            method,
+            manualWeights,
+            workingCells,
+            metadata);
+
+        RecalculateAll(workingCells, metadata, scenarioVersionId, measureId);
+        return await PersistScenarioChangesAsync(originalCells, workingCells.Values, changeKind, cancellationToken);
+    }
+
     private void ApplyAggregateAllocation(
-        PlanningCellCoordinate source,
+        long scenarioVersionId,
+        long measureId,
+        long sourceTimePeriodId,
+        IReadOnlyList<SplashScopeRootDto> scopeRoots,
         decimal totalValue,
         string method,
         Dictionary<long, decimal>? manualWeights,
         Dictionary<string, PlanningCell> workingCells,
         PlanningMetadataSnapshot metadata)
     {
-        var targetProductIds = GetLeafProductIds(source.ProductNodeId, metadata);
-        var targetTimeIds = GetLeafTimeIds(source.TimePeriodId, metadata);
-        var targetCells = targetProductIds
-            .SelectMany(productId => targetTimeIds.Select(timeId => workingCells[new PlanningCellCoordinate(
-                source.ScenarioVersionId,
-                source.MeasureId,
-                source.StoreId,
-                productId,
-                timeId).Key]))
+        var targetTimeIds = GetLeafTimeIds(sourceTimePeriodId, metadata);
+        var targetCells = scopeRoots
+            .SelectMany(root => GetLeafProductIds(root.ProductNodeId, metadata)
+                .SelectMany(productId => targetTimeIds.Select(timeId => workingCells[new PlanningCellCoordinate(
+                    scenarioVersionId,
+                    measureId,
+                    root.StoreId,
+                    productId,
+                    timeId).Key])))
+            .DistinctBy(cell => cell.Coordinate.Key)
             .ToList();
 
-        var weights = BuildWeights(source, targetCells, method, manualWeights, metadata);
+        var weights = BuildWeights(sourceTimePeriodId, targetCells, method, manualWeights, metadata);
         var splashTargets = targetCells
             .Select(cell =>
             {
@@ -413,7 +464,7 @@ public sealed class PlanningService : IPlanningService
     }
 
     private Dictionary<string, decimal> BuildWeights(
-        PlanningCellCoordinate source,
+        long sourceTimePeriodId,
         IReadOnlyList<PlanningCell> targetCells,
         string method,
         Dictionary<long, decimal>? manualWeights,
@@ -437,7 +488,7 @@ public sealed class PlanningService : IPlanningService
                 throw new InvalidOperationException("Manual or seasonality weights are required for this splash.");
             }
 
-            var timeWeights = GetLeafTimeIds(source.TimePeriodId, metadata)
+            var timeWeights = GetLeafTimeIds(sourceTimePeriodId, metadata)
                 .ToDictionary(timeId => timeId, timeId =>
                 {
                     if (!manualWeights.TryGetValue(timeId, out var weight))
@@ -714,7 +765,7 @@ public sealed class PlanningService : IPlanningService
         CancellationToken cancellationToken)
     {
         var audit = new PlanningActionAudit(
-            Interlocked.Increment(ref _actionSeed),
+            await _repository.GetNextActionIdAsync(cancellationToken),
             actionType,
             method,
             userId,

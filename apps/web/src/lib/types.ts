@@ -27,6 +27,10 @@ export type GridRow = {
   structureRole?: "store" | "category" | "subcategory" | "virtual";
   bindingStoreId?: number | null;
   bindingProductNodeId?: number | null;
+  splashRoots?: Array<{
+    storeId: number;
+    productNodeId: number;
+  }>;
 };
 
 export type GridSliceResponse = {
@@ -49,6 +53,10 @@ export type SplashRequest = {
   roundingScale: number;
   comment?: string;
   manualWeights?: Record<number, number>;
+  scopeRoots?: Array<{
+    storeId: number;
+    productNodeId: number;
+  }>;
 };
 
 export type EditCellsRequest = {

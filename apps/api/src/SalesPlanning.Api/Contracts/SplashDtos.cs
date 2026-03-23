@@ -8,9 +8,10 @@ public sealed record SplashRequest(
     string Method,
     int RoundingScale,
     string? Comment,
-    Dictionary<long, decimal>? ManualWeights);
+    Dictionary<long, decimal>? ManualWeights,
+    IReadOnlyList<SplashScopeRootDto>? ScopeRoots);
 
 public sealed record SplashCoordinateDto(long StoreId, long ProductNodeId, long TimePeriodId);
+public sealed record SplashScopeRootDto(long StoreId, long ProductNodeId);
 
 public sealed record SplashResponse(long ActionId, string Status, int CellsUpdated, int LockedCellsSkipped);
-

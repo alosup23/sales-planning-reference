@@ -68,6 +68,12 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository
         return Task.CompletedTask;
     }
 
+    public Task<long> GetNextActionIdAsync(CancellationToken cancellationToken)
+    {
+        var nextActionId = (_audits.Count == 0 ? 1000 : _audits.Max(audit => audit.ActionId)) + 1;
+        return Task.FromResult(nextActionId);
+    }
+
     public Task<IReadOnlyList<PlanningActionAudit>> GetAuditAsync(long scenarioVersionId, long measureId, long storeId, long productNodeId, CancellationToken cancellationToken)
     {
         var results = _audits

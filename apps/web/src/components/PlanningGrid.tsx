@@ -57,6 +57,7 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
   const [selectedRowKey, setSelectedRowKey] = useState<RowKey | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const gridRef = useRef<AgGridReact<GridRowView> | null>(null);
 
   const monthPeriods = useMemo(
     () => data.periods.filter((period) => period.grain === "month"),
@@ -88,6 +89,7 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
     : null;
   const canAddCategory = selectedRow?.structureRole === "store";
   const canAddSubcategory = selectedRow?.structureRole === "category";
+  const canSplashSelectedRow = Boolean(selectedRow?.splashRoots && selectedRow.splashRoots.length > 0);
 
   const syncSelectedRow = (row: GridRowView | null | undefined) => {
     setSelectedRowKey(
@@ -98,14 +100,24 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
   };
 
   const columnDefs = useMemo<ColDef<GridRowView>[]>(() => {
+    const isLeafMonthEditable = (row: GridRowView | undefined, timePeriodId: number) =>
+      Boolean(
+        row?.bindingProductNodeId &&
+        row.structureRole === "subcategory" &&
+        monthPeriods.some((period) => period.timePeriodId === timePeriodId) &&
+        !row.cells[timePeriodId]?.isLocked,
+      );
+    const isTopDownEditable = (row: GridRowView | undefined, timePeriodId: number) =>
+      Boolean(
+        row?.splashRoots?.length &&
+        !isLeafMonthEditable(row, timePeriodId) &&
+        !row?.cells[timePeriodId]?.isLocked,
+      );
+
     const yearCol: ColDef<GridRowView> = {
       headerName: yearPeriod?.label ?? "Year",
       colId: yearPeriod ? String(yearPeriod.timePeriodId) : "year",
-      editable: (params) => Boolean(
-        yearPeriod &&
-        params.data?.bindingProductNodeId &&
-        !params.data?.cells[yearPeriod.timePeriodId]?.isLocked,
-      ),
+      editable: (params) => Boolean(yearPeriod && isTopDownEditable(params.data, yearPeriod.timePeriodId)),
       valueGetter: (params) => yearPeriod ? params.data?.cells[yearPeriod.timePeriodId]?.value ?? 0 : 0,
       valueFormatter: formatValue,
       width: 112,
@@ -119,7 +131,7 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
     const monthCols: ColDef<GridRowView>[] = monthPeriods.map((period) => ({
       headerName: period.label,
       colId: String(period.timePeriodId),
-      editable: (params) => Boolean(params.data?.bindingProductNodeId && !params.data?.cells[period.timePeriodId]?.isLocked),
+      editable: (params) => isLeafMonthEditable(params.data, period.timePeriodId) || isTopDownEditable(params.data, period.timePeriodId),
       valueGetter: (params) => params.data?.cells[period.timePeriodId]?.value ?? 0,
       valueFormatter: formatValue,
       width: 96,
@@ -167,6 +179,17 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
       window.removeEventListener("keydown", handleEscape);
     };
   }, [contextMenu]);
+
+  useEffect(() => {
+    const api = gridRef.current?.api;
+    if (!api) {
+      return;
+    }
+
+    api.forEachNode((node) => {
+      node.setExpanded((node.level ?? 0) < 2);
+    });
+  }, [rowData]);
 
   const handleCellContextMenu = (event: CellContextMenuEvent<GridRowView>) => {
     event.event?.preventDefault();
@@ -277,9 +300,9 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
           <button
             type="button"
             className="secondary-button"
-            disabled={!selectedRow?.bindingProductNodeId}
+            disabled={!canSplashSelectedRow}
             onClick={() => {
-              if (!selectedRow?.bindingProductNodeId) {
+              if (!selectedRow) {
                 return;
               }
 
@@ -309,6 +332,7 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
 
       <div className="ag-theme-quartz planning-grid">
         <AgGridReact<GridRowView>
+          ref={gridRef}
           rowData={rowData}
           columnDefs={columnDefs}
           defaultColDef={defaultColDef}
@@ -374,13 +398,13 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
                   return;
                 }
 
-                if (contextRow.bindingProductNodeId) {
+                if (contextRow.splashRoots?.length) {
                   const total = contextRow.cells[202600]?.value ?? 0;
                   void onSplashYear(contextRow, total);
                 }
                 setContextMenu(null);
               }}
-              disabled={!contextRow?.bindingProductNodeId}
+              disabled={!contextRow?.splashRoots?.length}
             >
               Splash from year total
             </button>

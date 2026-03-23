@@ -184,29 +184,47 @@ export default function App() {
 
   const handleCellEdit = async (row: GridRow, timePeriodId: number, newValue: number) => {
     const cell = row.cells[timePeriodId];
-    const boundStoreId = row.bindingStoreId ?? row.storeId;
-    const boundProductNodeId = row.bindingProductNodeId ?? row.productNodeId;
-    if (!row.bindingProductNodeId) {
+    const period = gridQuery.data.periods.find((item) => item.timePeriodId === timePeriodId);
+    const isLeafMonth = row.structureRole === "subcategory" && period?.grain === "month";
+    const scopeRoots = row.splashRoots ?? [];
+
+    if (isLeafMonth && row.bindingProductNodeId) {
+      await editMutation.mutateAsync({
+        scenarioVersionId: gridQuery.data.scenarioVersionId,
+        measureId: gridQuery.data.measureId,
+        comment: "Grid edit",
+        cells: [
+          {
+            storeId: row.bindingStoreId ?? row.storeId,
+            productNodeId: row.bindingProductNodeId,
+            timePeriodId,
+            newValue,
+            editMode: "input",
+            rowVersion: cell.rowVersion,
+          },
+        ],
+      });
+      return;
+    }
+
+    if (scopeRoots.length === 0) {
       setLastError("This subtotal is read-only in the current view.");
       return;
     }
 
-    const period = gridQuery.data.periods.find((item) => item.timePeriodId === timePeriodId);
-    const isLeafMonth = row.structureRole === "subcategory" && period?.grain === "month";
-    await editMutation.mutateAsync({
+    await splashMutation.mutateAsync({
       scenarioVersionId: gridQuery.data.scenarioVersionId,
       measureId: gridQuery.data.measureId,
-      comment: "Grid edit",
-      cells: [
-        {
-          storeId: boundStoreId,
-          productNodeId: boundProductNodeId,
-          timePeriodId,
-          newValue,
-          editMode: isLeafMonth ? "input" : "override",
-          rowVersion: cell.rowVersion,
-        },
-      ],
+      sourceCell: {
+        storeId: scopeRoots[0].storeId,
+        productNodeId: scopeRoots[0].productNodeId,
+        timePeriodId,
+      },
+      totalValue: newValue,
+      method: "existing_plan",
+      roundingScale: 0,
+      comment: "Grid top-down edit",
+      scopeRoots,
     });
   };
 
@@ -234,10 +252,9 @@ export default function App() {
   };
 
   const handleSplashYear = async (row: GridRow, yearValue: number) => {
-    const boundStoreId = row.bindingStoreId ?? row.storeId;
-    const boundProductNodeId = row.bindingProductNodeId ?? row.productNodeId;
-    if (!row.bindingProductNodeId) {
-      setLastError("Only direct planning rows can be splashed in this view.");
+    const scopeRoots = row.splashRoots ?? [];
+    if (scopeRoots.length === 0) {
+      setLastError("This row cannot be splashed in the current view.");
       return;
     }
 
@@ -245,8 +262,8 @@ export default function App() {
       scenarioVersionId: gridQuery.data.scenarioVersionId,
       measureId: gridQuery.data.measureId,
       sourceCell: {
-        storeId: boundStoreId,
-        productNodeId: boundProductNodeId,
+        storeId: scopeRoots[0].storeId,
+        productNodeId: scopeRoots[0].productNodeId,
         timePeriodId: 202600,
       },
       totalValue: yearValue,
@@ -254,6 +271,7 @@ export default function App() {
       roundingScale: 0,
       comment: "Spread annual value across months",
       manualWeights: seasonalityWeights,
+      scopeRoots,
     });
   };
 
@@ -413,6 +431,7 @@ function buildStoreView(data: GridSliceResponse): GridSliceResponse {
       structureRole: row.level === 0 ? "store" : row.level === 1 ? "category" : "subcategory",
       bindingStoreId: row.storeId,
       bindingProductNodeId: row.productNodeId,
+      splashRoots: [{ storeId: row.storeId, productNodeId: row.productNodeId }],
     })),
   };
 }
@@ -447,6 +466,7 @@ function buildCategoryView(data: GridSliceResponse, layout: CategoryLayout): Gri
       label: categoryLabel,
       path: [categoryLabel],
       cells: sumCells(group.categoryRows, data),
+      splashRoots: group.categoryRows.map(toSplashRoot),
     }));
 
     if (layout === "category-store-subcategory") {
@@ -494,6 +514,7 @@ function buildCategoryView(data: GridSliceResponse, layout: CategoryLayout): Gri
         label: subcategoryLabel,
         path: [categoryLabel, subcategoryLabel],
         cells: sumCells(subcategoryRows, data),
+        splashRoots: subcategoryRows.map(toSplashRoot),
       }));
 
       for (const leafRow of [...subcategoryRows].sort((left, right) => {
@@ -519,7 +540,7 @@ function buildCategoryView(data: GridSliceResponse, layout: CategoryLayout): Gri
   };
 }
 
-function createSyntheticRow(row: Pick<GridRow, "storeId" | "productNodeId" | "label" | "path" | "cells">): GridRow {
+function createSyntheticRow(row: Pick<GridRow, "storeId" | "productNodeId" | "label" | "path" | "cells" | "splashRoots">): GridRow {
   return {
     ...row,
     viewRowId: `synthetic:${row.path.join(">")}:${row.productNodeId}`,
@@ -528,6 +549,7 @@ function createSyntheticRow(row: Pick<GridRow, "storeId" | "productNodeId" | "la
     structureRole: "virtual",
     bindingStoreId: null,
     bindingProductNodeId: null,
+    splashRoots: row.splashRoots ?? [],
   };
 }
 
@@ -535,11 +557,12 @@ function sumCells(rows: GridRow[], data: GridSliceResponse): Record<number, Grid
   return Object.fromEntries(
     data.periods.map((period) => {
       const value = rows.reduce((total, row) => total + (row.cells[period.timePeriodId]?.value ?? 0), 0);
+      const isLocked = rows.length > 0 && rows.every((row) => row.cells[period.timePeriodId]?.isLocked);
       return [
         period.timePeriodId,
         {
           value,
-          isLocked: false,
+          isLocked,
           isCalculated: true,
           isOverride: false,
           rowVersion: 0,
@@ -548,4 +571,11 @@ function sumCells(rows: GridRow[], data: GridSliceResponse): Record<number, Grid
       ];
     }),
   );
+}
+
+function toSplashRoot(row: GridRow): { storeId: number; productNodeId: number } {
+  return {
+    storeId: row.bindingStoreId ?? row.storeId,
+    productNodeId: row.bindingProductNodeId ?? row.productNodeId,
+  };
 }

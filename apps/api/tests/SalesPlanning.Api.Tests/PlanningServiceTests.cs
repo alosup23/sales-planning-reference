@@ -1,6 +1,7 @@
 using ClosedXML.Excel;
 using SalesPlanning.Api.Application;
 using SalesPlanning.Api.Contracts;
+using SalesPlanning.Api.Domain;
 using SalesPlanning.Api.Infrastructure;
 using Xunit;
 
@@ -113,7 +114,8 @@ public sealed class PlanningServiceTests
                     [202601] = 8, [202602] = 12, [202603] = 7, [202604] = 7,
                     [202605] = 8, [202606] = 8, [202607] = 9, [202608] = 9,
                     [202609] = 8, [202610] = 7, [202611] = 8, [202612] = 9
-                }),
+                },
+                null),
             "planner.one",
             CancellationToken.None));
 
@@ -246,5 +248,94 @@ public sealed class PlanningServiceTests
         var frozen = mappings.Categories.Single(categoryMapping => categoryMapping.CategoryLabel == "Frozen");
 
         Assert.Contains("Ice Cream", frozen.SubcategoryLabels);
+    }
+
+    [Fact]
+    public async Task ApplySplashAsync_WithMultipleScopeRoots_UpdatesSyntheticCategoryTotalsAcrossStores()
+    {
+        await _service.AddRowAsync(
+            new AddRowRequest(1, 1, "store", null, "Store Copy", 101),
+            CancellationToken.None);
+
+        var copiedCategory = await _repository.FindProductNodeByPathAsync(new[] { "Store Copy", "Beverages" }, CancellationToken.None);
+        var copiedSoftDrinks = await _repository.FindProductNodeByPathAsync(new[] { "Store Copy", "Beverages", "Soft Drinks" }, CancellationToken.None);
+
+        Assert.NotNull(copiedCategory);
+        Assert.NotNull(copiedSoftDrinks);
+
+        await _service.ApplySplashAsync(
+            new SplashRequest(
+                1,
+                1,
+                new SplashCoordinateDto(101, 2100, 202600),
+                24000m,
+                "seasonality_profile",
+                0,
+                "Synthetic category splash",
+                new Dictionary<long, decimal>
+                {
+                    [202601] = 8, [202602] = 12, [202603] = 7, [202604] = 7,
+                    [202605] = 8, [202606] = 8, [202607] = 9, [202608] = 9,
+                    [202609] = 8, [202610] = 7, [202611] = 8, [202612] = 9
+                },
+                new[]
+                {
+                    new SplashScopeRootDto(101, 2100),
+                    new SplashScopeRootDto(copiedCategory!.StoreId, copiedCategory.ProductNodeId)
+                }),
+            "planner.one",
+            CancellationToken.None);
+
+        var storeABeverages = await _repository.GetCellAsync(new(1, 1, 101, 2100, 202600), CancellationToken.None);
+        var copiedStoreBeverages = await _repository.GetCellAsync(new(1, 1, copiedCategory!.StoreId, copiedCategory.ProductNodeId, 202600), CancellationToken.None);
+        var lockedFebruary = await _repository.GetCellAsync(new(1, 1, 101, 2110, 202602), CancellationToken.None);
+        var copiedSoftDrinksYear = await _repository.GetCellAsync(new(1, 1, copiedSoftDrinks!.StoreId, copiedSoftDrinks.ProductNodeId, 202600), CancellationToken.None);
+
+        Assert.NotNull(storeABeverages);
+        Assert.NotNull(copiedStoreBeverages);
+        Assert.NotNull(lockedFebruary);
+        Assert.NotNull(copiedSoftDrinksYear);
+        Assert.Equal(24000m, storeABeverages!.EffectiveValue + copiedStoreBeverages!.EffectiveValue);
+        Assert.Equal(750m, lockedFebruary!.EffectiveValue);
+        Assert.True(copiedSoftDrinksYear!.EffectiveValue > 0m);
+    }
+
+    [Fact]
+    public async Task SqlitePlanningRepository_PersistsChangesAcrossRepositoryInstances()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), $"sales-planning-{Guid.NewGuid():N}.db");
+        try
+        {
+            var firstRepository = new SqlitePlanningRepository(databasePath);
+            var firstService = new PlanningService(firstRepository, new SplashAllocator());
+
+            await firstService.ApplyEditsAsync(
+                new EditCellsRequest(
+                    1,
+                    1,
+                    "Leaf adjustment",
+                    new[]
+                    {
+                        new EditCellRequest(101, 2120, 202603, 333m, "input", 2)
+                    }),
+                "planner.one",
+                CancellationToken.None);
+
+            var secondRepository = new SqlitePlanningRepository(databasePath);
+            var persistedLeaf = await secondRepository.GetCellAsync(new PlanningCellCoordinate(1, 1, 101, 2120, 202603), CancellationToken.None);
+            var persistedStoreYear = await secondRepository.GetCellAsync(new PlanningCellCoordinate(1, 1, 101, 2000, 202600), CancellationToken.None);
+
+            Assert.NotNull(persistedLeaf);
+            Assert.NotNull(persistedStoreYear);
+            Assert.Equal(333m, persistedLeaf!.EffectiveValue);
+            Assert.Equal(17331m, persistedStoreYear!.EffectiveValue);
+        }
+        finally
+        {
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
     }
 }

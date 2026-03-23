@@ -2,12 +2,14 @@ using SalesPlanning.Api.Application;
 using SalesPlanning.Api.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
+var planningDbPath = builder.Configuration["PlanningDbPath"]
+    ?? Path.Combine(builder.Environment.ContentRootPath, "App_Data", "planning.db");
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-builder.Services.AddSingleton<IPlanningRepository, InMemoryPlanningRepository>();
+builder.Services.AddSingleton<IPlanningRepository>(_ => new SqlitePlanningRepository(planningDbPath));
 builder.Services.AddSingleton<ISplashAllocator, SplashAllocator>();
 builder.Services.AddSingleton<IPlanningService, PlanningService>();
 
