@@ -1,13 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  type CellClickedEvent,
   ClientSideRowModelModule,
   CommunityFeaturesModule,
   ModuleRegistry,
   type CellContextMenuEvent,
   type CellEditRequestEvent,
+  type CellFocusedEvent,
   type ColDef,
+  type RowClickedEvent,
+  type SelectionChangedEvent,
   type ValueFormatterParams,
 } from "ag-grid-community";
+import "ag-grid-enterprise";
 import { AgGridReact } from "ag-grid-react";
 import type { GridRow, GridSliceResponse } from "../lib/types";
 import "ag-grid-community/styles/ag-grid.css";
@@ -23,6 +28,8 @@ type PlanningGridProps = {
   onCellEdit: (row: GridRow, timePeriodId: number, newValue: number) => Promise<void>;
   onToggleLock: (row: GridRow, timePeriodId: number, locked: boolean) => Promise<void>;
   onSplashYear: (row: GridRow, yearValue: number) => Promise<void>;
+  onAddRow: (level: "store" | "category" | "subcategory", parentRow: GridRow | null) => Promise<void>;
+  onImportWorkbook: (file: File) => Promise<void>;
 };
 
 type GridRowView = GridRow & {
@@ -46,9 +53,10 @@ function formatValue(params: ValueFormatterParams<GridRowView>): string {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
 }
 
-export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear }: PlanningGridProps) {
+export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onAddRow, onImportWorkbook }: PlanningGridProps) {
   const [selectedRowKey, setSelectedRowKey] = useState<RowKey | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   const monthPeriods = useMemo(
     () => data.periods.filter((period) => period.grain === "month"),
@@ -78,6 +86,14 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear }: P
   const contextRow = contextMenu
     ? rowLookup.get(getRowKey(contextMenu.rowKey.storeId, contextMenu.rowKey.productNodeId)) ?? null
     : null;
+
+  const syncSelectedRow = (row: GridRowView | null | undefined) => {
+    setSelectedRowKey(
+      row
+        ? { storeId: row.storeId, productNodeId: row.productNodeId }
+        : null,
+    );
+  };
 
   const columnDefs = useMemo<ColDef<GridRowView>[]>(() => {
     const yearCol: ColDef<GridRowView> = {
@@ -189,6 +205,27 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear }: P
     await onCellEdit(event.data, timePeriodId, Number(event.newValue));
   };
 
+  const handleSelectionChanged = (event: SelectionChangedEvent<GridRowView>) => {
+    syncSelectedRow(event.api.getSelectedRows()[0]);
+  };
+
+  const handleCellClicked = (event: CellClickedEvent<GridRowView>) => {
+    syncSelectedRow(event.data);
+  };
+
+  const handleRowClicked = (event: RowClickedEvent<GridRowView>) => {
+    syncSelectedRow(event.data);
+  };
+
+  const handleCellFocused = (event: CellFocusedEvent<GridRowView>) => {
+    if (event.rowIndex === null) {
+      return;
+    }
+
+    const row = event.api.getDisplayedRowAtIndex(event.rowIndex)?.data;
+    syncSelectedRow(row);
+  };
+
   return (
     <div className="planning-shell">
       <div className="planning-toolbar">
@@ -204,6 +241,36 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear }: P
           <button
             type="button"
             className="secondary-button"
+            onClick={() => void onAddRow("store", null)}
+          >
+            Add Store
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={!selectedRow || selectedRow.level !== 0}
+            onClick={() => void onAddRow("category", selectedRow)}
+          >
+            Add Category
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={!selectedRow || selectedRow.level !== 1}
+            onClick={() => void onAddRow("subcategory", selectedRow)}
+          >
+            Add Subcategory
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => importInputRef.current?.click()}
+          >
+            Upload Workbook
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
             disabled={!selectedRow}
             onClick={() => {
               if (!selectedRow) {
@@ -216,6 +283,21 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear }: P
           >
             Splash selected row
           </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".xlsx"
+            style={{ display: "none" }}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (!file) {
+                return;
+              }
+
+              void onImportWorkbook(file);
+              event.currentTarget.value = "";
+            }}
+          />
         </div>
       </div>
 
@@ -227,19 +309,19 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear }: P
           treeData
           animateRows
           getDataPath={(data) => data.__path}
-          groupDefaultExpanded={1}
+          groupDefaultExpanded={2}
           getRowId={(params) => `${params.data.storeId}-${params.data.productNodeId}`}
           suppressAggFuncInHeader
           enableCellTextSelection
+          cellSelection
           readOnlyEdit
           undoRedoCellEditing
           undoRedoCellEditingLimit={20}
           rowSelection="single"
-          onRowSelected={(event) => setSelectedRowKey(
-            event.node.data
-              ? { storeId: event.node.data.storeId, productNodeId: event.node.data.productNodeId }
-              : null,
-          )}
+          onSelectionChanged={handleSelectionChanged}
+          onCellClicked={handleCellClicked}
+          onRowClicked={handleRowClicked}
+          onCellFocused={handleCellFocused}
           onCellContextMenu={handleCellContextMenu}
           onCellEditRequest={handleCellEditRequest}
           autoGroupColumnDef={{

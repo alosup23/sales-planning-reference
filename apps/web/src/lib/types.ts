@@ -73,3 +73,10 @@ export type LockCellsRequest = {
   }>;
 };
 
+export type AddRowRequest = {
+  scenarioVersionId: number;
+  measureId: number;
+  level: "store" | "category" | "subcategory";
+  parentProductNodeId: number | null;
+  label: string;
+};

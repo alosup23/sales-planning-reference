@@ -2,7 +2,7 @@
 
 This repository contains a greenfield reference implementation skeleton for an enterprise sales planning application with:
 
-- `React + TypeScript + AG Grid Community` on the web front end
+- `React + TypeScript + AG Grid Enterprise` on the web front end
 - `.NET 10 Web API` for planning actions, locking, and the splash engine
 - In-memory sample data to keep the skeleton easy to inspect before a real database is introduced
 
@@ -17,8 +17,9 @@ This repository contains a greenfield reference implementation skeleton for an e
 - Lock-safe planning cell model
 - Bottom-up edits with aggregate rollup hooks
 - Top-down splash engine with locked-cell exclusion and deterministic residual distribution
+- Cross-axis recalculation so row and column totals stay aligned after bottom-up and top-down edits
 - Audit trail contracts
-- AG Grid shell with hierarchical rows, grouped year/month columns, and lock/splash actions
+- AG Grid shell with hierarchical rows, grouped year/month columns, lock/splash actions, row creation, and workbook upload
 - Playwright browser smoke and interaction coverage for core planning flows
 
 ## What Is Not Included Yet
@@ -49,6 +50,8 @@ npm run dev
 
 The frontend expects the API at `https://localhost:7080` by default and can be updated in [`api.ts`](/Users/aloysius/Documents/New project/apps/web/src/lib/api.ts).
 
+For normal local development, the Vite dev server proxies `/api` requests to the API so edits work without any certificate setup.
+
 ### Browser Interaction Tests
 
 ```bash
@@ -61,7 +64,6 @@ npm run test:e2e
 The Playwright harness starts an isolated local stack automatically:
 
 - API on `http://127.0.0.1:5080`
-- HTTPS proxy on `https://localhost:7080`
 - Vite dev server on `http://localhost:5173`
 
 ## Continuous Integration

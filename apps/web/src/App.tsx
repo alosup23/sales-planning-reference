@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { getGridSlice, postEdit, postLock, postSplash } from "./lib/api";
+import { getGridSlice, postAddRow, postEdit, postLock, postSplash, postWorkbookImport } from "./lib/api";
 import type { GridRow } from "./lib/types";
 
 const preloadPlanningGrid = () => import("./components/PlanningGrid");
@@ -69,17 +69,36 @@ export default function App() {
     onError: (error: Error) => setLastError(error.message),
   });
 
+  const addRowMutation = useMutation({
+    mutationFn: postAddRow,
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const importMutation = useMutation({
+    mutationFn: ({ file, scenarioVersionId, measureId }: { file: File; scenarioVersionId: number; measureId: number }) =>
+      postWorkbookImport(scenarioVersionId, measureId, file),
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
   const statusText = useMemo(() => {
     if (gridQuery.isLoading) {
       return "Loading planning slice...";
     }
 
-    if (editMutation.isPending || lockMutation.isPending || splashMutation.isPending) {
+    if (editMutation.isPending || lockMutation.isPending || splashMutation.isPending || addRowMutation.isPending || importMutation.isPending) {
       return "Applying changes...";
     }
 
     if (gridQuery.isError) {
-      return "API unavailable. Showing fallback structure.";
+      return "API unavailable.";
     }
 
     if (lastError) {
@@ -87,7 +106,7 @@ export default function App() {
     }
 
     return "Lock-safe planning grid ready.";
-  }, [editMutation.isPending, gridQuery.isError, gridQuery.isLoading, lastError, lockMutation.isPending, splashMutation.isPending]);
+  }, [addRowMutation.isPending, editMutation.isPending, gridQuery.isError, gridQuery.isLoading, importMutation.isPending, lastError, lockMutation.isPending, splashMutation.isPending]);
 
   if (!gridQuery.data) {
     return (
@@ -152,6 +171,29 @@ export default function App() {
     });
   };
 
+  const handleAddRow = async (level: "store" | "category" | "subcategory", parentRow: GridRow | null) => {
+    const label = window.prompt(`New ${level} name`);
+    if (!label) {
+      return;
+    }
+
+    await addRowMutation.mutateAsync({
+      scenarioVersionId: gridQuery.data.scenarioVersionId,
+      measureId: gridQuery.data.measureId,
+      level,
+      parentProductNodeId: level === "store" ? null : parentRow?.productNodeId ?? null,
+      label,
+    });
+  };
+
+  const handleImportWorkbook = async (file: File) => {
+    await importMutation.mutateAsync({
+      file,
+      scenarioVersionId: gridQuery.data.scenarioVersionId,
+      measureId: gridQuery.data.measureId,
+    });
+  };
+
   return (
     <main className="app-shell">
       <section className="hero">
@@ -179,6 +221,8 @@ export default function App() {
           onCellEdit={handleCellEdit}
           onToggleLock={handleToggleLock}
           onSplashYear={handleSplashYear}
+          onAddRow={handleAddRow}
+          onImportWorkbook={handleImportWorkbook}
         />
       </Suspense>
     </main>

@@ -19,7 +19,6 @@ export default defineConfig({
   reporter: [["list"]],
   use: {
     baseURL: "http://localhost:5173",
-    ignoreHTTPSErrors: true,
     trace: "on-first-retry",
     launchOptions: fs.existsSync(chromePath) ? { executablePath: chromePath } : {},
   },
@@ -31,14 +30,7 @@ export default defineConfig({
       reuseExistingServer: false,
     },
     {
-      command: "API_PROXY_TARGET_PORT=5080 node scripts/https-api-proxy.mjs",
-      cwd: path.join(workspaceRoot, "apps/web"),
-      url: "https://localhost:7080/api/v1/grid-slices?scenarioVersionId=1&measureId=1",
-      reuseExistingServer: false,
-      ignoreHTTPSErrors: true,
-    },
-    {
-      command: "npm run dev -- --host localhost --port 5173",
+      command: "VITE_API_PROXY_TARGET=http://127.0.0.1:5080 npm run dev -- --host localhost --port 5173",
       cwd: path.join(workspaceRoot, "apps/web"),
       url: "http://localhost:5173",
       reuseExistingServer: false,

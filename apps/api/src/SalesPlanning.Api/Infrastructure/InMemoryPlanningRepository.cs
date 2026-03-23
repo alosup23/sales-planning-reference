@@ -8,26 +8,20 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository
 {
     private readonly Dictionary<string, PlanningCell> _cells = new();
     private readonly List<PlanningActionAudit> _audits = new();
-    private readonly PlanningMetadataSnapshot _metadata;
-    private readonly IReadOnlyList<long> _year2026Months;
+    private Dictionary<long, ProductNode> _productNodes = new();
+    private readonly Dictionary<long, TimePeriodNode> _timePeriods;
+    private long _productNodeSeed = 3000;
+    private long _storeSeed = 200;
 
     public InMemoryPlanningRepository()
     {
-        var productNodes = BuildProductNodes();
-        var timePeriods = BuildTimePeriods();
-        _metadata = new PlanningMetadataSnapshot(productNodes, timePeriods);
-        _year2026Months = timePeriods.Values
-            .Where(x => x.ParentTimePeriodId == 202600)
-            .OrderBy(x => x.SortOrder)
-            .Select(x => x.TimePeriodId)
-            .ToList();
-
-        SeedCells();
+        _timePeriods = BuildTimePeriods();
+        ResetState();
     }
 
     public Task<PlanningMetadataSnapshot> GetMetadataAsync(CancellationToken cancellationToken)
     {
-        return Task.FromResult(_metadata);
+        return Task.FromResult(new PlanningMetadataSnapshot(_productNodes, _timePeriods));
     }
 
     public Task<IReadOnlyList<PlanningCell>> GetCellsAsync(IEnumerable<PlanningCellCoordinate> coordinates, CancellationToken cancellationToken)
@@ -45,37 +39,12 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository
         return Task.FromResult(_cells.TryGetValue(coordinate.Key, out var cell) ? cell.Clone() : null);
     }
 
-    public Task<IReadOnlyList<PlanningCell>> GetCellsForProductAsync(long scenarioVersionId, long measureId, long storeId, long productNodeId, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<PlanningCell>> GetScenarioCellsAsync(long scenarioVersionId, long measureId, CancellationToken cancellationToken)
     {
         var cells = _cells.Values
             .Where(cell =>
                 cell.Coordinate.ScenarioVersionId == scenarioVersionId &&
-                cell.Coordinate.MeasureId == measureId &&
-                cell.Coordinate.StoreId == storeId &&
-                cell.Coordinate.ProductNodeId == productNodeId)
-            .Select(cell => cell.Clone())
-            .ToList();
-
-        return Task.FromResult<IReadOnlyList<PlanningCell>>(cells);
-    }
-
-    public Task<IReadOnlyList<PlanningCell>> GetCellsForProductAndPeriodsAsync(
-        long scenarioVersionId,
-        long measureId,
-        long storeId,
-        long productNodeId,
-        IEnumerable<long> timePeriodIds,
-        CancellationToken cancellationToken)
-    {
-        var timeSet = timePeriodIds.ToHashSet();
-        var cells = _cells.Values
-            .Where(cell =>
-                cell.Coordinate.ScenarioVersionId == scenarioVersionId &&
-                cell.Coordinate.MeasureId == measureId &&
-                cell.Coordinate.StoreId == storeId &&
-                cell.Coordinate.ProductNodeId == productNodeId &&
-                timeSet.Contains(cell.Coordinate.TimePeriodId))
-            .OrderBy(cell => _metadata.TimePeriods[cell.Coordinate.TimePeriodId].SortOrder)
+                cell.Coordinate.MeasureId == measureId)
             .Select(cell => cell.Clone())
             .ToList();
 
@@ -114,30 +83,34 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository
 
     public Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long measureId, CancellationToken cancellationToken)
     {
-        const long storeId = 101;
-        var rows = _metadata.ProductNodes.Values
+        var scenarioCells = _cells.Values
+            .Where(cell =>
+                cell.Coordinate.ScenarioVersionId == scenarioVersionId &&
+                cell.Coordinate.MeasureId == measureId)
+            .Select(cell => cell.Clone())
+            .ToList();
+
+        var rows = _productNodes.Values
             .OrderBy(node => node.Path.Length)
-            .ThenBy(node => string.Join(">", node.Path))
+            .ThenBy(node => string.Join(">", node.Path), StringComparer.OrdinalIgnoreCase)
             .Select(node =>
             {
-                var cells = _cells.Values
+                var cells = scenarioCells
                     .Where(cell =>
-                        cell.Coordinate.ScenarioVersionId == scenarioVersionId &&
-                        cell.Coordinate.MeasureId == measureId &&
-                        cell.Coordinate.StoreId == storeId &&
+                        cell.Coordinate.StoreId == node.StoreId &&
                         cell.Coordinate.ProductNodeId == node.ProductNodeId)
                     .ToDictionary(
                         cell => cell.Coordinate.TimePeriodId,
                         cell => new GridCellDto(
                             cell.EffectiveValue,
-                            cell.IsLocked,
+                            IsEffectivelyLocked(cell.Coordinate, scenarioCells),
                             cell.CellKind == "calculated",
                             cell.OverrideValue is not null,
                             cell.RowVersion,
                             cell.CellKind));
 
                 return new GridRowDto(
-                    storeId,
+                    node.StoreId,
                     node.ProductNodeId,
                     node.Label,
                     node.Level,
@@ -147,7 +120,7 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository
             })
             .ToList();
 
-        var periods = _metadata.TimePeriods.Values
+        var periods = _timePeriods.Values
             .OrderBy(node => node.SortOrder)
             .Select(node => new GridPeriodDto(node.TimePeriodId, node.Label, node.Grain, node.ParentTimePeriodId, node.SortOrder))
             .ToList();
@@ -155,35 +128,112 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository
         return Task.FromResult(new GridSliceResponse(scenarioVersionId, measureId, periods, rows));
     }
 
+    public Task<ProductNode> AddRowAsync(AddRowRequest request, CancellationToken cancellationToken)
+    {
+        var normalizedLevel = request.Level.Trim().ToLowerInvariant();
+        ProductNode node;
+
+        switch (normalizedLevel)
+        {
+            case "store":
+            {
+                var storeId = ++_storeSeed;
+                var productNodeId = ++_productNodeSeed;
+                node = new ProductNode(productNodeId, storeId, null, request.Label.Trim(), 0, new[] { request.Label.Trim() }, false);
+                _productNodes[node.ProductNodeId] = node;
+                InitializeCellsForNode(request.ScenarioVersionId, request.MeasureId, node);
+                break;
+            }
+            case "category":
+            {
+                var parent = GetRequiredNode(request.ParentProductNodeId, 0, "category");
+                node = new ProductNode(
+                    ++_productNodeSeed,
+                    parent.StoreId,
+                    parent.ProductNodeId,
+                    request.Label.Trim(),
+                    1,
+                    parent.Path.Append(request.Label.Trim()).ToArray(),
+                    false);
+                _productNodes[node.ProductNodeId] = node;
+                InitializeCellsForNode(request.ScenarioVersionId, request.MeasureId, node);
+                break;
+            }
+            case "subcategory":
+            {
+                var parent = GetRequiredNode(request.ParentProductNodeId, 1, "subcategory");
+                if (parent.IsLeaf)
+                {
+                    _productNodes[parent.ProductNodeId] = parent with { IsLeaf = false };
+                }
+
+                node = new ProductNode(
+                    ++_productNodeSeed,
+                    parent.StoreId,
+                    parent.ProductNodeId,
+                    request.Label.Trim(),
+                    2,
+                    parent.Path.Append(request.Label.Trim()).ToArray(),
+                    true);
+                _productNodes[node.ProductNodeId] = node;
+                InitializeCellsForNode(request.ScenarioVersionId, request.MeasureId, node);
+                break;
+            }
+            default:
+                throw new InvalidOperationException($"Unsupported row level '{request.Level}'.");
+        }
+
+        return Task.FromResult(node);
+    }
+
+    public Task<ProductNode?> FindProductNodeByPathAsync(string[] path, CancellationToken cancellationToken)
+    {
+        var node = _productNodes.Values.FirstOrDefault(candidate =>
+            candidate.Path.Length == path.Length &&
+            candidate.Path.Zip(path, (left, right) => string.Equals(left, right, StringComparison.OrdinalIgnoreCase)).All(match => match));
+
+        return Task.FromResult(node);
+    }
+
     public Task ResetAsync(CancellationToken cancellationToken)
+    {
+        ResetState();
+        return Task.CompletedTask;
+    }
+
+    private void ResetState()
     {
         _cells.Clear();
         _audits.Clear();
+        _productNodes = BuildProductNodes();
         SeedCells();
-        return Task.CompletedTask;
     }
 
     private void SeedCells()
     {
         const long scenarioVersionId = 1;
         const long measureId = 1;
-        const long storeId = 101;
 
-        var leafValues = new Dictionary<long, Dictionary<long, decimal>>
+        foreach (var productNode in _productNodes.Values)
         {
-            [2110] = new()
+            InitializeCellsForNode(scenarioVersionId, measureId, productNode);
+        }
+
+        var leafValues = new Dictionary<(long StoreId, long ProductNodeId), Dictionary<long, decimal>>
+        {
+            [(101, 2110)] = new()
             {
                 [202601] = 600m, [202602] = 750m, [202603] = 700m, [202604] = 710m,
                 [202605] = 720m, [202606] = 735m, [202607] = 760m, [202608] = 770m,
                 [202609] = 730m, [202610] = 690m, [202611] = 720m, [202612] = 780m
             },
-            [2120] = new()
+            [(101, 2120)] = new()
             {
                 [202601] = 250m, [202602] = 260m, [202603] = 255m, [202604] = 265m,
                 [202605] = 270m, [202606] = 280m, [202607] = 290m, [202608] = 285m,
                 [202609] = 275m, [202610] = 268m, [202611] = 272m, [202612] = 295m
             },
-            [2210] = new()
+            [(101, 2210)] = new()
             {
                 [202601] = 420m, [202602] = 430m, [202603] = 410m, [202604] = 425m,
                 [202605] = 440m, [202606] = 450m, [202607] = 460m, [202608] = 470m,
@@ -191,69 +241,162 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository
             }
         };
 
-        foreach (var productNode in _metadata.ProductNodes.Values)
+        foreach (var (key, monthValues) in leafValues)
         {
-            foreach (var period in _metadata.TimePeriods.Values)
+            foreach (var month in monthValues)
             {
-                var coordinate = new PlanningCellCoordinate(scenarioVersionId, measureId, storeId, productNode.ProductNodeId, period.TimePeriodId);
-                _cells[coordinate.Key] = new PlanningCell
-                {
-                    Coordinate = coordinate,
-                    InputValue = null,
-                    OverrideValue = null,
-                    DerivedValue = 0,
-                    EffectiveValue = 0,
-                    IsLocked = false,
-                    RowVersion = 1,
-                    CellKind = productNode.IsLeaf && period.Grain == "month" ? "leaf" : "calculated"
-                };
-            }
-        }
-
-        foreach (var leaf in leafValues)
-        {
-            foreach (var month in leaf.Value)
-            {
-                var coordinate = new PlanningCellCoordinate(scenarioVersionId, measureId, storeId, leaf.Key, month.Key);
+                var coordinate = new PlanningCellCoordinate(scenarioVersionId, measureId, key.StoreId, key.ProductNodeId, month.Key);
                 var cell = _cells[coordinate.Key];
                 cell.InputValue = month.Value;
                 cell.DerivedValue = month.Value;
                 cell.EffectiveValue = month.Value;
                 cell.RowVersion = 2;
+                cell.CellKind = "input";
                 _cells[coordinate.Key] = cell;
             }
         }
 
-        var lockedCoordinate = new PlanningCellCoordinate(scenarioVersionId, measureId, storeId, 2110, 202602);
+        var lockedCoordinate = new PlanningCellCoordinate(scenarioVersionId, measureId, 101, 2110, 202602);
         _cells[lockedCoordinate.Key].IsLocked = true;
         _cells[lockedCoordinate.Key].LockReason = "Manager-held sample lock";
         _cells[lockedCoordinate.Key].LockedBy = "demo.manager";
 
-        RecalculateAll(scenarioVersionId, measureId, storeId);
+        RecalculateSeedTotals(scenarioVersionId, measureId);
     }
 
-    private void RecalculateAll(long scenarioVersionId, long measureId, long storeId)
+    private void InitializeCellsForNode(long scenarioVersionId, long measureId, ProductNode node)
     {
-        foreach (var productNode in _metadata.ProductNodes.Values.Where(node => node.IsLeaf))
+        foreach (var period in _timePeriods.Values)
         {
-            var yearCoordinate = new PlanningCellCoordinate(scenarioVersionId, measureId, storeId, productNode.ProductNodeId, 202600);
-            var yearCell = _cells[yearCoordinate.Key];
-            yearCell.DerivedValue = _year2026Months.Sum(month => _cells[new PlanningCellCoordinate(scenarioVersionId, measureId, storeId, productNode.ProductNodeId, month).Key].EffectiveValue);
-            yearCell.EffectiveValue = yearCell.OverrideValue ?? yearCell.DerivedValue;
-            _cells[yearCoordinate.Key] = yearCell;
-        }
-
-        foreach (var node in _metadata.ProductNodes.Values.Where(node => !node.IsLeaf).OrderByDescending(node => node.Level))
-        {
-            foreach (var period in _metadata.TimePeriods.Values)
+            var coordinate = new PlanningCellCoordinate(scenarioVersionId, measureId, node.StoreId, node.ProductNodeId, period.TimePeriodId);
+            if (_cells.ContainsKey(coordinate.Key))
             {
-                var childIds = _metadata.ProductNodes.Values.Where(child => child.ParentProductNodeId == node.ProductNodeId).Select(child => child.ProductNodeId);
-                var coordinate = new PlanningCellCoordinate(scenarioVersionId, measureId, storeId, node.ProductNodeId, period.TimePeriodId);
+                continue;
+            }
+
+            _cells[coordinate.Key] = new PlanningCell
+            {
+                Coordinate = coordinate,
+                DerivedValue = 0,
+                EffectiveValue = 0,
+                RowVersion = 1,
+                CellKind = node.IsLeaf && period.Grain == "month" ? "leaf" : "calculated"
+            };
+        }
+    }
+
+    private void RecalculateSeedTotals(long scenarioVersionId, long measureId)
+    {
+        var aggregateTimes = _timePeriods.Values
+            .Where(period => _timePeriods.Values.Any(child => child.ParentTimePeriodId == period.TimePeriodId))
+            .OrderBy(period => period.SortOrder)
+            .ToList();
+
+        foreach (var leafNode in _productNodes.Values.Where(node => node.IsLeaf))
+        {
+            foreach (var aggregateTime in aggregateTimes)
+            {
+                var childTimeIds = _timePeriods.Values
+                    .Where(period => period.ParentTimePeriodId == aggregateTime.TimePeriodId)
+                    .Select(period => period.TimePeriodId)
+                    .ToList();
+                var coordinate = new PlanningCellCoordinate(scenarioVersionId, measureId, leafNode.StoreId, leafNode.ProductNodeId, aggregateTime.TimePeriodId);
                 var cell = _cells[coordinate.Key];
-                cell.DerivedValue = childIds.Sum(childId => _cells[new PlanningCellCoordinate(scenarioVersionId, measureId, storeId, childId, period.TimePeriodId).Key].EffectiveValue);
-                cell.EffectiveValue = cell.OverrideValue ?? cell.DerivedValue;
+                cell.DerivedValue = childTimeIds.Sum(childTimeId => _cells[new PlanningCellCoordinate(
+                    scenarioVersionId,
+                    measureId,
+                    leafNode.StoreId,
+                    leafNode.ProductNodeId,
+                    childTimeId).Key].EffectiveValue);
+                cell.EffectiveValue = cell.DerivedValue;
                 _cells[coordinate.Key] = cell;
             }
+        }
+
+        foreach (var node in _productNodes.Values.Where(node => !node.IsLeaf).OrderByDescending(node => node.Level))
+        {
+            var childIds = _productNodes.Values
+                .Where(child => child.ParentProductNodeId == node.ProductNodeId)
+                .Select(child => child.ProductNodeId)
+                .ToList();
+
+            foreach (var period in _timePeriods.Values)
+            {
+                var coordinate = new PlanningCellCoordinate(scenarioVersionId, measureId, node.StoreId, node.ProductNodeId, period.TimePeriodId);
+                var cell = _cells[coordinate.Key];
+                cell.DerivedValue = childIds.Sum(childId => _cells[new PlanningCellCoordinate(
+                    scenarioVersionId,
+                    measureId,
+                    node.StoreId,
+                    childId,
+                    period.TimePeriodId).Key].EffectiveValue);
+                cell.EffectiveValue = cell.DerivedValue;
+                _cells[coordinate.Key] = cell;
+            }
+        }
+    }
+
+    private ProductNode GetRequiredNode(long? productNodeId, int expectedLevel, string childLevel)
+    {
+        if (productNodeId is null || !_productNodes.TryGetValue(productNodeId.Value, out var parent))
+        {
+            throw new InvalidOperationException($"A parent row is required to add a {childLevel}.");
+        }
+
+        if (parent.Level != expectedLevel)
+        {
+            throw new InvalidOperationException($"A {childLevel} can only be added beneath a level {expectedLevel} row.");
+        }
+
+        return parent;
+    }
+
+    private bool IsEffectivelyLocked(PlanningCellCoordinate coordinate, IReadOnlyCollection<PlanningCell> scenarioCells)
+    {
+        return scenarioCells.Any(cell =>
+            cell.IsLocked &&
+            cell.Coordinate.StoreId == coordinate.StoreId &&
+            IsAncestorOrSelf(_productNodes, cell.Coordinate.ProductNodeId, coordinate.ProductNodeId) &&
+            IsAncestorOrSelf(_timePeriods, cell.Coordinate.TimePeriodId, coordinate.TimePeriodId));
+    }
+
+    private static bool IsAncestorOrSelf(IReadOnlyDictionary<long, ProductNode> nodes, long ancestorId, long descendantId)
+    {
+        var current = descendantId;
+        while (true)
+        {
+            if (current == ancestorId)
+            {
+                return true;
+            }
+
+            var node = nodes[current];
+            if (node.ParentProductNodeId is null)
+            {
+                return false;
+            }
+
+            current = node.ParentProductNodeId.Value;
+        }
+    }
+
+    private static bool IsAncestorOrSelf(IReadOnlyDictionary<long, TimePeriodNode> nodes, long ancestorId, long descendantId)
+    {
+        var current = descendantId;
+        while (true)
+        {
+            if (current == ancestorId)
+            {
+                return true;
+            }
+
+            var node = nodes[current];
+            if (node.ParentTimePeriodId is null)
+            {
+                return false;
+            }
+
+            current = node.ParentTimePeriodId.Value;
         }
     }
 
@@ -261,12 +404,12 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository
     {
         return new List<ProductNode>
         {
-            new(2000, null, "Store A", 0, new[] { "Store A" }, false),
-            new(2100, 2000, "Beverages", 1, new[] { "Store A", "Beverages" }, false),
-            new(2110, 2100, "Soft Drinks", 2, new[] { "Store A", "Beverages", "Soft Drinks" }, true),
-            new(2120, 2100, "Tea", 2, new[] { "Store A", "Beverages", "Tea" }, true),
-            new(2200, 2000, "Snacks", 1, new[] { "Store A", "Snacks" }, false),
-            new(2210, 2200, "Chips", 2, new[] { "Store A", "Snacks", "Chips" }, true)
+            new(2000, 101, null, "Store A", 0, new[] { "Store A" }, false),
+            new(2100, 101, 2000, "Beverages", 1, new[] { "Store A", "Beverages" }, false),
+            new(2110, 101, 2100, "Soft Drinks", 2, new[] { "Store A", "Beverages", "Soft Drinks" }, true),
+            new(2120, 101, 2100, "Tea", 2, new[] { "Store A", "Beverages", "Tea" }, true),
+            new(2200, 101, 2000, "Snacks", 1, new[] { "Store A", "Snacks" }, false),
+            new(2210, 101, 2200, "Chips", 2, new[] { "Store A", "Snacks", "Chips" }, true)
         }.ToDictionary(node => node.ProductNodeId);
     }
 

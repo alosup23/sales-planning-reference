@@ -1,3 +1,4 @@
+using ClosedXML.Excel;
 using SalesPlanning.Api.Application;
 using SalesPlanning.Api.Contracts;
 using SalesPlanning.Api.Infrastructure;
@@ -40,7 +41,7 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
-    public async Task ApplyLockAsync_WhenUnlockingSystemAggregateLock_RestoresRollupValue()
+    public async Task ApplyLockAsync_WhenAggregateCellIsUnlocked_DescendantEditsAreAllowedAgain()
     {
         var scenarioVersionId = 1L;
         var measureId = 1L;
@@ -51,7 +52,7 @@ public sealed class PlanningServiceTests
             "manager.one",
             CancellationToken.None);
 
-        await _service.ApplyEditsAsync(
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _service.ApplyEditsAsync(
             new EditCellsRequest(
                 scenarioVersionId,
                 measureId,
@@ -61,24 +62,29 @@ public sealed class PlanningServiceTests
                     new EditCellRequest(101, 2120, 202603, 500m, "input", 2)
                 }),
             "planner.one",
-            CancellationToken.None);
-
-        var lockedAggregate = await _repository.GetCellAsync(new(1, 1, 101, 2100, 202600), CancellationToken.None);
-        Assert.NotNull(lockedAggregate);
-        Assert.True(lockedAggregate!.IsLocked);
-        Assert.True(lockedAggregate.IsSystemGeneratedOverride);
+            CancellationToken.None));
 
         await _service.ApplyLockAsync(
             new LockCellsRequest(scenarioVersionId, measureId, false, "Release aggregate", new[] { coordinate }),
             "manager.one",
             CancellationToken.None);
 
+        await _service.ApplyEditsAsync(
+            new EditCellsRequest(
+                scenarioVersionId,
+                measureId,
+                "Leaf adjustment after unlock",
+                new[]
+                {
+                    new EditCellRequest(101, 2120, 202603, 500m, "input", 2)
+                }),
+            "planner.one",
+            CancellationToken.None);
+
         var unlockedAggregate = await _repository.GetCellAsync(new(1, 1, 101, 2100, 202600), CancellationToken.None);
         Assert.NotNull(unlockedAggregate);
         Assert.False(unlockedAggregate!.IsLocked);
-        Assert.Null(unlockedAggregate.OverrideValue);
-        Assert.False(unlockedAggregate.IsSystemGeneratedOverride);
-        Assert.Equal(unlockedAggregate.DerivedValue, unlockedAggregate.EffectiveValue);
+        Assert.Equal(12175m, unlockedAggregate.EffectiveValue);
     }
 
     [Fact]
@@ -107,6 +113,88 @@ public sealed class PlanningServiceTests
             "planner.one",
             CancellationToken.None));
 
-        Assert.Equal("The source cell is locked and cannot be used for splash.", exception.Message);
+        Assert.Contains("is locked", exception.Message);
+    }
+
+    [Fact]
+    public async Task ApplyEditsAsync_OnCategoryMonthEdit_SplashesAcrossLeafRowsAndKeepsTotalsCorrect()
+    {
+        await _service.ApplyEditsAsync(
+            new EditCellsRequest(
+                1,
+                1,
+                "Category month update",
+                new[]
+                {
+                    new EditCellRequest(101, 2100, 202603, 1200m, "override", 1)
+                }),
+            "planner.one",
+            CancellationToken.None);
+
+        var beverageMonth = await _repository.GetCellAsync(new(1, 1, 101, 2100, 202603), CancellationToken.None);
+        var softDrinksMonth = await _repository.GetCellAsync(new(1, 1, 101, 2110, 202603), CancellationToken.None);
+        var teaMonth = await _repository.GetCellAsync(new(1, 1, 101, 2120, 202603), CancellationToken.None);
+
+        Assert.NotNull(beverageMonth);
+        Assert.NotNull(softDrinksMonth);
+        Assert.NotNull(teaMonth);
+        Assert.Equal(1200m, beverageMonth!.EffectiveValue);
+        Assert.Equal(880m, softDrinksMonth!.EffectiveValue);
+        Assert.Equal(320m, teaMonth!.EffectiveValue);
+    }
+
+    [Fact]
+    public async Task ApplyEditsAsync_RejectsDescendantEditWhenAncestorCellIsLocked()
+    {
+        await _service.ApplyLockAsync(
+            new LockCellsRequest(1, 1, true, "Freeze beverages year", new[] { new LockCoordinateDto(101, 2100, 202600) }),
+            "manager.one",
+            CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => _service.ApplyEditsAsync(
+            new EditCellsRequest(
+                1,
+                1,
+                "Leaf edit under locked aggregate",
+                new[]
+                {
+                    new EditCellRequest(101, 2120, 202603, 333m, "input", 2)
+                }),
+            "planner.one",
+            CancellationToken.None));
+
+        Assert.Contains("is locked", exception.Message);
+    }
+
+    [Fact]
+    public async Task ImportWorkbookAsync_CreatesRowsAndLoadsLeafMonthValues()
+    {
+        using var workbook = new XLWorkbook();
+        var sheet = workbook.AddWorksheet("Plan");
+        sheet.Cell(1, 1).Value = "Store";
+        sheet.Cell(1, 2).Value = "Category";
+        sheet.Cell(1, 3).Value = "Subcategory";
+        sheet.Cell(1, 4).Value = "Jan";
+        sheet.Cell(1, 5).Value = "Feb";
+        sheet.Cell(2, 1).Value = "Store B";
+        sheet.Cell(2, 2).Value = "Frozen";
+        sheet.Cell(2, 3).Value = "Ice Cream";
+        sheet.Cell(2, 4).Value = 100;
+        sheet.Cell(2, 5).Value = 110;
+
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        stream.Position = 0;
+
+        var result = await _service.ImportWorkbookAsync(1, 1, stream, "import.xlsx", "planner.one", CancellationToken.None);
+        var grid = await _service.GetGridSliceAsync(1, 1, CancellationToken.None);
+
+        Assert.Equal(1, result.RowsProcessed);
+        Assert.True(result.RowsCreated >= 3);
+        Assert.Contains(grid.Rows, row => row.Path.SequenceEqual(new[] { "Store B", "Frozen", "Ice Cream" }));
+        var importedLeaf = grid.Rows.Single(row => row.Path.SequenceEqual(new[] { "Store B", "Frozen", "Ice Cream" }));
+        Assert.Equal(100m, importedLeaf.Cells[202601].Value);
+        Assert.Equal(110m, importedLeaf.Cells[202602].Value);
+        Assert.Equal(210m, importedLeaf.Cells[202600].Value);
     }
 }

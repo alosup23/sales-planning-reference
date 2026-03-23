@@ -5,6 +5,13 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    proxy: {
+      "/api": {
+        target: process.env.VITE_API_PROXY_TARGET ?? "http://127.0.0.1:5080",
+        changeOrigin: true,
+        secure: false,
+      },
+    },
   },
   build: {
     // The planning grid is lazy-loaded, so the AG Grid vendor bundle is intentionally
@@ -16,6 +23,10 @@ export default defineConfig({
         manualChunks(id) {
           if (id.includes("node_modules/ag-grid-community")) {
             return "ag-grid-community";
+          }
+
+          if (id.includes("node_modules/ag-grid-enterprise")) {
+            return "ag-grid-enterprise";
           }
 
           if (id.includes("node_modules/ag-grid-react")) {

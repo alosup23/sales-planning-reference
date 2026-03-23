@@ -50,6 +50,30 @@ public sealed class PlanningController : ControllerBase
         return _planningService.GetAuditAsync(scenarioVersionId, measureId, storeId, productNodeId, cancellationToken);
     }
 
+    [HttpPost("rows")]
+    public Task<AddRowResponse> AddRow([FromBody] AddRowRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.AddRowAsync(request, cancellationToken);
+    }
+
+    [HttpPost("imports/workbook")]
+    [RequestSizeLimit(10_000_000)]
+    public async Task<ImportWorkbookResponse> ImportWorkbook(
+        [FromForm] long scenarioVersionId,
+        [FromForm] long measureId,
+        [FromForm] IFormFile file,
+        CancellationToken cancellationToken)
+    {
+        await using var stream = file.OpenReadStream();
+        return await _planningService.ImportWorkbookAsync(
+            scenarioVersionId,
+            measureId,
+            stream,
+            file.FileName,
+            User.Identity?.Name ?? "demo.user",
+            cancellationToken);
+    }
+
     [HttpPost("test/reset")]
     public Task Reset(CancellationToken cancellationToken)
     {
