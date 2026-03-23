@@ -196,6 +196,11 @@ test("adds a category and subcategory from the toolbar", async ({ page }) => {
 
   const subcategoryRowId = await getRowIdByLabel(page, subcategoryName);
   await expect(page.locator(gridCell(subcategoryRowId, "202600"))).toContainText("0");
+
+  await page.getByRole("button", { name: "Hierarchy Maintenance" }).click();
+  await expect(page.getByText("Category / Subcategory Mapping")).toBeVisible();
+  await expect(page.getByRole("button", { name: categoryName })).toBeVisible();
+  await expect(page.getByText(subcategoryName)).toBeVisible();
 });
 
 test("imports a workbook through the upload control and refreshes the grid", async ({ page }) => {
@@ -219,4 +224,34 @@ test("imports a workbook through the upload control and refreshes the grid", asy
   await expect(page.locator(gridCell(importedRowId, "202601"))).toContainText("100");
   await expect(page.locator(gridCell(importedRowId, "202602"))).toContainText("110");
   await expect(page.locator(gridCell(importedRowId, "202600"))).toContainText("210");
+});
+
+test("adds a store by copying hierarchy and data from an existing store", async ({ page }) => {
+  const dialogs = ["Store B Copy", "Store A"];
+  page.on("dialog", async (dialog) => {
+    const nextValue = dialogs.shift();
+    await dialog.accept(nextValue);
+  });
+
+  await page.getByRole("button", { name: "Add Store" }).click();
+
+  const copiedStoreRowId = await getRowIdByLabel(page, "Store B Copy");
+  await expect(page.locator(gridCell(copiedStoreRowId, "202600"))).toContainText("17,253");
+  await expect(page.getByText("Soft Drinks", { exact: true }).nth(1)).toBeVisible();
+});
+
+test("maintains category-subcategory mappings from the hierarchy sheet", async ({ page }) => {
+  const categoryName = "Seasonal";
+  const subcategoryName = "Gift Boxes";
+
+  await page.getByRole("button", { name: "Hierarchy Maintenance" }).click();
+  page.once("dialog", (dialog) => dialog.accept(categoryName));
+  await page.getByRole("button", { name: "Add Category" }).click();
+  await page.getByRole("button", { name: categoryName }).click();
+
+  page.once("dialog", (dialog) => dialog.accept(subcategoryName));
+  await page.getByRole("button", { name: "Add Subcategory" }).click();
+
+  await expect(page.getByRole("button", { name: categoryName })).toBeVisible();
+  await expect(page.getByText(subcategoryName)).toBeVisible();
 });

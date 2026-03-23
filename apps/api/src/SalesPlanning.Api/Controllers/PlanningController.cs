@@ -56,6 +56,24 @@ public sealed class PlanningController : ControllerBase
         return _planningService.AddRowAsync(request, cancellationToken);
     }
 
+    [HttpGet("hierarchy-mappings")]
+    public Task<HierarchyMappingResponse> GetHierarchyMappings(CancellationToken cancellationToken)
+    {
+        return _planningService.GetHierarchyMappingsAsync(cancellationToken);
+    }
+
+    [HttpPost("hierarchy-mappings/categories")]
+    public Task<HierarchyMappingResponse> AddHierarchyCategory([FromBody] AddHierarchyCategoryRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.AddHierarchyCategoryAsync(request, cancellationToken);
+    }
+
+    [HttpPost("hierarchy-mappings/subcategories")]
+    public Task<HierarchyMappingResponse> AddHierarchySubcategory([FromBody] AddHierarchySubcategoryRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.AddHierarchySubcategoryAsync(request, cancellationToken);
+    }
+
     [HttpPost("imports/workbook")]
     [RequestSizeLimit(10_000_000)]
     public async Task<ImportWorkbookResponse> ImportWorkbook(

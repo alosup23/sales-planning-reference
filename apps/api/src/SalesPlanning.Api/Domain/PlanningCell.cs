@@ -2,7 +2,7 @@ namespace SalesPlanning.Api.Domain;
 
 public sealed class PlanningCell
 {
-    public PlanningCellCoordinate Coordinate { get; init; }
+    public PlanningCellCoordinate Coordinate { get; set; }
     public decimal? InputValue { get; set; }
     public decimal? OverrideValue { get; set; }
     public bool IsSystemGeneratedOverride { get; set; }

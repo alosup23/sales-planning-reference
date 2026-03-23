@@ -1,4 +1,11 @@
-import type { AddRowRequest, EditCellsRequest, GridSliceResponse, LockCellsRequest, SplashRequest } from "./types";
+import type {
+  AddRowRequest,
+  EditCellsRequest,
+  GridSliceResponse,
+  HierarchyMappingResponse,
+  LockCellsRequest,
+  SplashRequest,
+} from "./types";
 import { sampleGridData } from "./sampleGridData";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
@@ -58,6 +65,24 @@ export async function postAddRow(request: AddRowRequest): Promise<void> {
   await fetchJson(`${API_BASE_URL}/rows`, {
     method: "POST",
     body: JSON.stringify(request),
+  });
+}
+
+export async function getHierarchyMappings(): Promise<HierarchyMappingResponse> {
+  return await fetchJson<HierarchyMappingResponse>(`${API_BASE_URL}/hierarchy-mappings`);
+}
+
+export async function postHierarchyCategory(categoryLabel: string): Promise<HierarchyMappingResponse> {
+  return await fetchJson<HierarchyMappingResponse>(`${API_BASE_URL}/hierarchy-mappings/categories`, {
+    method: "POST",
+    body: JSON.stringify({ categoryLabel }),
+  });
+}
+
+export async function postHierarchySubcategory(categoryLabel: string, subcategoryLabel: string): Promise<HierarchyMappingResponse> {
+  return await fetchJson<HierarchyMappingResponse>(`${API_BASE_URL}/hierarchy-mappings/subcategories`, {
+    method: "POST",
+    body: JSON.stringify({ categoryLabel, subcategoryLabel }),
   });
 }
 

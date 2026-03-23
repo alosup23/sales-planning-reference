@@ -10,6 +10,7 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository
     private readonly List<PlanningActionAudit> _audits = new();
     private Dictionary<long, ProductNode> _productNodes = new();
     private readonly Dictionary<long, TimePeriodNode> _timePeriods;
+    private readonly Dictionary<string, List<string>> _hierarchyMappings = new(StringComparer.OrdinalIgnoreCase);
     private long _productNodeSeed = 3000;
     private long _storeSeed = 200;
 
@@ -142,6 +143,14 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository
                 node = new ProductNode(productNodeId, storeId, null, request.Label.Trim(), 0, new[] { request.Label.Trim() }, false);
                 _productNodes[node.ProductNodeId] = node;
                 InitializeCellsForNode(request.ScenarioVersionId, request.MeasureId, node);
+                if (request.CopyFromStoreId is not null)
+                {
+                    CloneStoreHierarchyAndData(
+                        request.ScenarioVersionId,
+                        request.MeasureId,
+                        request.CopyFromStoreId.Value,
+                        node);
+                }
                 break;
             }
             case "category":
@@ -157,6 +166,7 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository
                     false);
                 _productNodes[node.ProductNodeId] = node;
                 InitializeCellsForNode(request.ScenarioVersionId, request.MeasureId, node);
+                UpsertHierarchyCategory(node.Label);
                 break;
             }
             case "subcategory":
@@ -177,6 +187,7 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository
                     true);
                 _productNodes[node.ProductNodeId] = node;
                 InitializeCellsForNode(request.ScenarioVersionId, request.MeasureId, node);
+                UpsertHierarchySubcategory(parent.Label, node.Label);
                 break;
             }
             default:
@@ -195,6 +206,27 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository
         return Task.FromResult(node);
     }
 
+    public Task<IReadOnlyDictionary<string, IReadOnlyList<string>>> GetHierarchyMappingsAsync(CancellationToken cancellationToken)
+    {
+        var snapshot = _hierarchyMappings.ToDictionary(
+            entry => entry.Key,
+            entry => (IReadOnlyList<string>)entry.Value.ToList(),
+            StringComparer.OrdinalIgnoreCase);
+        return Task.FromResult((IReadOnlyDictionary<string, IReadOnlyList<string>>)snapshot);
+    }
+
+    public Task UpsertHierarchyCategoryAsync(string categoryLabel, CancellationToken cancellationToken)
+    {
+        UpsertHierarchyCategory(categoryLabel);
+        return Task.CompletedTask;
+    }
+
+    public Task UpsertHierarchySubcategoryAsync(string categoryLabel, string subcategoryLabel, CancellationToken cancellationToken)
+    {
+        UpsertHierarchySubcategory(categoryLabel, subcategoryLabel);
+        return Task.CompletedTask;
+    }
+
     public Task ResetAsync(CancellationToken cancellationToken)
     {
         ResetState();
@@ -206,6 +238,8 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository
         _cells.Clear();
         _audits.Clear();
         _productNodes = BuildProductNodes();
+        _hierarchyMappings.Clear();
+        SeedHierarchyMappings();
         SeedCells();
     }
 
@@ -285,6 +319,65 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository
         }
     }
 
+    private void CloneStoreHierarchyAndData(long scenarioVersionId, long measureId, long sourceStoreId, ProductNode targetStoreNode)
+    {
+        var sourceRootNode = _productNodes.Values.SingleOrDefault(node => node.StoreId == sourceStoreId && node.ParentProductNodeId is null);
+        if (sourceRootNode is null)
+        {
+            throw new InvalidOperationException($"Store {sourceStoreId} was not found for copy.");
+        }
+
+        var sourceNodes = _productNodes.Values
+            .Where(node => node.StoreId == sourceStoreId && node.ParentProductNodeId is not null)
+            .OrderBy(node => node.Level)
+            .ThenBy(node => string.Join(">", node.Path), StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var nodeMap = new Dictionary<long, ProductNode>
+        {
+            [sourceRootNode.ProductNodeId] = targetStoreNode
+        };
+
+        foreach (var sourceNode in sourceNodes)
+        {
+            var parent = nodeMap[sourceNode.ParentProductNodeId!.Value];
+            var clonedNode = new ProductNode(
+                ++_productNodeSeed,
+                targetStoreNode.StoreId,
+                parent.ProductNodeId,
+                sourceNode.Label,
+                sourceNode.Level,
+                parent.Path.Append(sourceNode.Label).ToArray(),
+                sourceNode.IsLeaf);
+
+            _productNodes[clonedNode.ProductNodeId] = clonedNode;
+            nodeMap[sourceNode.ProductNodeId] = clonedNode;
+            InitializeCellsForNode(scenarioVersionId, measureId, clonedNode);
+        }
+
+        foreach (var sourceNode in sourceNodes.Prepend(sourceRootNode))
+        {
+            var targetNode = nodeMap[sourceNode.ProductNodeId];
+            foreach (var period in _timePeriods.Values)
+            {
+                var sourceCoordinate = new PlanningCellCoordinate(scenarioVersionId, measureId, sourceStoreId, sourceNode.ProductNodeId, period.TimePeriodId);
+                var targetCoordinate = new PlanningCellCoordinate(scenarioVersionId, measureId, targetStoreNode.StoreId, targetNode.ProductNodeId, period.TimePeriodId);
+
+                if (!_cells.TryGetValue(sourceCoordinate.Key, out var sourceCell))
+                {
+                    continue;
+                }
+
+                var clonedCell = sourceCell.Clone();
+                clonedCell.Coordinate = targetCoordinate;
+                clonedCell.IsLocked = false;
+                clonedCell.LockReason = null;
+                clonedCell.LockedBy = null;
+                _cells[targetCoordinate.Key] = clonedCell;
+            }
+        }
+    }
+
     private void RecalculateSeedTotals(long scenarioVersionId, long measureId)
     {
         var aggregateTimes = _timePeriods.Values
@@ -349,6 +442,57 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository
         }
 
         return parent;
+    }
+
+    private void SeedHierarchyMappings()
+    {
+        foreach (var category in _productNodes.Values.Where(node => node.Level == 1))
+        {
+            UpsertHierarchyCategory(category.Label);
+        }
+
+        foreach (var subcategory in _productNodes.Values.Where(node => node.Level == 2))
+        {
+            var category = _productNodes[subcategory.ParentProductNodeId!.Value];
+            UpsertHierarchySubcategory(category.Label, subcategory.Label);
+        }
+    }
+
+    private void UpsertHierarchyCategory(string categoryLabel)
+    {
+        var normalizedLabel = categoryLabel.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedLabel))
+        {
+            throw new InvalidOperationException("Category labels cannot be empty.");
+        }
+
+        var existingKey = _hierarchyMappings.Keys.FirstOrDefault(key => string.Equals(key, normalizedLabel, StringComparison.OrdinalIgnoreCase));
+        if (existingKey is not null)
+        {
+            return;
+        }
+
+        _hierarchyMappings[normalizedLabel] = new List<string>();
+    }
+
+    private void UpsertHierarchySubcategory(string categoryLabel, string subcategoryLabel)
+    {
+        UpsertHierarchyCategory(categoryLabel);
+
+        var categoryKey = _hierarchyMappings.Keys.First(key => string.Equals(key, categoryLabel.Trim(), StringComparison.OrdinalIgnoreCase));
+        var normalizedSubcategory = subcategoryLabel.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedSubcategory))
+        {
+            throw new InvalidOperationException("Subcategory labels cannot be empty.");
+        }
+
+        if (_hierarchyMappings[categoryKey].Any(existing => string.Equals(existing, normalizedSubcategory, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        _hierarchyMappings[categoryKey].Add(normalizedSubcategory);
+        _hierarchyMappings[categoryKey].Sort(StringComparer.OrdinalIgnoreCase);
     }
 
     private bool IsEffectivelyLocked(PlanningCellCoordinate coordinate, IReadOnlyCollection<PlanningCell> scenarioCells)

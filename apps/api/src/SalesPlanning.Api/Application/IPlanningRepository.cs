@@ -14,6 +14,9 @@ public interface IPlanningRepository
     Task<IReadOnlyList<PlanningActionAudit>> GetAuditAsync(long scenarioVersionId, long measureId, long storeId, long productNodeId, CancellationToken cancellationToken);
     Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long measureId, CancellationToken cancellationToken);
     Task<ProductNode> AddRowAsync(AddRowRequest request, CancellationToken cancellationToken);
+    Task<IReadOnlyDictionary<string, IReadOnlyList<string>>> GetHierarchyMappingsAsync(CancellationToken cancellationToken);
+    Task UpsertHierarchyCategoryAsync(string categoryLabel, CancellationToken cancellationToken);
+    Task UpsertHierarchySubcategoryAsync(string categoryLabel, string subcategoryLabel, CancellationToken cancellationToken);
     Task<ProductNode?> FindProductNodeByPathAsync(string[] path, CancellationToken cancellationToken);
     Task ResetAsync(CancellationToken cancellationToken);
 }

@@ -19,8 +19,9 @@ This repository contains a greenfield reference implementation skeleton for an e
 - Top-down splash engine with locked-cell exclusion and deterministic residual distribution
 - Cross-axis recalculation so row and column totals stay aligned after bottom-up and top-down edits
 - Audit trail contracts
-- AG Grid shell with hierarchical rows, grouped year/month columns, lock/splash actions, row creation, and workbook upload
-- Playwright browser smoke and interaction coverage for core planning flows
+- AG Grid shell with hierarchical rows, grouped year/month columns, lock/splash actions, copied-store creation, and workbook upload
+- Separate hierarchy maintenance sheet for category/subcategory mapping
+- Playwright browser smoke and interaction coverage for planning and hierarchy maintenance flows
 
 ## What Is Not Included Yet
 
@@ -75,4 +76,4 @@ Each run performs:
 - `.NET` restore, build, and test
 - web dependency install and production build
 - Playwright browser install
-- end-to-end interaction tests for load, edit/rollup, lock/unlock, and lock-aware splash flows
+- end-to-end interaction tests for load, edit/rollup, lock/unlock, lock-aware splash, copied-store creation, workbook import, and hierarchy maintenance

@@ -79,4 +79,14 @@ export type AddRowRequest = {
   level: "store" | "category" | "subcategory";
   parentProductNodeId: number | null;
   label: string;
+  copyFromStoreId: number | null;
+};
+
+export type HierarchyCategory = {
+  categoryLabel: string;
+  subcategoryLabels: string[];
+};
+
+export type HierarchyMappingResponse = {
+  categories: HierarchyCategory[];
 };

@@ -1,6 +1,17 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { getGridSlice, postAddRow, postEdit, postLock, postSplash, postWorkbookImport } from "./lib/api";
+import {
+  getGridSlice,
+  getHierarchyMappings,
+  postAddRow,
+  postEdit,
+  postHierarchyCategory,
+  postHierarchySubcategory,
+  postLock,
+  postSplash,
+  postWorkbookImport,
+} from "./lib/api";
+import { HierarchyMaintenanceSheet } from "./components/HierarchyMaintenanceSheet";
 import type { GridRow } from "./lib/types";
 
 const preloadPlanningGrid = () => import("./components/PlanningGrid");
@@ -28,6 +39,7 @@ const seasonalityWeights: Record<number, number> = {
 export default function App() {
   const queryClient = useQueryClient();
   const [lastError, setLastError] = useState<string | null>(null);
+  const [activeView, setActiveView] = useState<"planning" | "hierarchy">("planning");
 
   useEffect(() => {
     void preloadPlanningGrid();
@@ -37,9 +49,16 @@ export default function App() {
     queryKey: ["grid-slice", 1, 1],
     queryFn: getGridSlice,
   });
+  const hierarchyQuery = useQuery({
+    queryKey: ["hierarchy-mappings"],
+    queryFn: getHierarchyMappings,
+  });
 
   const refresh = async () => {
-    await queryClient.invalidateQueries({ queryKey: ["grid-slice", 1, 1] });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["grid-slice", 1, 1] }),
+      queryClient.invalidateQueries({ queryKey: ["hierarchy-mappings"] }),
+    ]);
   };
 
   const editMutation = useMutation({
@@ -88,16 +107,43 @@ export default function App() {
     onError: (error: Error) => setLastError(error.message),
   });
 
+  const addHierarchyCategoryMutation = useMutation({
+    mutationFn: postHierarchyCategory,
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const addHierarchySubcategoryMutation = useMutation({
+    mutationFn: ({ categoryLabel, subcategoryLabel }: { categoryLabel: string; subcategoryLabel: string }) =>
+      postHierarchySubcategory(categoryLabel, subcategoryLabel),
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
   const statusText = useMemo(() => {
     if (gridQuery.isLoading) {
       return "Loading planning slice...";
     }
 
-    if (editMutation.isPending || lockMutation.isPending || splashMutation.isPending || addRowMutation.isPending || importMutation.isPending) {
+    if (
+      editMutation.isPending ||
+      lockMutation.isPending ||
+      splashMutation.isPending ||
+      addRowMutation.isPending ||
+      importMutation.isPending ||
+      addHierarchyCategoryMutation.isPending ||
+      addHierarchySubcategoryMutation.isPending
+    ) {
       return "Applying changes...";
     }
 
-    if (gridQuery.isError) {
+    if (gridQuery.isError || hierarchyQuery.isError) {
       return "API unavailable.";
     }
 
@@ -105,10 +151,25 @@ export default function App() {
       return lastError;
     }
 
-    return "Lock-safe planning grid ready.";
-  }, [addRowMutation.isPending, editMutation.isPending, gridQuery.isError, gridQuery.isLoading, importMutation.isPending, lastError, lockMutation.isPending, splashMutation.isPending]);
+    return activeView === "planning"
+      ? "Lock-safe planning grid ready."
+      : "Hierarchy maintenance sheet ready.";
+  }, [
+    activeView,
+    addHierarchyCategoryMutation.isPending,
+    addHierarchySubcategoryMutation.isPending,
+    addRowMutation.isPending,
+    editMutation.isPending,
+    gridQuery.isError,
+    gridQuery.isLoading,
+    hierarchyQuery.isError,
+    importMutation.isPending,
+    lastError,
+    lockMutation.isPending,
+    splashMutation.isPending,
+  ]);
 
-  if (!gridQuery.data) {
+  if (!gridQuery.data || !hierarchyQuery.data) {
     return (
       <main className="app-shell">
         <section className="hero">
@@ -121,6 +182,8 @@ export default function App() {
 
   const handleCellEdit = async (row: GridRow, timePeriodId: number, newValue: number) => {
     const cell = row.cells[timePeriodId];
+    const period = gridQuery.data.periods.find((item) => item.timePeriodId === timePeriodId);
+    const isLeafMonth = row.isLeaf && period?.grain === "month";
     await editMutation.mutateAsync({
       scenarioVersionId: gridQuery.data.scenarioVersionId,
       measureId: gridQuery.data.measureId,
@@ -131,7 +194,7 @@ export default function App() {
           productNodeId: row.productNodeId,
           timePeriodId,
           newValue,
-          editMode: timePeriodId === 202600 ? "override" : "input",
+          editMode: isLeafMonth ? "input" : "override",
           rowVersion: cell.rowVersion,
         },
       ],
@@ -177,12 +240,31 @@ export default function App() {
       return;
     }
 
+    let copyFromStoreId: number | null = null;
+    if (level === "store") {
+      const stores = gridQuery.data.rows.filter((row) => row.level === 0);
+      const defaultStore = stores[0]?.label ?? "";
+      const copyFromLabel = window.prompt("Copy hierarchy and data from store", defaultStore);
+      if (!copyFromLabel) {
+        return;
+      }
+
+      const sourceStore = stores.find((store) => store.label.toLowerCase() === copyFromLabel.trim().toLowerCase());
+      if (!sourceStore) {
+        setLastError(`Store '${copyFromLabel}' was not found to copy from.`);
+        return;
+      }
+
+      copyFromStoreId = sourceStore.storeId;
+    }
+
     await addRowMutation.mutateAsync({
       scenarioVersionId: gridQuery.data.scenarioVersionId,
       measureId: gridQuery.data.measureId,
       level,
       parentProductNodeId: level === "store" ? null : parentRow?.productNodeId ?? null,
       label,
+      copyFromStoreId,
     });
   };
 
@@ -194,6 +276,24 @@ export default function App() {
     });
   };
 
+  const handleAddHierarchyCategory = async () => {
+    const categoryLabel = window.prompt("New category name");
+    if (!categoryLabel) {
+      return;
+    }
+
+    await addHierarchyCategoryMutation.mutateAsync(categoryLabel);
+  };
+
+  const handleAddHierarchySubcategory = async (categoryLabel: string) => {
+    const subcategoryLabel = window.prompt(`New subcategory name for ${categoryLabel}`);
+    if (!subcategoryLabel) {
+      return;
+    }
+
+    await addHierarchySubcategoryMutation.mutateAsync({ categoryLabel, subcategoryLabel });
+  };
+
   return (
     <main className="app-shell">
       <section className="hero">
@@ -201,7 +301,7 @@ export default function App() {
           <div className="eyebrow">Enterprise planning skeleton</div>
           <h1>Sales Budget & Planning</h1>
           <p>
-            Hierarchical grid shell with lock-safe edits, year-to-month splash, and backend action contracts.
+            Excel-like planning with strict bottom-up rollups, explicit top-down splash, and maintainable hierarchy mapping.
           </p>
         </div>
         <div className={`status-card${lastError ? " status-card-error" : ""}`} aria-live="polite">
@@ -209,22 +309,47 @@ export default function App() {
         </div>
       </section>
 
-      <Suspense
-        fallback={
-          <section className="planning-shell planning-shell-loading" aria-live="polite">
-            Preparing planning grid...
-          </section>
-        }
-      >
-        <PlanningGrid
-          data={gridQuery.data}
-          onCellEdit={handleCellEdit}
-          onToggleLock={handleToggleLock}
-          onSplashYear={handleSplashYear}
-          onAddRow={handleAddRow}
-          onImportWorkbook={handleImportWorkbook}
+      <div className="view-switcher" role="tablist" aria-label="Sheet navigation">
+        <button
+          type="button"
+          className={`secondary-button${activeView === "planning" ? " secondary-button-active" : ""}`}
+          onClick={() => setActiveView("planning")}
+        >
+          Planning Sheet
+        </button>
+        <button
+          type="button"
+          className={`secondary-button${activeView === "hierarchy" ? " secondary-button-active" : ""}`}
+          onClick={() => setActiveView("hierarchy")}
+        >
+          Hierarchy Maintenance
+        </button>
+      </div>
+
+      {activeView === "planning" ? (
+        <Suspense
+          fallback={
+            <section className="planning-shell planning-shell-loading" aria-live="polite">
+              Preparing planning grid...
+            </section>
+          }
+        >
+          <PlanningGrid
+            data={gridQuery.data}
+            onCellEdit={handleCellEdit}
+            onToggleLock={handleToggleLock}
+            onSplashYear={handleSplashYear}
+            onAddRow={handleAddRow}
+            onImportWorkbook={handleImportWorkbook}
+          />
+        </Suspense>
+      ) : (
+        <HierarchyMaintenanceSheet
+          categories={hierarchyQuery.data.categories}
+          onAddCategory={handleAddHierarchyCategory}
+          onAddSubcategory={handleAddHierarchySubcategory}
         />
-      </Suspense>
+      )}
     </main>
   );
 }

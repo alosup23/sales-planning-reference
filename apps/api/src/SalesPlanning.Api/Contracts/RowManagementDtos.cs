@@ -5,7 +5,8 @@ public sealed record AddRowRequest(
     long MeasureId,
     string Level,
     long? ParentProductNodeId,
-    string Label);
+    string Label,
+    long? CopyFromStoreId);
 
 public sealed record AddRowResponse(
     long StoreId,

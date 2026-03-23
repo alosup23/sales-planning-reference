@@ -27,6 +27,12 @@ button {
   padding: 24px;
 }
 
+.view-switcher {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
 .hero {
   display: flex;
   justify-content: space-between;
@@ -113,10 +119,65 @@ button {
   cursor: not-allowed;
 }
 
+.secondary-button-active {
+  background: #0e5f76;
+  color: #ffffff;
+}
+
 .planning-grid {
   position: relative;
   height: 72vh;
   width: 100%;
+}
+
+.maintenance-shell {
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(16, 33, 47, 0.08);
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 22px 50px rgba(16, 33, 47, 0.08);
+}
+
+.maintenance-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid rgba(16, 33, 47, 0.08);
+}
+
+.maintenance-grid {
+  display: grid;
+}
+
+.maintenance-header,
+.maintenance-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) 1fr;
+  gap: 16px;
+  align-items: start;
+  padding: 14px 18px;
+}
+
+.maintenance-header {
+  background: rgba(16, 33, 47, 0.05);
+  font-weight: 600;
+}
+
+.maintenance-row {
+  border: 0;
+  border-top: 1px solid rgba(16, 33, 47, 0.08);
+  background: transparent;
+  text-align: left;
+}
+
+.maintenance-row:hover {
+  background: rgba(14, 95, 118, 0.06);
+}
+
+.maintenance-row-selected {
+  background: rgba(14, 95, 118, 0.12);
 }
 
 .planning-context-menu {
@@ -167,6 +228,16 @@ button {
   .planning-toolbar {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .maintenance-toolbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .maintenance-header,
+  .maintenance-row {
+    grid-template-columns: 1fr;
   }
 
   .planning-grid {

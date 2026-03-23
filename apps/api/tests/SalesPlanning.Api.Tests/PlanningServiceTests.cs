@@ -38,6 +38,10 @@ public sealed class PlanningServiceTests
         Assert.NotNull(storeYear);
         Assert.Equal(12008m, beverageYear!.EffectiveValue);
         Assert.Equal(17331m, storeYear!.EffectiveValue);
+
+        var unchangedSiblingMonth = await _repository.GetCellAsync(new(1, 1, 101, 2120, 202604), CancellationToken.None);
+        Assert.NotNull(unchangedSiblingMonth);
+        Assert.Equal(265m, unchangedSiblingMonth!.EffectiveValue);
     }
 
     [Fact]
@@ -196,5 +200,41 @@ public sealed class PlanningServiceTests
         Assert.Equal(100m, importedLeaf.Cells[202601].Value);
         Assert.Equal(110m, importedLeaf.Cells[202602].Value);
         Assert.Equal(210m, importedLeaf.Cells[202600].Value);
+    }
+
+    [Fact]
+    public async Task AddRowAsync_NewStoreCanCopyExistingHierarchyAndData()
+    {
+        var result = await _service.AddRowAsync(
+            new AddRowRequest(1, 1, "store", null, "Store Copy", 101),
+            CancellationToken.None);
+
+        var grid = await _service.GetGridSliceAsync(1, 1, CancellationToken.None);
+        var copiedStore = grid.Rows.Single(row => row.Path.SequenceEqual(new[] { "Store Copy" }));
+        var copiedBeverages = grid.Rows.Single(row => row.Path.SequenceEqual(new[] { "Store Copy", "Beverages" }));
+        var copiedSoftDrinks = grid.Rows.Single(row => row.Path.SequenceEqual(new[] { "Store Copy", "Beverages", "Soft Drinks" }));
+
+        Assert.Equal(result.StoreId, copiedStore.StoreId);
+        Assert.Equal(17253m, copiedStore.Cells[202600].Value);
+        Assert.Equal(11930m, copiedBeverages.Cells[202600].Value);
+        Assert.Equal(8665m, copiedSoftDrinks.Cells[202600].Value);
+        Assert.False(copiedSoftDrinks.Cells[202602].IsLocked);
+    }
+
+    [Fact]
+    public async Task AddRowAsync_CategoryAndSubcategoryUpdatesHierarchyMappings()
+    {
+        var category = await _service.AddRowAsync(
+            new AddRowRequest(1, 1, "category", 2000, "Frozen", null),
+            CancellationToken.None);
+
+        await _service.AddRowAsync(
+            new AddRowRequest(1, 1, "subcategory", category.ProductNodeId, "Ice Cream", null),
+            CancellationToken.None);
+
+        var mappings = await _service.GetHierarchyMappingsAsync(CancellationToken.None);
+        var frozen = mappings.Categories.Single(categoryMapping => categoryMapping.CategoryLabel == "Frozen");
+
+        Assert.Contains("Ice Cream", frozen.SubcategoryLabels);
     }
 }

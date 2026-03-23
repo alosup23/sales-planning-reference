@@ -37,6 +37,7 @@ public sealed class PlanningService : IPlanningService
             deltas.AddRange(await ApplyValueChangeAsync(
                 coordinate,
                 edit.NewValue,
+                edit.EditMode,
                 edit.RowVersion,
                 request.Comment,
                 "manual-edit",
@@ -61,6 +62,7 @@ public sealed class PlanningService : IPlanningService
         var deltas = await ApplyValueChangeAsync(
             coordinate,
             request.TotalValue,
+            "override",
             null,
             request.Comment,
             "splash",
@@ -112,6 +114,23 @@ public sealed class PlanningService : IPlanningService
     {
         var node = await _repository.AddRowAsync(request, cancellationToken);
         return new AddRowResponse(node.StoreId, node.ProductNodeId, node.Label, node.Level, node.Path, node.IsLeaf);
+    }
+
+    public async Task<HierarchyMappingResponse> GetHierarchyMappingsAsync(CancellationToken cancellationToken)
+    {
+        return await BuildHierarchyMappingResponseAsync(cancellationToken);
+    }
+
+    public async Task<HierarchyMappingResponse> AddHierarchyCategoryAsync(AddHierarchyCategoryRequest request, CancellationToken cancellationToken)
+    {
+        await _repository.UpsertHierarchyCategoryAsync(request.CategoryLabel, cancellationToken);
+        return await BuildHierarchyMappingResponseAsync(cancellationToken);
+    }
+
+    public async Task<HierarchyMappingResponse> AddHierarchySubcategoryAsync(AddHierarchySubcategoryRequest request, CancellationToken cancellationToken)
+    {
+        await _repository.UpsertHierarchySubcategoryAsync(request.CategoryLabel, request.SubcategoryLabel, cancellationToken);
+        return await BuildHierarchyMappingResponseAsync(cancellationToken);
     }
 
     public async Task<ImportWorkbookResponse> ImportWorkbookAsync(long scenarioVersionId, long measureId, Stream workbookStream, string fileName, string userId, CancellationToken cancellationToken)
@@ -204,6 +223,7 @@ public sealed class PlanningService : IPlanningService
                 importDeltas.AddRange(await ApplyValueChangeAsync(
                     new PlanningCellCoordinate(scenarioVersionId, measureId, subcategoryNode.Node.StoreId, subcategoryNode.Node.ProductNodeId, monthColumn.Key),
                     GetNumericCellValue(cellValue),
+                    "input",
                     null,
                     $"Import from {fileName}",
                     "import",
@@ -218,6 +238,7 @@ public sealed class PlanningService : IPlanningService
                 importDeltas.AddRange(await ApplyValueChangeAsync(
                     new PlanningCellCoordinate(scenarioVersionId, measureId, subcategoryNode.Node.StoreId, subcategoryNode.Node.ProductNodeId, 202600),
                     GetNumericCellValue(row.Cell(yearColumn)),
+                    "override",
                     null,
                     $"Import from {fileName}",
                     "import",
@@ -260,6 +281,7 @@ public sealed class PlanningService : IPlanningService
     private async Task<IReadOnlyList<PlanningCellDeltaAudit>> ApplyValueChangeAsync(
         PlanningCellCoordinate coordinate,
         decimal newValue,
+        string editMode,
         long? rowVersion,
         string? comment,
         string changeKind,
@@ -286,8 +308,15 @@ public sealed class PlanningService : IPlanningService
             throw new InvalidOperationException($"Cell {coordinate.Key} is locked and cannot be changed.");
         }
 
-        if (IsLeafWriteCoordinate(coordinate, metadata))
+        var normalizedEditMode = editMode.Trim().ToLowerInvariant();
+        var isLeafCoordinate = IsLeafWriteCoordinate(coordinate, metadata);
+        if (normalizedEditMode == "input")
         {
+            if (!isLeafCoordinate)
+            {
+                throw new InvalidOperationException($"Cell {coordinate.Key} is an aggregate intersection and requires top-down override or splash.");
+            }
+
             sourceCell.InputValue = newValue;
             sourceCell.DerivedValue = newValue;
             sourceCell.EffectiveValue = newValue;
@@ -295,7 +324,14 @@ public sealed class PlanningService : IPlanningService
         }
         else
         {
-            ApplyAggregateAllocation(coordinate, newValue, method, manualWeights, workingCells, metadata);
+            if (isLeafCoordinate)
+            {
+                ApplyAggregateAllocation(coordinate, newValue, method, manualWeights, workingCells, metadata);
+            }
+            else
+            {
+                ApplyAggregateAllocation(coordinate, newValue, method, manualWeights, workingCells, metadata);
+            }
         }
 
         RecalculateAll(workingCells, metadata, coordinate.ScenarioVersionId, coordinate.MeasureId);
@@ -682,8 +718,20 @@ public sealed class PlanningService : IPlanningService
             return (existingNode, 0);
         }
 
-        var createdNode = await _repository.AddRowAsync(new AddRowRequest(scenarioVersionId, measureId, level, parentProductNodeId, label), cancellationToken);
+        var createdNode = await _repository.AddRowAsync(new AddRowRequest(scenarioVersionId, measureId, level, parentProductNodeId, label, null), cancellationToken);
         return (createdNode, 1);
+    }
+
+    private async Task<HierarchyMappingResponse> BuildHierarchyMappingResponseAsync(CancellationToken cancellationToken)
+    {
+        var mappings = await _repository.GetHierarchyMappingsAsync(cancellationToken);
+        return new HierarchyMappingResponse(
+            mappings
+                .OrderBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(entry => new HierarchyCategoryDto(
+                    entry.Key,
+                    entry.Value.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToList()))
+                .ToList());
     }
 
     private static decimal GetNumericCellValue(IXLCell cell)
