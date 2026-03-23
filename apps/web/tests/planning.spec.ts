@@ -167,9 +167,22 @@ test.beforeEach(async ({ page, request }) => {
 });
 
 test("loads the live planning grid with locked-cell styling", async ({ page }) => {
+  await expect(page.locator(gridCell("synthetic:Store Total:-10", "202600"))).toContainText("17,253");
   await expect(page.locator(gridCell(storeRowId(101, 2000), "202600"))).toContainText("17,253");
   await expect(page.locator(gridCell(storeRowId(101, 2100), "202600"))).toContainText("11,930");
   await expect(page.locator(gridCell(storeRowId(101, 2110), "202602"))).toHaveClass(/cell-locked/);
+});
+
+test("supports locking and unlocking the synthetic store total row", async ({ page }) => {
+  const totalCell = page.locator(gridCell("synthetic:Store Total:-10", "202600"));
+
+  await totalCell.click({ button: "right" });
+  await page.getByRole("button", { name: "Lock cell" }).click();
+  await expect(totalCell).toHaveClass(/cell-locked/);
+
+  await totalCell.click({ button: "right" });
+  await page.getByRole("button", { name: "Unlock cell" }).click();
+  await expect(totalCell).not.toHaveClass(/cell-locked/);
 });
 
 test("edits an unlocked leaf cell and rolls the value into the yearly aggregate", async ({ page }) => {
@@ -253,12 +266,24 @@ test("imports a workbook through the upload control and refreshes the grid", asy
   await expect(page.locator(gridCell(importedRowId, "202600"))).toContainText("210");
 });
 
+test("switches to Sold Qty and preserves bottom-up behavior", async ({ page }) => {
+  await page.getByRole("button", { name: "Sold Qty" }).click();
+  await expectReady(page);
+
+  await expect(page.locator(gridCell(storeRowId(101, 2110), "202601"))).toContainText("120");
+  await expect(page.locator(gridCell(storeRowId(101, 2110), "202600"))).toContainText("1,751");
+
+  await editCell(page, storeRowId(101, 2110), "202603", "150");
+  await expectReady(page);
+  await expect(page.locator(gridCell(storeRowId(101, 2110), "202603"))).toContainText("150");
+  await expect(page.locator(gridCell(storeRowId(101, 2110), "202600"))).toContainText("1,759");
+});
+
 test("shows the same data in category-first planning views", async ({ page }) => {
   await page.getByRole("button", { name: "Planning - by Category" }).click();
   await expectReady(page);
 
-  const categoryRowId = "synthetic:Beverages:-1";
-  await expect(page.locator(gridCell(categoryRowId, "202600"))).toContainText("11,930");
+  await expect(page.locator(gridCell("synthetic:Category Total:-1", "202600"))).toContainText("17,253");
 
   await page.getByRole("button", { name: "Category - Subcategory - Store" }).click();
   await expectReady(page);
@@ -278,7 +303,7 @@ test("splashes from a top-level category row and keeps the shared data synchroni
 
   await page.getByRole("button", { name: "Planning - by Category" }).click();
   await expectReady(page);
-  const categoryRowId = "synthetic:Beverages:-1";
+  const categoryRowId = "synthetic:Category Total:-1";
   await editCell(page, categoryRowId, "202600", "24000");
   await expectReady(page);
   await page.locator(gridCell(categoryRowId, "202600")).click();

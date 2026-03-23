@@ -38,20 +38,30 @@ const seasonalityWeights: Record<number, number> = {
 
 type ActiveView = "planning-store" | "planning-category" | "hierarchy";
 type CategoryLayout = "category-store-subcategory" | "category-subcategory-store";
+type MeasureOption = {
+  id: number;
+  label: string;
+};
+
+const measures: MeasureOption[] = [
+  { id: 1, label: "Sales Revenue" },
+  { id: 2, label: "Sold Qty" },
+];
 
 export default function App() {
   const queryClient = useQueryClient();
   const [lastError, setLastError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ActiveView>("planning-store");
   const [categoryLayout, setCategoryLayout] = useState<CategoryLayout>("category-store-subcategory");
+  const [activeMeasureId, setActiveMeasureId] = useState<number>(1);
 
   useEffect(() => {
     void preloadPlanningGrid();
   }, []);
 
   const gridQuery = useQuery({
-    queryKey: ["grid-slice", 1, 1],
-    queryFn: getGridSlice,
+    queryKey: ["grid-slice", 1, activeMeasureId],
+    queryFn: () => getGridSlice(activeMeasureId),
   });
   const hierarchyQuery = useQuery({
     queryKey: ["hierarchy-mappings"],
@@ -60,7 +70,7 @@ export default function App() {
 
   const refresh = async () => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["grid-slice", 1, 1] }),
+      queryClient.invalidateQueries({ queryKey: ["grid-slice", 1, activeMeasureId] }),
       queryClient.invalidateQueries({ queryKey: ["hierarchy-mappings"] }),
     ]);
   };
@@ -161,6 +171,8 @@ export default function App() {
       : "Lock-safe planning grid ready.";
   }, [activeView, gridQuery.isError, gridQuery.isLoading, hierarchyQuery.isError, hierarchyQuery.isLoading, isMutating, lastError]);
 
+  const activeMeasure = measures.find((measure) => measure.id === activeMeasureId) ?? measures[0];
+
   const storeViewData = useMemo(
     () => (gridQuery.data ? buildStoreView(gridQuery.data) : null),
     [gridQuery.data],
@@ -229,10 +241,9 @@ export default function App() {
   };
 
   const handleToggleLock = async (row: GridRow, timePeriodId: number, locked: boolean) => {
-    const boundStoreId = row.bindingStoreId ?? row.storeId;
-    const boundProductNodeId = row.bindingProductNodeId ?? row.productNodeId;
-    if (!row.bindingProductNodeId) {
-      setLastError("Only direct planning rows can be locked in this view.");
+    const scopeRoots = row.splashRoots ?? [];
+    if (scopeRoots.length === 0) {
+      setLastError("This row cannot be locked in the current view.");
       return;
     }
 
@@ -241,13 +252,11 @@ export default function App() {
       measureId: gridQuery.data.measureId,
       locked,
       reason: locked ? "Manager review hold" : "Released",
-      coordinates: [
-        {
-          storeId: boundStoreId,
-          productNodeId: boundProductNodeId,
+      coordinates: scopeRoots.map((scopeRoot) => ({
+          storeId: scopeRoot.storeId,
+          productNodeId: scopeRoot.productNodeId,
           timePeriodId,
-        },
-      ],
+        })),
     });
   };
 
@@ -374,6 +383,19 @@ export default function App() {
         </button>
       </div>
 
+      <div className="layout-switcher" role="group" aria-label="Measure selector">
+        {measures.map((measure) => (
+          <button
+            key={measure.id}
+            type="button"
+            className={`secondary-button${activeMeasureId === measure.id ? " secondary-button-active" : ""}`}
+            onClick={() => setActiveMeasureId(measure.id)}
+          >
+            {measure.label}
+          </button>
+        ))}
+      </div>
+
       {activeView === "planning-category" ? (
         <div className="layout-switcher" role="group" aria-label="Category planning layout">
           <button
@@ -415,6 +437,7 @@ export default function App() {
             onAddRow={handleAddRow}
             onImportWorkbook={handleImportWorkbook}
             sheetLabel={activeView === "planning-store" ? "Planning - by Store" : "Planning - by Category"}
+            measureLabel={activeMeasure.label}
           />
         </Suspense>
       )}
@@ -423,16 +446,32 @@ export default function App() {
 }
 
 function buildStoreView(data: GridSliceResponse): GridSliceResponse {
+  const rootLabel = "Store Total";
+  const directRows: GridRow[] = data.rows.map((row) => ({
+    ...row,
+    viewRowId: `store-view:${row.storeId}:${row.productNodeId}`,
+    level: row.level + 1,
+    path: [rootLabel, ...row.path],
+    structureRole: (row.level === 0 ? "store" : row.level === 1 ? "category" : "subcategory") as GridRow["structureRole"],
+    bindingStoreId: row.storeId,
+    bindingProductNodeId: row.productNodeId,
+    splashRoots: [{ storeId: row.storeId, productNodeId: row.productNodeId }],
+  }));
+  const storeRows = directRows.filter((row) => row.structureRole === "store");
+
   return {
     ...data,
-    rows: data.rows.map((row) => ({
-      ...row,
-      viewRowId: `store-view:${row.storeId}:${row.productNodeId}`,
-      structureRole: row.level === 0 ? "store" : row.level === 1 ? "category" : "subcategory",
-      bindingStoreId: row.storeId,
-      bindingProductNodeId: row.productNodeId,
-      splashRoots: [{ storeId: row.storeId, productNodeId: row.productNodeId }],
-    })),
+    rows: [
+      createSyntheticRow({
+        storeId: 0,
+        productNodeId: -10,
+        label: rootLabel,
+        path: [rootLabel],
+        cells: sumCells(storeRows, data),
+        splashRoots: storeRows.map(toSplashRoot),
+      }),
+      ...directRows,
+    ],
   };
 }
 
@@ -445,26 +484,35 @@ function buildCategoryView(data: GridSliceResponse, layout: CategoryLayout): Gri
 
   const categoryGroups = new Map<string, { categoryRows: GridRow[]; leafRows: GridRow[] }>();
   for (const categoryRow of categoryRows) {
-    const categoryLabel = categoryRow.path[1];
+    const categoryLabel = categoryRow.path[2];
     const group = categoryGroups.get(categoryLabel) ?? { categoryRows: [], leafRows: [] };
     group.categoryRows.push(categoryRow);
     categoryGroups.set(categoryLabel, group);
   }
 
   for (const leafRow of leafRows) {
-    const categoryLabel = leafRow.path[1];
+    const categoryLabel = leafRow.path[2];
     const group = categoryGroups.get(categoryLabel) ?? { categoryRows: [], leafRows: [] };
     group.leafRows.push(leafRow);
     categoryGroups.set(categoryLabel, group);
   }
 
   const rows: GridRow[] = [];
+  rows.push(createSyntheticRow({
+    storeId: 0,
+    productNodeId: syntheticRowSeed--,
+    label: "Category Total",
+    path: ["Category Total"],
+    cells: sumCells(storeRows, data),
+    splashRoots: storeRows.map(toSplashRoot),
+  }));
+
   for (const [categoryLabel, group] of [...categoryGroups.entries()].sort(([left], [right]) => left.localeCompare(right))) {
     rows.push(createSyntheticRow({
       storeId: 0,
       productNodeId: syntheticRowSeed--,
       label: categoryLabel,
-      path: [categoryLabel],
+      path: ["Category Total", categoryLabel],
       cells: sumCells(group.categoryRows, data),
       splashRoots: group.categoryRows.map(toSplashRoot),
     }));
@@ -480,8 +528,8 @@ function buildCategoryView(data: GridSliceResponse, layout: CategoryLayout): Gri
           ...categoryRow,
           viewRowId: `category-view:${layout}:${categoryLabel}:${storeLabel}`,
           label: storeLabel,
-          level: 1,
-          path: [categoryLabel, storeLabel],
+          level: 2,
+          path: ["Category Total", categoryLabel, storeLabel],
         });
 
         const matchingLeaves = group.leafRows
@@ -491,8 +539,8 @@ function buildCategoryView(data: GridSliceResponse, layout: CategoryLayout): Gri
         rows.push(...matchingLeaves.map((leafRow) => ({
           ...leafRow,
           viewRowId: `category-view:${layout}:${categoryLabel}:${storeLabel}:${leafRow.label}`,
-          level: 2,
-          path: [categoryLabel, storeLabel, leafRow.label],
+          level: 3,
+          path: ["Category Total", categoryLabel, storeLabel, leafRow.label],
         })));
       }
 
@@ -512,7 +560,7 @@ function buildCategoryView(data: GridSliceResponse, layout: CategoryLayout): Gri
         storeId: 0,
         productNodeId: syntheticRowSeed--,
         label: subcategoryLabel,
-        path: [categoryLabel, subcategoryLabel],
+        path: ["Category Total", categoryLabel, subcategoryLabel],
         cells: sumCells(subcategoryRows, data),
         splashRoots: subcategoryRows.map(toSplashRoot),
       }));
@@ -527,8 +575,8 @@ function buildCategoryView(data: GridSliceResponse, layout: CategoryLayout): Gri
           ...leafRow,
           viewRowId: `category-view:${layout}:${categoryLabel}:${subcategoryLabel}:${storeLabel}`,
           label: storeLabel,
-          level: 2,
-          path: [categoryLabel, subcategoryLabel, storeLabel],
+          level: 3,
+          path: ["Category Total", categoryLabel, subcategoryLabel, storeLabel],
         });
       }
     }

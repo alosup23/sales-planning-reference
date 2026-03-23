@@ -31,6 +31,7 @@ type PlanningGridProps = {
   onAddRow: (level: "store" | "category" | "subcategory", parentRow: GridRow | null) => Promise<void>;
   onImportWorkbook: (file: File) => Promise<void>;
   sheetLabel: string;
+  measureLabel: string;
 };
 
 type GridRowView = GridRow & {
@@ -53,7 +54,7 @@ function formatValue(params: ValueFormatterParams<GridRowView>): string {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
 }
 
-export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onAddRow, onImportWorkbook, sheetLabel }: PlanningGridProps) {
+export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onAddRow, onImportWorkbook, sheetLabel, measureLabel }: PlanningGridProps) {
   const [selectedRowKey, setSelectedRowKey] = useState<RowKey | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -187,7 +188,7 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
     }
 
     api.forEachNode((node) => {
-      node.setExpanded((node.level ?? 0) < 2);
+      node.setExpanded((node.level ?? 0) < 3);
     });
   }, [rowData]);
 
@@ -264,7 +265,7 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
         </div>
         <div>
           <div className="eyebrow">Scenario</div>
-          <strong>Budget FY26 / Revenue</strong>
+          <strong>{`Budget FY26 / ${measureLabel}`}</strong>
         </div>
         <div className="toolbar-actions">
           <button
@@ -339,7 +340,7 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
           treeData
           animateRows
           getDataPath={(data) => data.__path}
-          groupDefaultExpanded={2}
+          groupDefaultExpanded={3}
           getRowId={(params) => getRowKey(params.data)}
           suppressAggFuncInHeader
           enableCellTextSelection
@@ -381,12 +382,12 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
                 }
 
                 const cell = contextRow.cells[contextMenu.timePeriodId];
-                if (contextRow.bindingProductNodeId) {
+                if (contextRow.splashRoots?.length) {
                   void onToggleLock(contextRow, contextMenu.timePeriodId, !cell?.isLocked);
                 }
                 setContextMenu(null);
               }}
-              disabled={!contextRow?.bindingProductNodeId}
+              disabled={!contextRow?.splashRoots?.length}
             >
               {contextRow?.cells[contextMenu.timePeriodId]?.isLocked ? "Unlock cell" : "Lock cell"}
             </button>

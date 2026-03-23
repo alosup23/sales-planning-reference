@@ -9,6 +9,8 @@ namespace SalesPlanning.Api.Infrastructure;
 
 public sealed class SqlitePlanningRepository : IPlanningRepository
 {
+    private static readonly long[] SupportedMeasureIds = [1, 2];
+
     static SqlitePlanningRepository()
     {
         Batteries.Init();
@@ -370,7 +372,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                     var productNodeId = ++nextProductNodeId;
                     node = new ProductNode(productNodeId, storeId, null, request.Label.Trim(), 0, new[] { request.Label.Trim() }, false);
                     await InsertProductNodeAsync(connection, transaction, node, cancellationToken);
-                    await InitializeCellsForNodeAsync(connection, transaction, request.ScenarioVersionId, request.MeasureId, node, timePeriods.Values, cancellationToken);
+                    await InitializeCellsForNodeAsync(connection, transaction, request.ScenarioVersionId, node, SupportedMeasureIds, timePeriods.Values, cancellationToken);
                     if (request.CopyFromStoreId is not null)
                     {
                         nextProductNodeId = await CloneStoreHierarchyAndDataAsync(
@@ -401,7 +403,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                         parent.Path.Append(request.Label.Trim()).ToArray(),
                         false);
                     await InsertProductNodeAsync(connection, transaction, node, cancellationToken);
-                    await InitializeCellsForNodeAsync(connection, transaction, request.ScenarioVersionId, request.MeasureId, node, timePeriods.Values, cancellationToken);
+                    await InitializeCellsForNodeAsync(connection, transaction, request.ScenarioVersionId, node, SupportedMeasureIds, timePeriods.Values, cancellationToken);
                     await UpsertHierarchyCategoryInternalAsync(connection, transaction, node.Label, cancellationToken);
                     break;
                 }
@@ -423,7 +425,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                         parent.Path.Append(request.Label.Trim()).ToArray(),
                         true);
                     await InsertProductNodeAsync(connection, transaction, node, cancellationToken);
-                    await InitializeCellsForNodeAsync(connection, transaction, request.ScenarioVersionId, request.MeasureId, node, timePeriods.Values, cancellationToken);
+                    await InitializeCellsForNodeAsync(connection, transaction, request.ScenarioVersionId, node, SupportedMeasureIds, timePeriods.Values, cancellationToken);
                     await UpsertHierarchySubcategoryInternalAsync(connection, transaction, parent.Label, node.Label, cancellationToken);
                     break;
                 }
@@ -625,6 +627,11 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                     await SeedAsync(connection, transaction, cancellationToken);
                 }
             }
+
+            var productNodes = await LoadProductNodesAsync(connection, transaction, cancellationToken);
+            var timePeriods = await LoadTimePeriodsAsync(connection, transaction, cancellationToken);
+            await EnsureSupportedMeasureCellsAsync(connection, transaction, productNodes.Values, timePeriods.Values, cancellationToken);
+            await EnsureQuantitySeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
 
             await transaction.CommitAsync(cancellationToken);
             _initialized = true;
@@ -880,21 +887,142 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         SqliteConnection connection,
         SqliteTransaction transaction,
         long scenarioVersionId,
-        long measureId,
         ProductNode node,
+        IEnumerable<long> measureIds,
         IEnumerable<TimePeriodNode> timePeriods,
         CancellationToken cancellationToken)
     {
-        foreach (var period in timePeriods)
+        foreach (var measureId in measureIds)
         {
-            await UpsertCellAsync(connection, transaction, new PlanningCell
+            foreach (var period in timePeriods)
             {
-                Coordinate = new PlanningCellCoordinate(scenarioVersionId, measureId, node.StoreId, node.ProductNodeId, period.TimePeriodId),
-                DerivedValue = 0m,
-                EffectiveValue = 0m,
-                RowVersion = 1,
-                CellKind = node.IsLeaf && period.Grain == "month" ? "leaf" : "calculated"
-            }, cancellationToken);
+                await using var command = connection.CreateCommand();
+                command.Transaction = transaction;
+                command.CommandText = """
+                    insert into planning_cells (
+                        scenario_version_id,
+                        measure_id,
+                        store_id,
+                        product_node_id,
+                        time_period_id,
+                        input_value,
+                        override_value,
+                        is_system_generated_override,
+                        derived_value,
+                        effective_value,
+                        is_locked,
+                        lock_reason,
+                        locked_by,
+                        row_version,
+                        cell_kind)
+                    values (
+                        $scenarioVersionId,
+                        $measureId,
+                        $storeId,
+                        $productNodeId,
+                        $timePeriodId,
+                        null,
+                        null,
+                        0,
+                        0,
+                        0,
+                        0,
+                        null,
+                        null,
+                        1,
+                        $cellKind)
+                    on conflict (scenario_version_id, measure_id, store_id, product_node_id, time_period_id) do nothing;
+                    """;
+                command.Parameters.AddWithValue("$scenarioVersionId", scenarioVersionId);
+                command.Parameters.AddWithValue("$measureId", measureId);
+                command.Parameters.AddWithValue("$storeId", node.StoreId);
+                command.Parameters.AddWithValue("$productNodeId", node.ProductNodeId);
+                command.Parameters.AddWithValue("$timePeriodId", period.TimePeriodId);
+                command.Parameters.AddWithValue("$cellKind", node.IsLeaf && period.Grain == "month" ? "leaf" : "calculated");
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+        }
+    }
+
+    private static async Task EnsureSupportedMeasureCellsAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        IEnumerable<ProductNode> productNodes,
+        IEnumerable<TimePeriodNode> timePeriods,
+        CancellationToken cancellationToken)
+    {
+        foreach (var productNode in productNodes)
+        {
+            await InitializeCellsForNodeAsync(connection, transaction, 1, productNode, SupportedMeasureIds, timePeriods, cancellationToken);
+        }
+    }
+
+    private static async Task EnsureQuantitySeedAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        IReadOnlyDictionary<long, ProductNode> productNodes,
+        IReadOnlyDictionary<long, TimePeriodNode> timePeriods,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "select count(*) from planning_cells where measure_id = 2 and input_value is not null;";
+        var existingQuantityInputs = Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));
+        if (existingQuantityInputs > 0)
+        {
+            return;
+        }
+
+        var cells = await LoadCellsAsync(connection, transaction, cancellationToken);
+        var quantityCells = cells
+            .Where(cell => cell.Coordinate.ScenarioVersionId == 1 && cell.Coordinate.MeasureId == 2)
+            .ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
+
+        var quantityLeafValues = new Dictionary<(long StoreId, long ProductNodeId), Dictionary<long, decimal>>
+        {
+            [(101, 2110)] = new()
+            {
+                [202601] = 120m, [202602] = 150m, [202603] = 142m, [202604] = 144m,
+                [202605] = 146m, [202606] = 149m, [202607] = 153m, [202608] = 155m,
+                [202609] = 148m, [202610] = 140m, [202611] = 146m, [202612] = 158m
+            },
+            [(101, 2120)] = new()
+            {
+                [202601] = 55m, [202602] = 58m, [202603] = 57m, [202604] = 59m,
+                [202605] = 60m, [202606] = 62m, [202607] = 64m, [202608] = 63m,
+                [202609] = 61m, [202610] = 60m, [202611] = 61m, [202612] = 66m
+            },
+            [(101, 2210)] = new()
+            {
+                [202601] = 80m, [202602] = 84m, [202603] = 82m, [202604] = 85m,
+                [202605] = 88m, [202606] = 90m, [202607] = 92m, [202608] = 94m,
+                [202609] = 91m, [202610] = 88m, [202611] = 89m, [202612] = 96m
+            }
+        };
+
+        foreach (var (key, monthValues) in quantityLeafValues)
+        {
+            foreach (var monthValue in monthValues)
+            {
+                var coordinate = new PlanningCellCoordinate(1, 2, key.StoreId, key.ProductNodeId, monthValue.Key);
+                if (!quantityCells.TryGetValue(coordinate.Key, out var cell))
+                {
+                    continue;
+                }
+
+                cell.InputValue = monthValue.Value;
+                cell.DerivedValue = monthValue.Value;
+                cell.EffectiveValue = monthValue.Value;
+                cell.RowVersion = Math.Max(cell.RowVersion, 2);
+                cell.CellKind = "input";
+            }
+        }
+
+        RecalculateSeedTotals(1, 2, quantityCells, productNodes, timePeriods);
+
+        foreach (var cell in quantityCells.Values)
+        {
+            await UpsertCellAsync(connection, transaction, cell, cancellationToken);
         }
     }
 
@@ -955,28 +1083,31 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 parent.Path.Append(sourceNode.Label).ToArray(),
                 sourceNode.IsLeaf);
             await InsertProductNodeAsync(connection, transaction, clonedNode, cancellationToken);
-            await InitializeCellsForNodeAsync(connection, transaction, scenarioVersionId, measureId, clonedNode, timePeriods.Values, cancellationToken);
+            await InitializeCellsForNodeAsync(connection, transaction, scenarioVersionId, clonedNode, SupportedMeasureIds, timePeriods.Values, cancellationToken);
             nodeMap[sourceNode.ProductNodeId] = clonedNode;
         }
 
         foreach (var sourceNode in sourceNodes.Prepend(sourceRootNode))
         {
             var targetNode = nodeMap[sourceNode.ProductNodeId];
-            foreach (var period in timePeriods.Values)
+            foreach (var supportedMeasureId in SupportedMeasureIds)
             {
-                var sourceCoordinate = new PlanningCellCoordinate(scenarioVersionId, measureId, sourceStoreId, sourceNode.ProductNodeId, period.TimePeriodId);
-                var targetCoordinate = new PlanningCellCoordinate(scenarioVersionId, measureId, targetStoreNode.StoreId, targetNode.ProductNodeId, period.TimePeriodId);
-                if (!cellLookup.TryGetValue(sourceCoordinate.Key, out var sourceCell))
+                foreach (var period in timePeriods.Values)
                 {
-                    continue;
-                }
+                    var sourceCoordinate = new PlanningCellCoordinate(scenarioVersionId, supportedMeasureId, sourceStoreId, sourceNode.ProductNodeId, period.TimePeriodId);
+                    var targetCoordinate = new PlanningCellCoordinate(scenarioVersionId, supportedMeasureId, targetStoreNode.StoreId, targetNode.ProductNodeId, period.TimePeriodId);
+                    if (!cellLookup.TryGetValue(sourceCoordinate.Key, out var sourceCell))
+                    {
+                        continue;
+                    }
 
-                var clonedCell = sourceCell.Clone();
-                clonedCell.Coordinate = targetCoordinate;
-                clonedCell.IsLocked = false;
-                clonedCell.LockReason = null;
-                clonedCell.LockedBy = null;
-                await UpsertCellAsync(connection, transaction, clonedCell, cancellationToken);
+                    var clonedCell = sourceCell.Clone();
+                    clonedCell.Coordinate = targetCoordinate;
+                    clonedCell.IsLocked = false;
+                    clonedCell.LockReason = null;
+                    clonedCell.LockedBy = null;
+                    await UpsertCellAsync(connection, transaction, clonedCell, cancellationToken);
+                }
             }
         }
 
@@ -1148,27 +1279,30 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         foreach (var productNode in productNodes.Values)
         {
             await InsertProductNodeAsync(connection, transaction, productNode, cancellationToken);
-            await InitializeCellsForNodeAsync(connection, transaction, 1, 1, productNode, timePeriods.Values, cancellationToken);
+            await InitializeCellsForNodeAsync(connection, transaction, 1, productNode, SupportedMeasureIds, timePeriods.Values, cancellationToken);
         }
 
         var cells = new Dictionary<string, PlanningCell>();
-        foreach (var productNode in productNodes.Values)
+        foreach (var measureId in SupportedMeasureIds)
         {
-            foreach (var timePeriod in timePeriods.Values)
+            foreach (var productNode in productNodes.Values)
             {
-                var cell = new PlanningCell
+                foreach (var timePeriod in timePeriods.Values)
                 {
-                    Coordinate = new PlanningCellCoordinate(1, 1, productNode.StoreId, productNode.ProductNodeId, timePeriod.TimePeriodId),
-                    DerivedValue = 0m,
-                    EffectiveValue = 0m,
-                    RowVersion = 1,
-                    CellKind = productNode.IsLeaf && timePeriod.Grain == "month" ? "leaf" : "calculated"
-                };
-                cells[cell.Coordinate.Key] = cell;
+                    var cell = new PlanningCell
+                    {
+                        Coordinate = new PlanningCellCoordinate(1, measureId, productNode.StoreId, productNode.ProductNodeId, timePeriod.TimePeriodId),
+                        DerivedValue = 0m,
+                        EffectiveValue = 0m,
+                        RowVersion = 1,
+                        CellKind = productNode.IsLeaf && timePeriod.Grain == "month" ? "leaf" : "calculated"
+                    };
+                    cells[cell.Coordinate.Key] = cell;
+                }
             }
         }
 
-        var leafValues = new Dictionary<(long StoreId, long ProductNodeId), Dictionary<long, decimal>>
+        var revenueLeafValues = new Dictionary<(long StoreId, long ProductNodeId), Dictionary<long, decimal>>
         {
             [(101, 2110)] = new()
             {
@@ -1190,26 +1324,48 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             }
         };
 
-        foreach (var (key, monthValues) in leafValues)
+        var quantityLeafValues = new Dictionary<(long StoreId, long ProductNodeId), Dictionary<long, decimal>>
         {
-            foreach (var monthValue in monthValues)
+            [(101, 2110)] = new()
             {
-                var coordinate = new PlanningCellCoordinate(1, 1, key.StoreId, key.ProductNodeId, monthValue.Key);
-                var cell = cells[coordinate.Key];
-                cell.InputValue = monthValue.Value;
-                cell.DerivedValue = monthValue.Value;
-                cell.EffectiveValue = monthValue.Value;
-                cell.RowVersion = 2;
-                cell.CellKind = "input";
+                [202601] = 120m, [202602] = 150m, [202603] = 142m, [202604] = 144m,
+                [202605] = 146m, [202606] = 149m, [202607] = 153m, [202608] = 155m,
+                [202609] = 148m, [202610] = 140m, [202611] = 146m, [202612] = 158m
+            },
+            [(101, 2120)] = new()
+            {
+                [202601] = 55m, [202602] = 58m, [202603] = 57m, [202604] = 59m,
+                [202605] = 60m, [202606] = 62m, [202607] = 64m, [202608] = 63m,
+                [202609] = 61m, [202610] = 60m, [202611] = 61m, [202612] = 66m
+            },
+            [(101, 2210)] = new()
+            {
+                [202601] = 80m, [202602] = 84m, [202603] = 82m, [202604] = 85m,
+                [202605] = 88m, [202606] = 90m, [202607] = 92m, [202608] = 94m,
+                [202609] = 91m, [202610] = 88m, [202611] = 89m, [202612] = 96m
             }
-        }
+        };
+
+        ApplyLeafSeedValues(cells, 1, revenueLeafValues);
+        ApplyLeafSeedValues(cells, 2, quantityLeafValues);
 
         var lockedCoordinate = new PlanningCellCoordinate(1, 1, 101, 2110, 202602);
         cells[lockedCoordinate.Key].IsLocked = true;
         cells[lockedCoordinate.Key].LockReason = "Manager-held sample lock";
         cells[lockedCoordinate.Key].LockedBy = "demo.manager";
 
-        RecalculateSeedTotals(1, 1, cells, productNodes, timePeriods);
+        RecalculateSeedTotals(
+            1,
+            1,
+            cells.Where(entry => entry.Value.Coordinate.MeasureId == 1).ToDictionary(entry => entry.Key, entry => entry.Value),
+            productNodes,
+            timePeriods);
+        RecalculateSeedTotals(
+            1,
+            2,
+            cells.Where(entry => entry.Value.Coordinate.MeasureId == 2).ToDictionary(entry => entry.Key, entry => entry.Value),
+            productNodes,
+            timePeriods);
 
         foreach (var category in productNodes.Values.Where(node => node.Level == 1))
         {
@@ -1225,6 +1381,26 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         foreach (var cell in cells.Values)
         {
             await UpsertCellAsync(connection, transaction, cell, cancellationToken);
+        }
+    }
+
+    private static void ApplyLeafSeedValues(
+        IDictionary<string, PlanningCell> cells,
+        long measureId,
+        IReadOnlyDictionary<(long StoreId, long ProductNodeId), Dictionary<long, decimal>> leafValues)
+    {
+        foreach (var (key, monthValues) in leafValues)
+        {
+            foreach (var monthValue in monthValues)
+            {
+                var coordinate = new PlanningCellCoordinate(1, measureId, key.StoreId, key.ProductNodeId, monthValue.Key);
+                var cell = cells[coordinate.Key];
+                cell.InputValue = monthValue.Value;
+                cell.DerivedValue = monthValue.Value;
+                cell.EffectiveValue = monthValue.Value;
+                cell.RowVersion = 2;
+                cell.CellKind = "input";
+            }
         }
     }
 
