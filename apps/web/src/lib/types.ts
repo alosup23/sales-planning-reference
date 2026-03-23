@@ -18,11 +18,15 @@ export type GridPeriod = {
 export type GridRow = {
   storeId: number;
   productNodeId: number;
+  viewRowId?: string;
   label: string;
   level: number;
   path: string[];
   isLeaf: boolean;
   cells: Record<number, GridCell>;
+  structureRole?: "store" | "category" | "subcategory" | "virtual";
+  bindingStoreId?: number | null;
+  bindingProductNodeId?: number | null;
 };
 
 export type GridSliceResponse = {

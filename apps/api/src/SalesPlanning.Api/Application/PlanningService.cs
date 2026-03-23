@@ -141,15 +141,28 @@ public sealed class PlanningService : IPlanningService
         }
 
         using var workbook = new XLWorkbook(workbookStream);
-        var worksheet = workbook.Worksheets.FirstOrDefault()
-            ?? throw new InvalidOperationException("The uploaded workbook does not contain any worksheets.");
+        var worksheets = workbook.Worksheets.ToList();
+        if (worksheets.Count == 0)
+        {
+            throw new InvalidOperationException("The uploaded workbook does not contain any worksheets.");
+        }
 
-        var headerMap = worksheet.Row(1)
-            .CellsUsed()
-            .ToDictionary(
-                cell => cell.GetString().Trim(),
-                cell => cell.Address.ColumnNumber,
-                StringComparer.OrdinalIgnoreCase);
+        var worksheet = worksheets
+            .Select(sheet => new { Sheet = sheet, HeaderMap = GetHeaderMap(sheet) })
+            .FirstOrDefault(candidate =>
+                candidate.HeaderMap.ContainsKey("Store") &&
+                candidate.HeaderMap.ContainsKey("Category") &&
+                candidate.HeaderMap.ContainsKey("Subcategory"))
+            ?? throw new InvalidOperationException("The uploaded workbook does not contain a planning sheet with Store, Category, and Subcategory columns.");
+
+        var headerMap = worksheet.HeaderMap;
+
+        var mappingSheet = worksheets
+            .Select(sheet => new { Sheet = sheet, HeaderMap = GetHeaderMap(sheet) })
+            .FirstOrDefault(candidate =>
+                !ReferenceEquals(candidate.Sheet, worksheet.Sheet) &&
+                candidate.HeaderMap.ContainsKey("Category") &&
+                candidate.HeaderMap.ContainsKey("Subcategory"));
 
         foreach (var requiredHeader in new[] { "Store", "Category", "Subcategory" })
         {
@@ -192,7 +205,27 @@ public sealed class PlanningService : IPlanningService
         var cellsUpdated = 0;
         var importDeltas = new List<PlanningCellDeltaAudit>();
 
-        foreach (var row in worksheet.RowsUsed().Skip(1))
+        if (mappingSheet is not null)
+        {
+            foreach (var mappingRow in mappingSheet.Sheet.RowsUsed().Skip(1))
+            {
+                var categoryLabel = mappingRow.Cell(mappingSheet.HeaderMap["Category"]).GetString().Trim();
+                var subcategoryLabel = mappingRow.Cell(mappingSheet.HeaderMap["Subcategory"]).GetString().Trim();
+
+                if (string.IsNullOrWhiteSpace(categoryLabel))
+                {
+                    continue;
+                }
+
+                await _repository.UpsertHierarchyCategoryAsync(categoryLabel, cancellationToken);
+                if (!string.IsNullOrWhiteSpace(subcategoryLabel))
+                {
+                    await _repository.UpsertHierarchySubcategoryAsync(categoryLabel, subcategoryLabel, cancellationToken);
+                }
+            }
+        }
+
+        foreach (var row in worksheet.Sheet.RowsUsed().Skip(1))
         {
             var storeLabel = row.Cell(headerMap["Store"]).GetString().Trim();
             var categoryLabel = row.Cell(headerMap["Category"]).GetString().Trim();
@@ -747,5 +780,15 @@ public sealed class PlanningService : IPlanningService
         }
 
         throw new InvalidOperationException($"Cell {cell.Address} does not contain a numeric value.");
+    }
+
+    private static Dictionary<string, int> GetHeaderMap(IXLWorksheet worksheet)
+    {
+        return worksheet.Row(1)
+            .CellsUsed()
+            .ToDictionary(
+                cell => cell.GetString().Trim(),
+                cell => cell.Address.ColumnNumber,
+                StringComparer.OrdinalIgnoreCase);
     }
 }

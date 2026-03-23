@@ -174,6 +174,12 @@ public sealed class PlanningServiceTests
     public async Task ImportWorkbookAsync_CreatesRowsAndLoadsLeafMonthValues()
     {
         using var workbook = new XLWorkbook();
+        var mappingSheet = workbook.AddWorksheet("Hierarchy Mapping");
+        mappingSheet.Cell(1, 1).Value = "Category";
+        mappingSheet.Cell(1, 2).Value = "Subcategory";
+        mappingSheet.Cell(2, 1).Value = "Frozen";
+        mappingSheet.Cell(2, 2).Value = "Ice Cream";
+
         var sheet = workbook.AddWorksheet("Plan");
         sheet.Cell(1, 1).Value = "Store";
         sheet.Cell(1, 2).Value = "Category";
@@ -200,6 +206,10 @@ public sealed class PlanningServiceTests
         Assert.Equal(100m, importedLeaf.Cells[202601].Value);
         Assert.Equal(110m, importedLeaf.Cells[202602].Value);
         Assert.Equal(210m, importedLeaf.Cells[202600].Value);
+
+        var mappings = await _service.GetHierarchyMappingsAsync(CancellationToken.None);
+        var frozen = mappings.Categories.Single(category => category.CategoryLabel == "Frozen");
+        Assert.Contains("Ice Cream", frozen.SubcategoryLabels);
     }
 
     [Fact]

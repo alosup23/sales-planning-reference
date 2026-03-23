@@ -30,6 +30,7 @@ type PlanningGridProps = {
   onSplashYear: (row: GridRow, yearValue: number) => Promise<void>;
   onAddRow: (level: "store" | "category" | "subcategory", parentRow: GridRow | null) => Promise<void>;
   onImportWorkbook: (file: File) => Promise<void>;
+  sheetLabel: string;
 };
 
 type GridRowView = GridRow & {
@@ -37,8 +38,7 @@ type GridRowView = GridRow & {
 };
 
 type RowKey = {
-  storeId: number;
-  productNodeId: number;
+  id: string;
 };
 
 type ContextMenuState = {
@@ -53,7 +53,7 @@ function formatValue(params: ValueFormatterParams<GridRowView>): string {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
 }
 
-export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onAddRow, onImportWorkbook }: PlanningGridProps) {
+export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onAddRow, onImportWorkbook, sheetLabel }: PlanningGridProps) {
   const [selectedRowKey, setSelectedRowKey] = useState<RowKey | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -75,22 +75,24 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
   const rowLookup = useMemo(() => {
     const lookup = new Map<string, GridRowView>();
     rowData.forEach((row) => {
-      lookup.set(getRowKey(row.storeId, row.productNodeId), row);
+      lookup.set(getRowKey(row), row);
     });
     return lookup;
   }, [rowData]);
 
   const selectedRow = selectedRowKey
-    ? rowLookup.get(getRowKey(selectedRowKey.storeId, selectedRowKey.productNodeId)) ?? null
+    ? rowLookup.get(selectedRowKey.id) ?? null
     : null;
   const contextRow = contextMenu
-    ? rowLookup.get(getRowKey(contextMenu.rowKey.storeId, contextMenu.rowKey.productNodeId)) ?? null
+    ? rowLookup.get(contextMenu.rowKey.id) ?? null
     : null;
+  const canAddCategory = selectedRow?.structureRole === "store";
+  const canAddSubcategory = selectedRow?.structureRole === "category";
 
   const syncSelectedRow = (row: GridRowView | null | undefined) => {
     setSelectedRowKey(
       row
-        ? { storeId: row.storeId, productNodeId: row.productNodeId }
+        ? { id: getRowKey(row) }
         : null,
     );
   };
@@ -99,7 +101,11 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
     const yearCol: ColDef<GridRowView> = {
       headerName: yearPeriod?.label ?? "Year",
       colId: yearPeriod ? String(yearPeriod.timePeriodId) : "year",
-      editable: (params) => Boolean(yearPeriod && !params.data?.cells[yearPeriod.timePeriodId]?.isLocked),
+      editable: (params) => Boolean(
+        yearPeriod &&
+        params.data?.bindingProductNodeId &&
+        !params.data?.cells[yearPeriod.timePeriodId]?.isLocked,
+      ),
       valueGetter: (params) => yearPeriod ? params.data?.cells[yearPeriod.timePeriodId]?.value ?? 0 : 0,
       valueFormatter: formatValue,
       width: 112,
@@ -113,7 +119,7 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
     const monthCols: ColDef<GridRowView>[] = monthPeriods.map((period) => ({
       headerName: period.label,
       colId: String(period.timePeriodId),
-      editable: (params) => !params.data?.cells[period.timePeriodId]?.isLocked,
+      editable: (params) => Boolean(params.data?.bindingProductNodeId && !params.data?.cells[period.timePeriodId]?.isLocked),
       valueGetter: (params) => params.data?.cells[period.timePeriodId]?.value ?? 0,
       valueFormatter: formatValue,
       width: 96,
@@ -176,7 +182,7 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
     setContextMenu({
       x: mouseEvent.clientX,
       y: mouseEvent.clientY,
-      rowKey: { storeId: row.storeId, productNodeId: row.productNodeId },
+      rowKey: { id: getRowKey(row) },
       timePeriodId,
     });
   };
@@ -230,12 +236,12 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
     <div className="planning-shell">
       <div className="planning-toolbar">
         <div>
-          <div className="eyebrow">Scenario</div>
-          <strong>Budget FY26</strong>
+          <div className="eyebrow">Sheet</div>
+          <strong>{sheetLabel}</strong>
         </div>
         <div>
-          <div className="eyebrow">Measure</div>
-          <strong>Revenue</strong>
+          <div className="eyebrow">Scenario</div>
+          <strong>Budget FY26 / Revenue</strong>
         </div>
         <div className="toolbar-actions">
           <button
@@ -248,7 +254,7 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
           <button
             type="button"
             className="secondary-button"
-            disabled={!selectedRow || selectedRow.level !== 0}
+            disabled={!canAddCategory}
             onClick={() => void onAddRow("category", selectedRow)}
           >
             Add Category
@@ -256,7 +262,7 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
           <button
             type="button"
             className="secondary-button"
-            disabled={!selectedRow || selectedRow.level !== 1}
+            disabled={!canAddSubcategory}
             onClick={() => void onAddRow("subcategory", selectedRow)}
           >
             Add Subcategory
@@ -271,9 +277,9 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
           <button
             type="button"
             className="secondary-button"
-            disabled={!selectedRow}
+            disabled={!selectedRow?.bindingProductNodeId}
             onClick={() => {
-              if (!selectedRow) {
+              if (!selectedRow?.bindingProductNodeId) {
                 return;
               }
 
@@ -310,7 +316,7 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
           animateRows
           getDataPath={(data) => data.__path}
           groupDefaultExpanded={2}
-          getRowId={(params) => `${params.data.storeId}-${params.data.productNodeId}`}
+          getRowId={(params) => getRowKey(params.data)}
           suppressAggFuncInHeader
           enableCellTextSelection
           cellSelection
@@ -351,9 +357,12 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
                 }
 
                 const cell = contextRow.cells[contextMenu.timePeriodId];
-                void onToggleLock(contextRow, contextMenu.timePeriodId, !cell?.isLocked);
+                if (contextRow.bindingProductNodeId) {
+                  void onToggleLock(contextRow, contextMenu.timePeriodId, !cell?.isLocked);
+                }
                 setContextMenu(null);
               }}
+              disabled={!contextRow?.bindingProductNodeId}
             >
               {contextRow?.cells[contextMenu.timePeriodId]?.isLocked ? "Unlock cell" : "Lock cell"}
             </button>
@@ -365,10 +374,13 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
                   return;
                 }
 
-                const total = contextRow.cells[202600]?.value ?? 0;
-                void onSplashYear(contextRow, total);
+                if (contextRow.bindingProductNodeId) {
+                  const total = contextRow.cells[202600]?.value ?? 0;
+                  void onSplashYear(contextRow, total);
+                }
                 setContextMenu(null);
               }}
+              disabled={!contextRow?.bindingProductNodeId}
             >
               Splash from year total
             </button>
@@ -379,6 +391,6 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
   );
 }
 
-function getRowKey(storeId: number, productNodeId: number): string {
-  return `${storeId}-${productNodeId}`;
+function getRowKey(row: GridRowView | GridRow): string {
+  return row.viewRowId ?? `${row.storeId}-${row.productNodeId}`;
 }

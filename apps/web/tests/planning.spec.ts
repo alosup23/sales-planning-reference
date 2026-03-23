@@ -5,12 +5,13 @@ import path from "node:path";
 import { expect, test } from "@playwright/test";
 
 const gridCell = (rowId: string, colId: string) => `[row-id="${rowId}"] [col-id="${colId}"]`;
+const storeRowId = (storeId: number, productNodeId: number) => `store-view:${storeId}:${productNodeId}`;
 
 async function openGrid(page: import("@playwright/test").Page) {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Sales Budget & Planning" })).toBeVisible();
-  await expect(page.getByText("Lock-safe planning grid ready.")).toBeVisible();
-  await expect(page.locator(gridCell("101-2110", "202602"))).toContainText("750");
+  await expectReady(page);
+  await expect(page.locator(gridCell(storeRowId(101, 2110), "202602"))).toContainText("750");
 }
 
 async function editCell(page: import("@playwright/test").Page, rowId: string, colId: string, nextValue: string) {
@@ -25,6 +26,10 @@ async function editCell(page: import("@playwright/test").Page, rowId: string, co
 
 async function selectRow(page: import("@playwright/test").Page, rowId: string) {
   await page.locator(gridCell(rowId, "202600")).click();
+}
+
+async function expectReady(page: import("@playwright/test").Page) {
+  await expect(page.getByText(/ready\.$/)).toBeVisible();
 }
 
 function createWorkbookBuffer(rows: Array<Record<string, string | number>>): Buffer {
@@ -126,12 +131,17 @@ function createWorkbookBuffer(rows: Array<Record<string, string | number>>): Buf
   return buffer;
 }
 
-async function getRowIdByLabel(page: import("@playwright/test").Page, label: string) {
-  const rowLabel = page.getByText(label, { exact: true }).first();
-  await expect(rowLabel).toBeVisible();
-  const rowId = await rowLabel.evaluate((element) => element.closest("[row-id]")?.getAttribute("row-id"));
-  expect(rowId).toBeTruthy();
-  return rowId as string;
+async function getRowIdByLabel(page: import("@playwright/test").Page, label: string, index = 0) {
+  const rowIds = await page.locator('.planning-grid [col-id="ag-Grid-AutoColumn"]').evaluateAll((cells, expectedLabel) => cells
+    .map((cell) => ({
+      id: cell.closest("[row-id]")?.getAttribute("row-id"),
+      label: cell.textContent?.trim() ?? "",
+    }))
+    .filter((row) => row.id && row.label.includes(String(expectedLabel)))
+    .map((row) => row.id as string), label);
+
+  expect(rowIds[index]).toBeTruthy();
+  return rowIds[index];
 }
 
 test.describe.configure({ mode: "serial" });
@@ -142,21 +152,21 @@ test.beforeEach(async ({ page, request }) => {
 });
 
 test("loads the live planning grid with locked-cell styling", async ({ page }) => {
-  await expect(page.locator(gridCell("101-2000", "202600"))).toContainText("17,253");
-  await expect(page.locator(gridCell("101-2100", "202600"))).toContainText("11,930");
-  await expect(page.locator(gridCell("101-2110", "202602"))).toHaveClass(/cell-locked/);
+  await expect(page.locator(gridCell(storeRowId(101, 2000), "202600"))).toContainText("17,253");
+  await expect(page.locator(gridCell(storeRowId(101, 2100), "202600"))).toContainText("11,930");
+  await expect(page.locator(gridCell(storeRowId(101, 2110), "202602"))).toHaveClass(/cell-locked/);
 });
 
 test("edits an unlocked leaf cell and rolls the value into the yearly aggregate", async ({ page }) => {
-  await editCell(page, "101-2120", "202603", "333");
+  await editCell(page, storeRowId(101, 2120), "202603", "333");
 
-  await expect(page.locator(gridCell("101-2120", "202603"))).toContainText("333");
-  await expect(page.locator(gridCell("101-2120", "202600"))).toContainText("3,343");
-  await expect(page.locator(gridCell("101-2100", "202600"))).toContainText("12,008");
+  await expect(page.locator(gridCell(storeRowId(101, 2120), "202603"))).toContainText("333");
+  await expect(page.locator(gridCell(storeRowId(101, 2120), "202600"))).toContainText("3,343");
+  await expect(page.locator(gridCell(storeRowId(101, 2100), "202600"))).toContainText("12,008");
 });
 
 test("locks and unlocks a cell through the custom context menu", async ({ page }) => {
-  const targetCell = page.locator(gridCell("101-2120", "202604"));
+  const targetCell = page.locator(gridCell(storeRowId(101, 2120), "202604"));
 
   await targetCell.click({ button: "right" });
   await page.getByRole("button", { name: "Lock cell" }).click();
@@ -168,33 +178,34 @@ test("locks and unlocks a cell through the custom context menu", async ({ page }
 });
 
 test("splashes a yearly total across months while preserving the locked February value", async ({ page }) => {
-  await editCell(page, "101-2110", "202600", "12000");
-  await expect(page.locator(gridCell("101-2110", "202600"))).toContainText("12,000");
-  await page.locator(gridCell("101-2110", "202600")).click();
+  await editCell(page, storeRowId(101, 2110), "202600", "12000");
+  await expect(page.locator(gridCell(storeRowId(101, 2110), "202600"))).toContainText("12,000");
+  await page.locator(gridCell(storeRowId(101, 2110), "202600")).click();
   await page.getByRole("button", { name: "Splash selected row" }).click();
 
-  await expect(page.locator(gridCell("101-2110", "202601"))).toContainText("1,023");
-  await expect(page.locator(gridCell("101-2110", "202602"))).toContainText("750");
-  await expect(page.locator(gridCell("101-2110", "202603"))).toContainText("895");
-  await expect(page.locator(gridCell("101-2110", "202600"))).toContainText("12,000");
+  await expect(page.locator(gridCell(storeRowId(101, 2110), "202601"))).toContainText("1,023");
+  await expect(page.locator(gridCell(storeRowId(101, 2110), "202602"))).toContainText("750");
+  await expect(page.locator(gridCell(storeRowId(101, 2110), "202603"))).toContainText("895");
+  await expect(page.locator(gridCell(storeRowId(101, 2110), "202600"))).toContainText("12,000");
 });
 
 test("adds a category and subcategory from the toolbar", async ({ page }) => {
   const categoryName = "Frozen E2E";
   const subcategoryName = "Ice Cream E2E";
 
-  await selectRow(page, "101-2000");
+  await selectRow(page, storeRowId(101, 2000));
   page.once("dialog", (dialog) => dialog.accept(categoryName));
   await page.getByRole("button", { name: "Add Category" }).click();
 
-  const categoryRowId = await getRowIdByLabel(page, categoryName);
+  const categoryRowId = storeRowId(101, 3001);
+  await expect(page.locator(gridCell(categoryRowId, "202600"))).toContainText("0");
   await selectRow(page, categoryRowId);
   await expect(page.getByRole("button", { name: "Add Subcategory" })).toBeEnabled();
 
   page.once("dialog", (dialog) => dialog.accept(subcategoryName));
   await page.getByRole("button", { name: "Add Subcategory" }).click();
 
-  const subcategoryRowId = await getRowIdByLabel(page, subcategoryName);
+  const subcategoryRowId = storeRowId(101, 3002);
   await expect(page.locator(gridCell(subcategoryRowId, "202600"))).toContainText("0");
 
   await page.getByRole("button", { name: "Hierarchy Maintenance" }).click();
@@ -219,11 +230,25 @@ test("imports a workbook through the upload control and refreshes the grid", asy
     mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     buffer: workbookBuffer,
   });
+  await expectReady(page);
 
-  const importedRowId = await getRowIdByLabel(page, "Ice Cream");
+  const importedRowId = storeRowId(201, 3003);
   await expect(page.locator(gridCell(importedRowId, "202601"))).toContainText("100");
   await expect(page.locator(gridCell(importedRowId, "202602"))).toContainText("110");
   await expect(page.locator(gridCell(importedRowId, "202600"))).toContainText("210");
+});
+
+test("shows the same data in category-first planning views", async ({ page }) => {
+  await page.getByRole("button", { name: "Planning - by Category" }).click();
+
+  const categoryRowId = await getRowIdByLabel(page, "Beverages");
+  await expect(page.locator(gridCell(categoryRowId, "202600"))).toContainText("11,930");
+
+  await page.getByRole("button", { name: "Category - Subcategory - Store" }).click();
+  const subcategoryRowId = await getRowIdByLabel(page, "Soft Drinks");
+  await expect(page.locator(gridCell(subcategoryRowId, "202600"))).toContainText("8,665");
+  const storeLeafRowId = "category-view:category-subcategory-store:Beverages:Soft Drinks:Store A";
+  await expect(page.locator(gridCell(storeLeafRowId, "202602"))).toContainText("750");
 });
 
 test("adds a store by copying hierarchy and data from an existing store", async ({ page }) => {
@@ -234,6 +259,7 @@ test("adds a store by copying hierarchy and data from an existing store", async 
   });
 
   await page.getByRole("button", { name: "Add Store" }).click();
+  await expectReady(page);
 
   const copiedStoreRowId = await getRowIdByLabel(page, "Store B Copy");
   await expect(page.locator(gridCell(copiedStoreRowId, "202600"))).toContainText("17,253");
@@ -251,6 +277,7 @@ test("maintains category-subcategory mappings from the hierarchy sheet", async (
 
   page.once("dialog", (dialog) => dialog.accept(subcategoryName));
   await page.getByRole("button", { name: "Add Subcategory" }).click();
+  await expectReady(page);
 
   await expect(page.getByRole("button", { name: categoryName })).toBeVisible();
   await expect(page.getByText(subcategoryName)).toBeVisible();
