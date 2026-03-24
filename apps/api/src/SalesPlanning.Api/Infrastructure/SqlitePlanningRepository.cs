@@ -68,6 +68,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                    is_system_generated_override,
                    derived_value,
                    effective_value,
+                   growth_factor,
                    is_locked,
                    lock_reason,
                    locked_by,
@@ -326,6 +327,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                                 cell => cell.Coordinate.MeasureId,
                                 cell => new GridCellDto(
                                     cell.EffectiveValue,
+                                    cell.GrowthFactor,
                                     IsEffectivelyLocked(cell.Coordinate, scenarioCells, productNodes, timePeriods),
                                     cell.CellKind == "calculated",
                                     cell.OverrideValue is not null,
@@ -766,6 +768,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                         is_system_generated_override integer not null,
                         derived_value real not null,
                         effective_value real not null,
+                        growth_factor real not null default 1.0,
                         is_locked integer not null,
                         lock_reason text null,
                         locked_by text null,
@@ -820,6 +823,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             }
 
             await EnsureSupportedTimePeriodsAsync(connection, transaction, cancellationToken);
+            await EnsureGrowthFactorColumnAsync(connection, transaction, cancellationToken);
             var productNodes = await LoadProductNodesAsync(connection, transaction, cancellationToken);
             var timePeriods = await LoadTimePeriodsAsync(connection, transaction, cancellationToken);
             await EnsureSupportedMeasureCellsAsync(connection, transaction, productNodes.Values, timePeriods.Values, cancellationToken);
@@ -909,6 +913,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                    is_system_generated_override,
                    derived_value,
                    effective_value,
+                   growth_factor,
                    is_locked,
                    lock_reason,
                    locked_by,
@@ -940,11 +945,12 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             IsSystemGeneratedOverride = reader.GetInt64(7) == 1,
             DerivedValue = ReadDecimal(reader, 8),
             EffectiveValue = ReadDecimal(reader, 9),
-            IsLocked = reader.GetInt64(10) == 1,
-            LockReason = reader.IsDBNull(11) ? null : reader.GetString(11),
-            LockedBy = reader.IsDBNull(12) ? null : reader.GetString(12),
-            RowVersion = reader.GetInt64(13),
-            CellKind = reader.GetString(14)
+            GrowthFactor = reader.IsDBNull(10) ? 1.0m : ReadDecimal(reader, 10),
+            IsLocked = reader.GetInt64(11) == 1,
+            LockReason = reader.IsDBNull(12) ? null : reader.GetString(12),
+            LockedBy = reader.IsDBNull(13) ? null : reader.GetString(13),
+            RowVersion = reader.GetInt64(14),
+            CellKind = reader.GetString(15)
         };
     }
 
@@ -969,6 +975,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 is_system_generated_override,
                 derived_value,
                 effective_value,
+                growth_factor,
                 is_locked,
                 lock_reason,
                 locked_by,
@@ -985,6 +992,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 $isSystemGeneratedOverride,
                 $derivedValue,
                 $effectiveValue,
+                $growthFactor,
                 $isLocked,
                 $lockReason,
                 $lockedBy,
@@ -997,6 +1005,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 is_system_generated_override = excluded.is_system_generated_override,
                 derived_value = excluded.derived_value,
                 effective_value = excluded.effective_value,
+                growth_factor = excluded.growth_factor,
                 is_locked = excluded.is_locked,
                 lock_reason = excluded.lock_reason,
                 locked_by = excluded.locked_by,
@@ -1013,6 +1022,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         command.Parameters.AddWithValue("$isSystemGeneratedOverride", cell.IsSystemGeneratedOverride ? 1 : 0);
         command.Parameters.AddWithValue("$derivedValue", cell.DerivedValue);
         command.Parameters.AddWithValue("$effectiveValue", cell.EffectiveValue);
+        command.Parameters.AddWithValue("$growthFactor", cell.GrowthFactor);
         command.Parameters.AddWithValue("$isLocked", cell.IsLocked ? 1 : 0);
         command.Parameters.AddWithValue("$lockReason", (object?)cell.LockReason ?? DBNull.Value);
         command.Parameters.AddWithValue("$lockedBy", (object?)cell.LockedBy ?? DBNull.Value);
@@ -1104,6 +1114,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                         is_system_generated_override,
                         derived_value,
                         effective_value,
+                        growth_factor,
                         is_locked,
                         lock_reason,
                         locked_by,
@@ -1120,6 +1131,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                         0,
                         0,
                         0,
+                        1.0,
                         0,
                         null,
                         null,
@@ -1176,6 +1188,23 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             command.Parameters.AddWithValue("$grain", period.Grain);
             command.Parameters.AddWithValue("$sortOrder", period.SortOrder);
             await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+    }
+
+    private static async Task EnsureGrowthFactorColumnAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = "alter table planning_cells add column growth_factor real not null default 1.0;";
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (SqliteException exception) when (exception.SqliteErrorCode == 1 && exception.Message.Contains("duplicate column name", StringComparison.OrdinalIgnoreCase))
+        {
         }
     }
 

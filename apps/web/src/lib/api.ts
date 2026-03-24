@@ -3,6 +3,8 @@ import type {
   DeleteRowRequest,
   DeleteYearRequest,
   EditCellsRequest,
+  GenerateNextYearRequest,
+  GrowthFactorRequest,
   GridSliceResponse,
   HierarchyMappingResponse,
   ImportWorkbookResponse,
@@ -59,6 +61,13 @@ export async function postSplash(request: SplashRequest): Promise<void> {
   });
 }
 
+export async function postGrowthFactor(request: GrowthFactorRequest): Promise<void> {
+  await fetchJson(`${API_BASE_URL}/growth-factors/apply`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
 export async function postLock(request: LockCellsRequest): Promise<void> {
   await fetchJson(`${API_BASE_URL}/locks`, {
     method: "POST",
@@ -82,6 +91,13 @@ export async function postDeleteRow(request: DeleteRowRequest): Promise<void> {
 
 export async function postDeleteYear(request: DeleteYearRequest): Promise<void> {
   await fetchJson(`${API_BASE_URL}/years/delete`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function postGenerateNextYear(request: GenerateNextYearRequest): Promise<void> {
+  await fetchJson(`${API_BASE_URL}/years/generate-next`, {
     method: "POST",
     body: JSON.stringify(request),
   });

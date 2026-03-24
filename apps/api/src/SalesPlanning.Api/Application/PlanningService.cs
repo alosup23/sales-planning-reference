@@ -166,6 +166,73 @@ public sealed class PlanningService : IPlanningService
         return new DeleteEntityResponse(deletedNodeCount, deletedCellCount, "deleted");
     }
 
+    public async Task<GenerateNextYearResponse> GenerateNextYearAsync(GenerateNextYearRequest request, string userId, CancellationToken cancellationToken)
+    {
+        var metadata = await _repository.GetMetadataAsync(cancellationToken);
+        if (!metadata.TimePeriods.TryGetValue(request.SourceYearTimePeriodId, out var sourceYear) || !string.Equals(sourceYear.Grain, "year", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Year {request.SourceYearTimePeriodId} was not found.");
+        }
+
+        var sourceFiscalYear = (int)(request.SourceYearTimePeriodId / 100);
+        var targetFiscalYear = sourceFiscalYear + 1;
+        var targetYearTimePeriodId = targetFiscalYear * 100L;
+
+        await _repository.EnsureYearAsync(request.ScenarioVersionId, targetFiscalYear, cancellationToken);
+        metadata = await _repository.GetMetadataAsync(cancellationToken);
+
+        var originalCells = await _repository.GetScenarioCellsAsync(request.ScenarioVersionId, cancellationToken);
+        var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
+        var copiedCount = 0;
+
+        var sourceMonthIds = GetLeafTimeIds(request.SourceYearTimePeriodId, metadata);
+        var sourceMonthIdSet = sourceMonthIds.ToHashSet();
+        var sourceMonthByTimeId = sourceMonthIds.ToDictionary(timeId => timeId, timeId => metadata.TimePeriods[timeId].Label);
+        var targetMonthIds = GetLeafTimeIds(targetYearTimePeriodId, metadata)
+            .ToDictionary(timeId => metadata.TimePeriods[timeId].Label);
+
+        foreach (var sourceCell in workingCells.Values.Where(cell =>
+                     cell.Coordinate.ScenarioVersionId == request.ScenarioVersionId &&
+                     sourceMonthIdSet.Contains(cell.Coordinate.TimePeriodId) &&
+                     metadata.ProductNodes[cell.Coordinate.ProductNodeId].IsLeaf &&
+                     cell.InputValue is not null &&
+                     PlanningMeasures.GetDefinition(cell.Coordinate.MeasureId).EditableAtLeaf &&
+                     cell.Coordinate.MeasureId != PlanningMeasures.GrossProfitPercent))
+        {
+            var targetLabel = sourceMonthByTimeId[sourceCell.Coordinate.TimePeriodId];
+            if (!targetMonthIds.TryGetValue(targetLabel, out var targetTimePeriodId))
+            {
+                continue;
+            }
+
+            var targetKey = new PlanningCellCoordinate(
+                request.ScenarioVersionId,
+                sourceCell.Coordinate.MeasureId,
+                sourceCell.Coordinate.StoreId,
+                sourceCell.Coordinate.ProductNodeId,
+                targetTimePeriodId).Key;
+
+            if (!workingCells.TryGetValue(targetKey, out var targetCell))
+            {
+                continue;
+            }
+
+            targetCell.InputValue = sourceCell.InputValue;
+            targetCell.OverrideValue = null;
+            targetCell.IsSystemGeneratedOverride = false;
+            targetCell.DerivedValue = sourceCell.InputValue ?? 0m;
+            targetCell.EffectiveValue = sourceCell.InputValue ?? 0m;
+            targetCell.CellKind = "input";
+            targetCell.GrowthFactor = 1.0m;
+            copiedCount += 1;
+        }
+
+        RecalculateAll(workingCells, metadata, request.ScenarioVersionId);
+        var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "generate-next-year", cancellationToken);
+        await AppendAuditAsync("generate_next_year", "copy-inputs", userId, $"Generated FY{targetFiscalYear % 100:00} from FY{sourceFiscalYear % 100:00}", deltas, cancellationToken);
+        return new GenerateNextYearResponse(request.SourceYearTimePeriodId, targetYearTimePeriodId, "applied", copiedCount);
+    }
+
     public async Task<HierarchyMappingResponse> GetHierarchyMappingsAsync(CancellationToken cancellationToken)
     {
         return await BuildHierarchyMappingResponseAsync(cancellationToken);
@@ -181,6 +248,68 @@ public sealed class PlanningService : IPlanningService
     {
         await _repository.UpsertHierarchyClassAsync(request.DepartmentLabel, request.ClassLabel, cancellationToken);
         return await BuildHierarchyMappingResponseAsync(cancellationToken);
+    }
+
+    public async Task<ApplyGrowthFactorResponse> ApplyGrowthFactorAsync(ApplyGrowthFactorRequest request, string userId, CancellationToken cancellationToken)
+    {
+        var metadata = await _repository.GetMetadataAsync(cancellationToken);
+        var originalCells = await _repository.GetScenarioCellsAsync(request.ScenarioVersionId, cancellationToken);
+        var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
+        var scopeRoots = (request.ScopeRoots is { Count: > 0 } ? request.ScopeRoots : [new SplashScopeRootDto(request.SourceCell.StoreId, request.SourceCell.ProductNodeId)])
+            .Distinct()
+            .ToList();
+
+        var growthFactor = PlanningMath.NormalizeGrowthFactor(request.GrowthFactor);
+        var newValue = request.CurrentValue * growthFactor;
+        var sourceCoordinate = new PlanningCellCoordinate(
+            request.ScenarioVersionId,
+            request.MeasureId,
+            request.SourceCell.StoreId,
+            request.SourceCell.ProductNodeId,
+            request.SourceCell.TimePeriodId);
+
+        var isLeafWrite = IsLeafWriteCoordinate(sourceCoordinate, metadata);
+        if (isLeafWrite)
+        {
+            ValidateDirectEdit(sourceCoordinate, null, workingCells, metadata);
+            ApplyLeafMeasureEdit(sourceCoordinate, newValue, workingCells, metadata);
+            if (workingCells.TryGetValue(sourceCoordinate.Key, out var sourceCell))
+            {
+                sourceCell.GrowthFactor = growthFactor;
+            }
+        }
+        else
+        {
+            ApplyAggregateAllocation(
+                request.ScenarioVersionId,
+                request.MeasureId,
+                request.SourceCell.TimePeriodId,
+                scopeRoots,
+                newValue,
+                request.SourceCell.TimePeriodId % 100 == 0 ? "seasonality_profile" : "existing_plan",
+                request.SourceCell.TimePeriodId % 100 == 0 ? BuildDefaultSeasonalityWeights(request.SourceCell.TimePeriodId, metadata) : null,
+                workingCells,
+                metadata);
+
+            foreach (var root in scopeRoots)
+            {
+                var rootCoordinate = new PlanningCellCoordinate(
+                    request.ScenarioVersionId,
+                    request.MeasureId,
+                    root.StoreId,
+                    root.ProductNodeId,
+                    request.SourceCell.TimePeriodId);
+                if (workingCells.TryGetValue(rootCoordinate.Key, out var cell))
+                {
+                    cell.GrowthFactor = growthFactor;
+                }
+            }
+        }
+
+        RecalculateAll(workingCells, metadata, request.ScenarioVersionId);
+        var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "growth-factor", cancellationToken);
+        var actionId = await AppendAuditAsync("growth_factor", "growth-factor", userId, request.Comment, deltas, cancellationToken);
+        return new ApplyGrowthFactorResponse(actionId, "applied", growthFactor, deltas.Count);
     }
 
     public async Task<SaveScenarioResponse> SaveScenarioAsync(SaveScenarioRequest request, string userId, CancellationToken cancellationToken)
@@ -559,6 +688,19 @@ public sealed class PlanningService : IPlanningService
         return productWeights.Keys.ToDictionary(key => key, _ => measureId == PlanningMeasures.AverageSellingPrice ? 1m : 1m);
     }
 
+    private static Dictionary<long, decimal> BuildDefaultSeasonalityWeights(long yearTimePeriodId, PlanningMetadataSnapshot metadata)
+    {
+        var monthWeights = new decimal[] { 8m, 12m, 7m, 7m, 8m, 8m, 9m, 9m, 8m, 7m, 8m, 9m };
+        var monthPeriods = metadata.TimePeriods.Values
+            .Where(period => period.ParentTimePeriodId == yearTimePeriodId)
+            .OrderBy(period => period.SortOrder)
+            .ToList();
+
+        return monthPeriods
+            .Select((period, index) => new { period.TimePeriodId, Weight = index < monthWeights.Length ? monthWeights[index] : 1m })
+            .ToDictionary(item => item.TimePeriodId, item => item.Weight);
+    }
+
     private static void RecalculateAll(
         IDictionary<string, PlanningCell> workingCells,
         PlanningMetadataSnapshot metadata,
@@ -858,6 +1000,7 @@ public sealed class PlanningService : IPlanningService
                left.OverrideValue != right.OverrideValue ||
                left.DerivedValue != right.DerivedValue ||
                left.EffectiveValue != right.EffectiveValue ||
+               left.GrowthFactor != right.GrowthFactor ||
                left.IsLocked != right.IsLocked ||
                left.LockReason != right.LockReason ||
                left.LockedBy != right.LockedBy ||

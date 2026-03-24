@@ -126,6 +126,94 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
+    public async Task ApplyGrowthFactorAsync_OnLeafRevenue_UpdatesGrowthFactorAndRollsUp()
+    {
+        var beforeYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202600), CancellationToken.None);
+        var beforeMonthRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202603), CancellationToken.None);
+        Assert.NotNull(beforeYearRevenue);
+        Assert.NotNull(beforeMonthRevenue);
+
+        await _service.ApplyGrowthFactorAsync(
+            new ApplyGrowthFactorRequest(
+                1,
+                PlanningMeasures.SalesRevenue,
+                new SplashCoordinateDto(101, 2110, 202603),
+                beforeMonthRevenue!.EffectiveValue,
+                1.1m,
+                "Leaf uplift",
+                null),
+            "planner.one",
+            CancellationToken.None);
+
+        var updatedMonthRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202603), CancellationToken.None);
+        var updatedYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202600), CancellationToken.None);
+        Assert.NotNull(updatedMonthRevenue);
+        Assert.NotNull(updatedYearRevenue);
+        Assert.Equal(1.1m, updatedMonthRevenue!.GrowthFactor);
+        Assert.True(updatedMonthRevenue.EffectiveValue > beforeMonthRevenue.EffectiveValue);
+        Assert.True(updatedYearRevenue!.EffectiveValue > beforeYearRevenue!.EffectiveValue);
+    }
+
+    [Fact]
+    public async Task ApplyEditsAsync_OnStoreAggregate_OnlySplashesInsideThatStoreScope()
+    {
+        using var workbook = new XLWorkbook();
+        var storeSheet = workbook.AddWorksheet("Store B");
+        WriteImportHeader(storeSheet);
+        WriteImportRow(storeSheet, 2, "Store B", "Frozen", "Ice Cream", 2026, "Jan", 120m, 60m, 2m, 1.20m, 72m, 48m, 40m);
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        stream.Position = 0;
+
+        await _service.ImportWorkbookAsync(1, stream, "store-b.xlsx", "planner.one", CancellationToken.None);
+        var metadata = await _repository.GetMetadataAsync(CancellationToken.None);
+        var storeBRoot = metadata.ProductNodes.Values.Single(node => node.Level == 0 && node.Label == "Store B");
+        var storeABefore = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2000, 202600), CancellationToken.None);
+        var storeBBefore = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, storeBRoot.StoreId, storeBRoot.ProductNodeId, 202600), CancellationToken.None);
+        Assert.NotNull(storeABefore);
+        Assert.NotNull(storeBBefore);
+
+        await _service.ApplyEditsAsync(
+            new EditCellsRequest(
+                1,
+                PlanningMeasures.SalesRevenue,
+                "Store A annual plan",
+                new[]
+                {
+                    new EditCellRequest(101, 2000, 202600, 25000m, "override", null)
+                }),
+            "planner.one",
+            CancellationToken.None);
+
+        var storeAAfter = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2000, 202600), CancellationToken.None);
+        var storeBAfter = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, storeBRoot.StoreId, storeBRoot.ProductNodeId, 202600), CancellationToken.None);
+
+        Assert.NotNull(storeAAfter);
+        Assert.NotNull(storeBAfter);
+        Assert.Equal(storeBBefore!.EffectiveValue, storeBAfter!.EffectiveValue);
+        Assert.NotEqual(storeABefore!.EffectiveValue, storeAAfter!.EffectiveValue);
+    }
+
+    [Fact]
+    public async Task GenerateNextYearAsync_CopiesEditableInputsAndRecomputesCalculatedMeasures()
+    {
+        var result = await _service.GenerateNextYearAsync(new GenerateNextYearRequest(1, 202600), "planner.one", CancellationToken.None);
+        var revenueCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202703), CancellationToken.None);
+        var quantityCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2110, 202703), CancellationToken.None);
+        var gpPercentCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.GrossProfitPercent, 101, 2110, 202703), CancellationToken.None);
+
+        Assert.Equal(202700, result.GeneratedYearTimePeriodId);
+        Assert.True(result.CellsCopied > 0);
+        Assert.NotNull(revenueCell);
+        Assert.NotNull(quantityCell);
+        Assert.NotNull(gpPercentCell);
+        Assert.True(revenueCell!.InputValue is not null);
+        Assert.True(quantityCell!.InputValue is not null);
+        Assert.Null(gpPercentCell!.InputValue);
+        Assert.True(gpPercentCell.EffectiveValue >= 0m);
+    }
+
+    [Fact]
     public async Task AddRowAsync_DepartmentAndClassUpdateHierarchyMappings()
     {
         var department = await _service.AddRowAsync(

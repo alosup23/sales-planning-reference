@@ -29,6 +29,7 @@ type PlanningGridProps = {
   selectedYearId: number | null;
   onSelectedYearChange: (yearTimePeriodId: number | null) => void;
   onCellEdit: (row: GridRow, timePeriodId: number, measureId: number, newValue: number) => Promise<void>;
+  onApplyGrowthFactor: (row: GridRow, timePeriodId: number, measureId: number, growthFactor: number, currentValue: number) => Promise<void>;
   onToggleLock: (row: GridRow, timePeriodId: number, measureId: number, locked: boolean) => Promise<void>;
   onSplashYear: (row: GridRow, yearTimePeriodId: number, measureId: number) => Promise<void>;
   onAddRow: (level: "store" | "department" | "class", parentRow: GridRow | null) => Promise<void>;
@@ -53,6 +54,12 @@ type ContextMenuState = {
   measureId: number | null;
 };
 
+type SelectedCellState = {
+  rowKey: string;
+  timePeriodId: number;
+  measureId: number;
+};
+
 function formatValue(params: ValueFormatterParams<GridRowView>, measure: GridMeasure): string {
   const value = Number(params.value ?? 0);
   const formatted = new Intl.NumberFormat("en-US", {
@@ -67,6 +74,7 @@ export function PlanningGrid({
   selectedYearId,
   onSelectedYearChange,
   onCellEdit,
+  onApplyGrowthFactor,
   onToggleLock,
   onSplashYear,
   onAddRow,
@@ -76,6 +84,9 @@ export function PlanningGrid({
 }: PlanningGridProps) {
   const [selectedRowKey, setSelectedRowKey] = useState<RowKey | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [selectedCell, setSelectedCell] = useState<SelectedCellState | null>(null);
+  const [compactMode, setCompactMode] = useState(false);
+  const [showGrowthFactors, setShowGrowthFactors] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const gridRef = useRef<AgGridReact<GridRowView> | null>(null);
 
@@ -99,6 +110,7 @@ export function PlanningGrid({
 
   const selectedRow = selectedRowKey ? rowLookup.get(selectedRowKey.id) ?? null : null;
   const contextRow = contextMenu ? rowLookup.get(contextMenu.rowKey.id) ?? null : null;
+  const selectedCellRow = selectedCell ? rowLookup.get(selectedCell.rowKey) ?? null : null;
   const canAddDepartment = selectedRow?.structureRole === "store";
   const canAddClass = selectedRow?.structureRole === "department";
   const canDeleteSelectedRow = Boolean(selectedRow?.bindingProductNodeId);
@@ -128,10 +140,18 @@ export function PlanningGrid({
       return {
         headerName: measure.label,
         colId: `${period.timePeriodId}:${measure.measureId}`,
+        pinned: period.grain === "year" ? "left" : undefined,
         editable: (params) => isLeafMonthEditable(params.data) || isTopDownEditable(params.data),
         valueGetter: (params) => params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.value ?? 0,
         valueFormatter: (params) => formatValue(params, measure),
-        width: measure.displayAsPercent ? 92 : 100,
+        width: showGrowthFactors ? 168 : measure.displayAsPercent ? 92 : 100,
+        cellRenderer: GrowthCellRenderer,
+        cellRendererParams: {
+          measure,
+          period,
+          showGrowthFactors,
+          onApplyGrowthFactor,
+        },
         cellClassRules: {
           "cell-locked": (params) => Boolean(params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked),
           "cell-calculated": (params) => Boolean(params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.isCalculated),
@@ -161,7 +181,7 @@ export function PlanningGrid({
         ],
       };
     });
-  }, [data.measures, data.periods, yearPeriods]);
+  }, [data.measures, data.periods, yearPeriods, onApplyGrowthFactor, showGrowthFactors]);
 
   const defaultColDef = useMemo<ColDef<GridRowView>>(
     () => ({
@@ -264,8 +284,12 @@ export function PlanningGrid({
 
   const handleCellClicked = (event: CellClickedEvent<GridRowView>) => {
     syncSelectedRow(event.data);
-    const [timePeriodIdRaw] = String(event.column?.getColId() ?? "").split(":");
+    const [timePeriodIdRaw, measureIdRaw] = String(event.column?.getColId() ?? "").split(":");
     const timePeriodId = Number(timePeriodIdRaw);
+    const measureId = Number(measureIdRaw);
+    if (event.data && timePeriodId && measureId) {
+      setSelectedCell({ rowKey: getRowKey(event.data), timePeriodId, measureId });
+    }
     const yearPeriod = data.periods.find((period) => period.timePeriodId === timePeriodId || period.timePeriodId === data.periods.find((candidate) => candidate.timePeriodId === timePeriodId)?.parentTimePeriodId);
     if (yearPeriod) {
       onSelectedYearChange(yearPeriod.grain === "year" ? yearPeriod.timePeriodId : yearPeriod.parentTimePeriodId);
@@ -283,6 +307,14 @@ export function PlanningGrid({
 
     const row = event.api.getDisplayedRowAtIndex(event.rowIndex)?.data;
     syncSelectedRow(row);
+    if (row && event.column && typeof event.column !== "string") {
+      const [timePeriodIdRaw, measureIdRaw] = String(event.column.getColId()).split(":");
+      const timePeriodId = Number(timePeriodIdRaw);
+      const measureId = Number(measureIdRaw);
+      if (timePeriodId && measureId) {
+        setSelectedCell({ rowKey: getRowKey(row), timePeriodId, measureId });
+      }
+    }
   };
 
   const expandRow = (row: GridRowView | null) => {
@@ -313,8 +345,34 @@ export function PlanningGrid({
     });
   };
 
+  const formulaBarText = useMemo(() => {
+    if (!selectedCell || !selectedCellRow) {
+      return "Select a cell to review the editable drivers, formula dependencies, and same-year rollup or splash scope.";
+    }
+
+    const measure = data.measures.find((item) => item.measureId === selectedCell.measureId);
+    const period = data.periods.find((item) => item.timePeriodId === selectedCell.timePeriodId);
+    const isLeaf = selectedCellRow.structureRole === "class" && period?.grain === "month";
+    const dependencyText = measure?.measureId === 1
+      ? "Sales Revenue edit derives Sold Qty from ASP, then recalculates Total Costs, GP, and GP%."
+      : measure?.measureId === 2
+        ? "Sold Qty edit recalculates Sales Revenue, Total Costs, GP, and GP%."
+        : measure?.measureId === 3
+          ? "ASP edit recalculates Sales Revenue, GP, and GP%."
+          : measure?.measureId === 4
+            ? "Unit Cost edit recalculates Total Costs, GP, and GP%."
+            : measure?.measureId === 7
+              ? "GP% edit derives ASP, then recalculates Sales Revenue, Total Costs, and GP."
+              : "Calculated measures refresh from the editable drivers.";
+    const scopeText = isLeaf
+      ? "Leaf actions roll up only through the matching branch and year."
+      : "Aggregate actions splash only to descendants inside this branch and year, then roll up ancestors.";
+
+    return `${selectedCellRow.path.join(" > ")} | ${period?.label ?? ""} | ${measure?.label ?? ""}. ${dependencyText} ${scopeText}`;
+  }, [data.measures, data.periods, selectedCell, selectedCellRow]);
+
   return (
-    <div className="planning-shell">
+    <div className={`planning-shell${compactMode ? " planning-shell-compact" : ""}`}>
       <div className="planning-toolbar">
         <div>
           <div className="eyebrow">Sheet</div>
@@ -340,6 +398,20 @@ export function PlanningGrid({
           <button type="button" className="secondary-button" onClick={() => importInputRef.current?.click()}>
             Upload Workbook
           </button>
+          <button
+            type="button"
+            className={`secondary-button${compactMode ? " secondary-button-active" : ""}`}
+            onClick={() => setCompactMode((current) => !current)}
+          >
+            Compact Mode
+          </button>
+          <button
+            type="button"
+            className={`secondary-button${showGrowthFactors ? " secondary-button-active" : ""}`}
+            onClick={() => setShowGrowthFactors((current) => !current)}
+          >
+            Growth Factors
+          </button>
           <button type="button" className="secondary-button" onClick={() => setAllYearGroups(true)}>
             Expand Years
           </button>
@@ -364,6 +436,10 @@ export function PlanningGrid({
         </div>
       </div>
 
+      <div className="formula-bar" aria-live="polite">
+        {formulaBarText}
+      </div>
+
       <div className="ag-theme-quartz planning-grid">
         <AgGridReact<GridRowView>
           ref={gridRef}
@@ -381,9 +457,9 @@ export function PlanningGrid({
           readOnlyEdit
           undoRedoCellEditing
           undoRedoCellEditingLimit={20}
-          rowHeight={28}
-          headerHeight={32}
-          groupHeaderHeight={34}
+          rowHeight={compactMode ? 24 : 28}
+          headerHeight={compactMode ? 28 : 32}
+          groupHeaderHeight={compactMode ? 30 : 34}
           rowSelection="single"
           onSelectionChanged={handleSelectionChanged}
           onCellClicked={handleCellClicked}
@@ -490,4 +566,79 @@ export function PlanningGrid({
 
 function getRowKey(row: GridRowView | GridRow): string {
   return row.viewRowId ?? `${row.storeId}-${row.productNodeId}`;
+}
+
+type GrowthCellRendererProps = {
+  value?: number;
+  data?: GridRowView;
+  measure: GridMeasure;
+  period: GridPeriod;
+  showGrowthFactors: boolean;
+  onApplyGrowthFactor: (row: GridRow, timePeriodId: number, measureId: number, growthFactor: number, currentValue: number) => Promise<void>;
+};
+
+function GrowthCellRenderer(props: GrowthCellRendererProps) {
+  const { data, measure, period, showGrowthFactors, onApplyGrowthFactor } = props;
+  const currentValue = Number(props.value ?? 0);
+  const cell = data?.cells[period.timePeriodId]?.measures[measure.measureId];
+  const [draftGrowthFactor, setDraftGrowthFactor] = useState(String(cell?.growthFactor ?? 1));
+
+  useEffect(() => {
+    setDraftGrowthFactor(String(cell?.growthFactor ?? 1));
+  }, [cell?.growthFactor]);
+
+  const isLeafMonthEditable = Boolean(
+    measure.editableAtLeaf &&
+    data?.bindingProductNodeId &&
+    data.structureRole === "class" &&
+    period.grain === "month" &&
+    !cell?.isLocked,
+  );
+
+  const isAggregateEditable = Boolean(
+    measure.editableAtAggregate &&
+    data?.splashRoots?.length &&
+    !isLeafMonthEditable &&
+    !cell?.isLocked,
+  );
+
+  const canEditGrowthFactor = showGrowthFactors && (isLeafMonthEditable || isAggregateEditable);
+
+  return (
+    <div className="measure-cell">
+      <span className="measure-value">{formatValue({ value: currentValue } as ValueFormatterParams<GridRowView>, measure)}</span>
+      {showGrowthFactors ? (
+        <input
+          className="growth-factor-input"
+          aria-label={`${measure.label} growth factor`}
+          type="number"
+          step="0.1"
+          value={draftGrowthFactor}
+          disabled={!canEditGrowthFactor}
+          onClick={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+          onChange={(event) => setDraftGrowthFactor(event.target.value)}
+          onBlur={() => {
+            const parsed = Number(draftGrowthFactor);
+            if (!data || !Number.isFinite(parsed) || parsed < 0 || parsed === Number(cell?.growthFactor ?? 1)) {
+              setDraftGrowthFactor(String(cell?.growthFactor ?? 1));
+              return;
+            }
+
+            void onApplyGrowthFactor(data, period.timePeriodId, measure.measureId, parsed, currentValue);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            }
+
+            if (event.key === "Escape") {
+              setDraftGrowthFactor(String(cell?.growthFactor ?? 1));
+              event.currentTarget.blur();
+            }
+          }}
+        />
+      ) : null}
+    </div>
+  );
 }

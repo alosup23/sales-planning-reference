@@ -1,5 +1,6 @@
 export type GridCell = {
   value: number;
+  growthFactor: number;
   isLocked: boolean;
   isCalculated: boolean;
   isOverride: boolean;
@@ -71,6 +72,28 @@ export type SplashRequest = {
     storeId: number;
     productNodeId: number;
   }>;
+};
+
+export type GrowthFactorRequest = {
+  scenarioVersionId: number;
+  measureId: number;
+  sourceCell: {
+    storeId: number;
+    productNodeId: number;
+    timePeriodId: number;
+  };
+  currentValue: number;
+  growthFactor: number;
+  comment?: string;
+  scopeRoots?: Array<{
+    storeId: number;
+    productNodeId: number;
+  }>;
+};
+
+export type GenerateNextYearRequest = {
+  scenarioVersionId: number;
+  sourceYearTimePeriodId: number;
 };
 
 export type EditCellsRequest = {

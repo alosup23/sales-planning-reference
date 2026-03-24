@@ -23,6 +23,7 @@ public sealed record GridPeriodCellDto(Dictionary<long, GridCellDto> Measures);
 
 public sealed record GridCellDto(
     decimal Value,
+    decimal GrowthFactor,
     bool IsLocked,
     bool IsCalculated,
     bool IsOverride,

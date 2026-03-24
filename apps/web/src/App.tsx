@@ -9,6 +9,8 @@ import {
   postDeleteRow,
   postDeleteYear,
   postEdit,
+  postGenerateNextYear,
+  postGrowthFactor,
   postHierarchyClass,
   postHierarchyDepartment,
   postLock,
@@ -127,6 +129,16 @@ export default function App() {
     onError: (error: Error) => setLastError(error.message),
   });
 
+  const generateNextYearMutation = useMutation({
+    mutationFn: postGenerateNextYear,
+    onSuccess: async () => {
+      setLastError(null);
+      setHasUnsavedChanges(true);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
   const importMutation = useMutation({
     mutationFn: ({ file, scenarioVersionId }: { file: File; scenarioVersionId: number }) => postWorkbookImport(scenarioVersionId, file),
     onSuccess: async (result) => {
@@ -144,6 +156,16 @@ export default function App() {
   const exportMutation = useMutation({
     mutationFn: downloadWorkbookExport,
     onSuccess: () => setLastError(null),
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const growthFactorMutation = useMutation({
+    mutationFn: postGrowthFactor,
+    onSuccess: async () => {
+      setLastError(null);
+      setHasUnsavedChanges(true);
+      await refresh();
+    },
     onError: (error: Error) => setLastError(error.message),
   });
 
@@ -197,8 +219,10 @@ export default function App() {
     addRowMutation.isPending ||
     deleteRowMutation.isPending ||
     deleteYearMutation.isPending ||
+    generateNextYearMutation.isPending ||
     importMutation.isPending ||
     exportMutation.isPending ||
+    growthFactorMutation.isPending ||
     saveMutation.isPending ||
     addHierarchyDepartmentMutation.isPending ||
     addHierarchyClassMutation.isPending;
@@ -231,7 +255,7 @@ export default function App() {
     return activeView === "hierarchy"
       ? "Department / Class maintenance sheet ready."
       : "Multi-year planning grid ready.";
-  }, [activeView, gridQuery.isError, gridQuery.isLoading, hierarchyQuery.isError, hierarchyQuery.isLoading, isMutating, lastError]);
+  }, [activeView, gridQuery.isError, gridQuery.isLoading, hasUnsavedChanges, hierarchyQuery.isError, hierarchyQuery.isLoading, isMutating, lastError, lastSavedAt]);
 
   const storeViewData = useMemo(
     () => (gridQuery.data ? buildStoreView(gridQuery.data) : null),
@@ -415,10 +439,53 @@ export default function App() {
     });
   };
 
+  const handleGenerateNextYear = async (yearTimePeriodId: number | null) => {
+    if (!yearTimePeriodId) {
+      setLastError("Select an active year to generate the following year.");
+      return;
+    }
+
+    const label = yearPeriods.find((period) => period.timePeriodId === yearTimePeriodId)?.label ?? String(yearTimePeriodId);
+    if (!window.confirm(`Generate the following year from '${label}' by copying editable inputs only?`)) {
+      return;
+    }
+
+    await generateNextYearMutation.mutateAsync({
+      scenarioVersionId: gridQuery.data.scenarioVersionId,
+      sourceYearTimePeriodId: yearTimePeriodId,
+    });
+  };
+
   const handleImportWorkbook = async (file: File) => {
     await importMutation.mutateAsync({
       file,
       scenarioVersionId: gridQuery.data.scenarioVersionId,
+    });
+  };
+
+  const handleApplyGrowthFactor = async (row: GridRow, timePeriodId: number, measureId: number, growthFactor: number, currentValue: number) => {
+    const scopeRoots = row.splashRoots ?? [];
+    const isLeafMonth = row.structureRole === "class" && gridQuery.data.periods.some((period) => period.timePeriodId === timePeriodId && period.grain === "month");
+    const sourceStoreId = isLeafMonth ? (row.bindingStoreId ?? row.storeId) : (scopeRoots[0]?.storeId ?? row.storeId);
+    const sourceProductNodeId = isLeafMonth ? (row.bindingProductNodeId ?? row.productNodeId) : (scopeRoots[0]?.productNodeId ?? row.productNodeId);
+
+    if (!isLeafMonth && scopeRoots.length === 0) {
+      setLastError("Growth factor is not available for this subtotal in the current view.");
+      return;
+    }
+
+    await growthFactorMutation.mutateAsync({
+      scenarioVersionId: gridQuery.data.scenarioVersionId,
+      measureId,
+      sourceCell: {
+        storeId: sourceStoreId,
+        productNodeId: sourceProductNodeId,
+        timePeriodId,
+      },
+      currentValue,
+      growthFactor,
+      comment: "Apply growth factor",
+      scopeRoots: isLeafMonth ? undefined : scopeRoots,
     });
   };
 
@@ -512,6 +579,9 @@ export default function App() {
         <button type="button" className="secondary-button" onClick={() => void exportMutation.mutateAsync()}>
           Export Workbook
         </button>
+        <button type="button" className="secondary-button" onClick={() => void handleGenerateNextYear(selectedYearId)}>
+          Generate Next Year
+        </button>
         <button
           type="button"
           className="secondary-button"
@@ -544,6 +614,7 @@ export default function App() {
             selectedYearId={selectedYearId}
             onSelectedYearChange={setSelectedYearId}
             onCellEdit={handleCellEdit}
+            onApplyGrowthFactor={handleApplyGrowthFactor}
             onToggleLock={handleToggleLock}
             onSplashYear={handleSplashYear}
             onAddRow={handleAddRow}
@@ -774,11 +845,16 @@ function sumCells(rows: GridRow[], data: GridSliceResponse): Record<number, { me
                 }
               })();
               const isLocked = rows.length > 0 && rows.every((row) => row.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked);
+              const growthFactors = rows
+                .map((row) => row.cells[period.timePeriodId]?.measures[measure.measureId]?.growthFactor ?? 1)
+                .filter((value) => Number.isFinite(value));
+              const uniformGrowthFactor = growthFactors.length > 0 && growthFactors.every((value) => value === growthFactors[0]) ? growthFactors[0] : 1;
 
               return [
                 measure.measureId,
                 {
                   value,
+                  growthFactor: uniformGrowthFactor,
                   isLocked,
                   isCalculated: true,
                   isOverride: false,

@@ -68,6 +68,12 @@ public sealed class PlanningController : ControllerBase
         return _planningService.DeleteYearAsync(request, cancellationToken);
     }
 
+    [HttpPost("years/generate-next")]
+    public Task<GenerateNextYearResponse> GenerateNextYear([FromBody] GenerateNextYearRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.GenerateNextYearAsync(request, User.Identity?.Name ?? "demo.user", cancellationToken);
+    }
+
     [HttpGet("hierarchy-mappings")]
     public Task<HierarchyMappingResponse> GetHierarchyMappings(CancellationToken cancellationToken)
     {
@@ -84,6 +90,12 @@ public sealed class PlanningController : ControllerBase
     public Task<HierarchyMappingResponse> AddHierarchyClass([FromBody] AddHierarchyClassRequest request, CancellationToken cancellationToken)
     {
         return _planningService.AddHierarchyClassAsync(request, cancellationToken);
+    }
+
+    [HttpPost("growth-factors/apply")]
+    public Task<ApplyGrowthFactorResponse> ApplyGrowthFactor([FromBody] ApplyGrowthFactorRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.ApplyGrowthFactorAsync(request, User.Identity?.Name ?? "demo.user", cancellationToken);
     }
 
     [HttpPost("save")]

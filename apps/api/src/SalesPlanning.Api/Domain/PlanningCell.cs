@@ -8,6 +8,7 @@ public sealed class PlanningCell
     public bool IsSystemGeneratedOverride { get; set; }
     public decimal DerivedValue { get; set; }
     public decimal EffectiveValue { get; set; }
+    public decimal GrowthFactor { get; set; } = 1.0m;
     public bool IsLocked { get; set; }
     public string? LockReason { get; set; }
     public string? LockedBy { get; set; }
@@ -24,6 +25,7 @@ public sealed class PlanningCell
             IsSystemGeneratedOverride = IsSystemGeneratedOverride,
             DerivedValue = DerivedValue,
             EffectiveValue = EffectiveValue,
+            GrowthFactor = GrowthFactor,
             IsLocked = IsLocked,
             LockReason = LockReason,
             LockedBy = LockedBy,

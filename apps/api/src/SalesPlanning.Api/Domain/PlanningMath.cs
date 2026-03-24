@@ -38,6 +38,11 @@ public static class PlanningMath
         return Math.Round(value, 1, MidpointRounding.AwayFromZero);
     }
 
+    public static decimal NormalizeGrowthFactor(decimal value)
+    {
+        return Math.Round(Math.Max(value, 0m), 1, MidpointRounding.AwayFromZero);
+    }
+
     public static decimal CalculateRevenue(decimal quantity, decimal asp)
     {
         return NormalizeRevenue(NormalizeQuantity(quantity) * NormalizeAsp(asp));

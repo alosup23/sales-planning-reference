@@ -2,6 +2,7 @@ import type { GridSliceResponse } from "./types";
 
 const zeroMeasureCell = (value = 0, isLocked = false) => ({
   value,
+  growthFactor: 1,
   isLocked,
   isCalculated: true,
   isOverride: false,

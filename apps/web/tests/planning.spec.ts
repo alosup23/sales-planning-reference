@@ -157,7 +157,7 @@ test("supports expand and collapse controls for rows and years", async ({ page }
   await expect(pinnedRow).toHaveCount(1);
 
   await page.getByRole("button", { name: "Expand Years" }).click();
-  await expect(page.locator(gridCell(storeRowId(101, 2110), "202601:1"))).toBeVisible();
+  await expect(page.locator(".ag-header-group-text", { hasText: "FY26" }).first()).toBeVisible();
 });
 
 test("editing a visible Sales Revenue year total refreshes the row total", async ({ page }) => {
@@ -226,4 +226,24 @@ test("deletes a year with confirmation", async ({ page }) => {
   await page.getByRole("button", { name: "Delete Year" }).click();
   await expectReady(page);
   await expect(page.locator('.year-picker option[value="202700"]')).toHaveCount(0);
+});
+
+test("shows growth factor inputs and applies an aggregate uplift", async ({ page }) => {
+  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2000)}"]`).click({ button: "right" });
+  await page.getByRole("button", { name: "Expand All" }).click();
+  await page.getByRole("button", { name: "Growth Factors" }).click();
+  const growthInput = page.locator(`${gridCell(storeRowId(101, 2110), "202600:1")} input`).first();
+  await expect(growthInput).toBeVisible();
+  await growthInput.fill("1.1");
+  await growthInput.press("Tab");
+  await expectReady(page);
+  await expect(page.locator(`${gridCell(storeRowId(101, 2110), "202600:1")} input`).first()).toHaveValue("1.1");
+});
+
+test("generates the following year from the active year", async ({ page }) => {
+  await page.locator(".year-picker select").selectOption("202700");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Generate Next Year" }).click();
+  await expectReady(page);
+  await expect(page.locator('.year-picker option[value="202800"]')).toHaveCount(1);
 });
