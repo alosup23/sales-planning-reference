@@ -64,6 +64,18 @@ async function gridCell(page: import("@playwright/test").Page, rowId: string, co
   return page.locator(`.ag-center-cols-container [row-index="${rowIndex}"] [col-id="${colId}"]`).first();
 }
 
+async function gridCellText(page: import("@playwright/test").Page, rowId: string, colId: string) {
+  return (await gridCell(page, rowId, colId)).textContent();
+}
+
+async function gridCellByPinnedText(page: import("@playwright/test").Page, rowText: string, colId: string) {
+  const pinnedRow = page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: rowText }).first();
+  await expect(pinnedRow).toBeVisible();
+  const rowIndex = await pinnedRow.getAttribute("row-index");
+  expect(rowIndex).not.toBeNull();
+  return page.locator(`.ag-center-cols-container [row-index="${rowIndex}"] [col-id="${colId}"]`).first();
+}
+
 async function editCell(page: import("@playwright/test").Page, rowId: string, colId: string, nextValue: string) {
   const cell = await gridCell(page, rowId, colId);
   await cell.dblclick();
@@ -234,6 +246,22 @@ test("editing a visible Sales Revenue year total refreshes the row total", async
   await expect(await gridCell(page, storeRowId(101, 2110), revenueCol)).not.toContainText(before ?? "");
 });
 
+test("department view totals stay aligned with store view after a leaf edit", async ({ page }) => {
+  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
+  await page.getByRole("button", { name: "Expand All" }).click();
+
+  await editCell(page, storeRowId(101, 2110), "202600:1", "12000");
+  await expectReady(page);
+
+  const storeDepartmentTotal = await (await gridCellByPinnedText(page, "Beverages", "202600:1")).textContent();
+  await page.getByRole("button", { name: "Planning - by Department" }).click();
+  await expectReady(page);
+  await page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"]`).click({ button: "right" });
+  await page.getByRole("button", { name: "Expand All" }).click();
+
+  await expect(await gridCellByPinnedText(page, "Beverages", "202600:1")).toContainText(storeDepartmentTotal ?? "");
+});
+
 test("adds Department and Class rows and shows them in hierarchy maintenance", async ({ page }) => {
   await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
   await page.getByRole("button", { name: "Expand All" }).click();
@@ -318,7 +346,7 @@ test("commits growth factors only on Enter and preserves row expansion state", a
   await expect(valueCell).not.toContainText(beforeValue ?? "");
   await expect(classRow).toBeVisible();
   await expect(page.locator(".ag-cell-inline-editing")).toHaveCount(0);
-  await expect((await gridCell(page, aggregateRowId, "202600:1")).locator("input").first()).toHaveValue("1.1");
+  await expect((await gridCell(page, aggregateRowId, "202600:1")).locator("input").first()).toHaveValue("1.0");
 });
 
 test("generates the following year from the active year", async ({ page }) => {

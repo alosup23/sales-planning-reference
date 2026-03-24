@@ -273,10 +273,6 @@ public sealed class PlanningService : IPlanningService
         {
             ValidateDirectEdit(sourceCoordinate, null, workingCells, metadata);
             ApplyLeafMeasureEdit(sourceCoordinate, newValue, workingCells, metadata);
-            if (workingCells.TryGetValue(sourceCoordinate.Key, out var sourceCell))
-            {
-                sourceCell.GrowthFactor = growthFactor;
-            }
         }
         else
         {
@@ -291,20 +287,9 @@ public sealed class PlanningService : IPlanningService
                 workingCells,
                 metadata);
 
-            foreach (var root in scopeRoots)
-            {
-                var rootCoordinate = new PlanningCellCoordinate(
-                    request.ScenarioVersionId,
-                    request.MeasureId,
-                    root.StoreId,
-                    root.ProductNodeId,
-                    request.SourceCell.TimePeriodId);
-                if (workingCells.TryGetValue(rootCoordinate.Key, out var cell))
-                {
-                    cell.GrowthFactor = growthFactor;
-                }
-            }
         }
+
+        ResetGrowthFactors(workingCells.Values, request.MeasureId);
 
         RecalculateAll(workingCells, metadata, request.ScenarioVersionId);
         var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "growth-factor", cancellationToken);
@@ -747,6 +732,14 @@ public sealed class PlanningService : IPlanningService
         RecalculateDerivedRateTotals(workingCells, metadata, scenarioVersionId, PlanningMeasures.AverageSellingPrice);
         RecalculateDerivedRateTotals(workingCells, metadata, scenarioVersionId, PlanningMeasures.UnitCost);
         RecalculateDerivedRateTotals(workingCells, metadata, scenarioVersionId, PlanningMeasures.GrossProfitPercent);
+    }
+
+    private static void ResetGrowthFactors(IEnumerable<PlanningCell> cells, long measureId)
+    {
+        foreach (var cell in cells.Where(cell => cell.Coordinate.MeasureId == measureId))
+        {
+            cell.GrowthFactor = 1.0m;
+        }
     }
 
     private static void RecalculateMeasureTotals(

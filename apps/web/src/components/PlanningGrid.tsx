@@ -649,6 +649,7 @@ function GrowthCellRenderer(props: GrowthCellRendererProps) {
     isApplyingGrowthFactorRef.current = true;
     try {
       await onApplyGrowthFactor(data, period.timePeriodId, measure.measureId, parsed, currentValue);
+      setDraftGrowthFactor("1.0");
     } finally {
       isApplyingGrowthFactorRef.current = false;
     }

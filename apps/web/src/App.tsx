@@ -661,9 +661,9 @@ function buildStoreView(data: GridSliceResponse): GridSliceResponse {
 }
 
 function buildDepartmentView(data: GridSliceResponse, layout: DepartmentLayout): GridSliceResponse {
-  const storeRows = data.rows.filter((row) => row.structureRole === "store");
-  const departmentRows = data.rows.filter((row) => row.structureRole === "department");
-  const classRows = data.rows.filter((row) => row.structureRole === "class");
+  const storeRows = data.rows.filter((row) => row.structureRole === "store" && Boolean(row.bindingProductNodeId));
+  const departmentRows = data.rows.filter((row) => row.structureRole === "department" && Boolean(row.bindingProductNodeId));
+  const classRows = data.rows.filter((row) => row.structureRole === "class" && Boolean(row.bindingProductNodeId));
   const storeLabels = new Map(storeRows.map((row) => [row.storeId, row.label]));
   let syntheticRowSeed = -1;
 
