@@ -651,6 +651,7 @@ function buildStoreView(data: GridSliceResponse): GridSliceResponse {
         productNodeId: -10,
         label: rootLabel,
         path: [rootLabel],
+        structureRole: "store",
         rows: storeRows,
         splashRoots: storeRows.map(toSplashRoot),
       }),
@@ -688,6 +689,7 @@ function buildDepartmentView(data: GridSliceResponse, layout: DepartmentLayout):
     productNodeId: syntheticRowSeed--,
     label: "Department Total",
     path: ["Department Total"],
+    structureRole: "department",
     rows: storeRows,
     splashRoots: storeRows.map(toSplashRoot),
   }));
@@ -699,6 +701,7 @@ function buildDepartmentView(data: GridSliceResponse, layout: DepartmentLayout):
       productNodeId: syntheticRowSeed--,
       label: departmentLabel,
       path: ["Department Total", departmentLabel],
+      structureRole: "department",
       rows: group.departmentRows,
       splashRoots: group.departmentRows.map(toSplashRoot),
     }));
@@ -748,6 +751,7 @@ function buildDepartmentView(data: GridSliceResponse, layout: DepartmentLayout):
         productNodeId: syntheticRowSeed--,
         label: classLabel,
         path: ["Department Total", departmentLabel, classLabel],
+        structureRole: "class",
         rows: groupedClassRows,
         splashRoots: groupedClassRows.map(toSplashRoot),
       }));
@@ -781,6 +785,7 @@ function createSyntheticRow({
   productNodeId,
   label,
   path,
+  structureRole,
   rows,
   splashRoots,
 }: {
@@ -789,6 +794,7 @@ function createSyntheticRow({
   productNodeId: number;
   label: string;
   path: string[];
+  structureRole: NonNullable<GridRow["structureRole"]>;
   rows: GridRow[];
   splashRoots: Array<{ storeId: number; productNodeId: number }>;
 }): GridRow {
@@ -800,7 +806,7 @@ function createSyntheticRow({
     level: path.length - 1,
     path,
     isLeaf: false,
-    structureRole: "virtual",
+    structureRole,
     bindingStoreId: null,
     bindingProductNodeId: null,
     splashRoots,

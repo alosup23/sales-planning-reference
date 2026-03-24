@@ -6,10 +6,12 @@ import {
   type CellFocusedEvent,
   ClientSideRowModelModule,
   CommunityFeaturesModule,
+  type GridApi,
   ModuleRegistry,
   type ColDef,
   type ColGroupDef,
   type RowClickedEvent,
+  type RowGroupOpenedEvent,
   type SelectionChangedEvent,
   type ValueFormatterParams,
 } from "ag-grid-community";
@@ -89,6 +91,8 @@ export function PlanningGrid({
   const [showGrowthFactors, setShowGrowthFactors] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const gridRef = useRef<AgGridReact<GridRowView> | null>(null);
+  const expandedRowStateRef = useRef<Map<string, boolean>>(new Map());
+  const hasAppliedInitialExpansionRef = useRef(false);
 
   const yearPeriods = useMemo(
     () => data.periods.filter((period) => period.grain === "year"),
@@ -111,8 +115,8 @@ export function PlanningGrid({
   const selectedRow = selectedRowKey ? rowLookup.get(selectedRowKey.id) ?? null : null;
   const contextRow = contextMenu ? rowLookup.get(contextMenu.rowKey.id) ?? null : null;
   const selectedCellRow = selectedCell ? rowLookup.get(selectedCell.rowKey) ?? null : null;
-  const canAddDepartment = selectedRow?.structureRole === "store";
-  const canAddClass = selectedRow?.structureRole === "department";
+  const canAddDepartment = selectedRow?.structureRole === "store" && Boolean(selectedRow?.bindingProductNodeId);
+  const canAddClass = selectedRow?.structureRole === "department" && Boolean(selectedRow?.bindingProductNodeId);
   const canDeleteSelectedRow = Boolean(selectedRow?.bindingProductNodeId);
 
   const syncSelectedRow = (row: GridRowView | null | undefined) => {
@@ -140,8 +144,7 @@ export function PlanningGrid({
       return {
         headerName: measure.label,
         colId: `${period.timePeriodId}:${measure.measureId}`,
-        pinned: period.grain === "year" ? "left" : undefined,
-        editable: (params) => isLeafMonthEditable(params.data) || isTopDownEditable(params.data),
+        editable: (params) => !showGrowthFactors && (isLeafMonthEditable(params.data) || isTopDownEditable(params.data)),
         valueGetter: (params) => params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.value ?? 0,
         valueFormatter: (params) => formatValue(params, measure),
         width: showGrowthFactors ? 168 : measure.displayAsPercent ? 92 : 100,
@@ -220,8 +223,21 @@ export function PlanningGrid({
     }
 
     api.forEachNode((node) => {
-      node.setExpanded((node.level ?? 0) < 2);
+      if (!node.group || !node.data) {
+        return;
+      }
+
+      const rowKey = getRowKey(node.data);
+      const rememberedState = expandedRowStateRef.current.get(rowKey);
+      const nextExpanded = rememberedState ?? (!hasAppliedInitialExpansionRef.current && (node.level ?? 0) < 2);
+
+      if (nextExpanded !== undefined) {
+        node.setExpanded(nextExpanded);
+        expandedRowStateRef.current.set(rowKey, nextExpanded);
+      }
     });
+
+    hasAppliedInitialExpansionRef.current = true;
   }, [rowData]);
 
   const handleCellContextMenu = (event: CellContextMenuEvent<GridRowView>) => {
@@ -282,6 +298,14 @@ export function PlanningGrid({
     syncSelectedRow(event.api.getSelectedRows()[0]);
   };
 
+  const handleRowGroupOpened = (event: RowGroupOpenedEvent<GridRowView>) => {
+    if (!event.node.data || !event.node.group) {
+      return;
+    }
+
+    expandedRowStateRef.current.set(getRowKey(event.node.data), event.node.expanded ?? false);
+  };
+
   const handleCellClicked = (event: CellClickedEvent<GridRowView>) => {
     syncSelectedRow(event.data);
     const [timePeriodIdRaw, measureIdRaw] = String(event.column?.getColId() ?? "").split(":");
@@ -322,6 +346,7 @@ export function PlanningGrid({
       return;
     }
 
+    expandedRowStateRef.current.set(getRowKey(row), true);
     gridRef.current?.api.getRowNode(getRowKey(row))?.setExpanded(true);
   };
 
@@ -330,11 +355,17 @@ export function PlanningGrid({
       return;
     }
 
+    expandedRowStateRef.current.set(getRowKey(row), false);
     gridRef.current?.api.getRowNode(getRowKey(row))?.setExpanded(false);
   };
 
   const setAllRowExpansion = (expanded: boolean) => {
     gridRef.current?.api.forEachNode((node) => {
+      if (!node.group || !node.data) {
+        return;
+      }
+
+      expandedRowStateRef.current.set(getRowKey(node.data), expanded);
       node.setExpanded(expanded);
     });
   };
@@ -449,12 +480,13 @@ export function PlanningGrid({
           treeData
           animateRows
           getDataPath={(dataRow) => dataRow.__path}
-          groupDefaultExpanded={1}
+          groupDefaultExpanded={0}
           getRowId={(params) => getRowKey(params.data)}
           suppressAggFuncInHeader
           enableCellTextSelection
           cellSelection
           readOnlyEdit
+          suppressClickEdit={showGrowthFactors}
           undoRedoCellEditing
           undoRedoCellEditingLimit={20}
           rowHeight={compactMode ? 24 : 28}
@@ -467,6 +499,7 @@ export function PlanningGrid({
           onCellFocused={handleCellFocused}
           onCellContextMenu={handleCellContextMenu}
           onCellEditRequest={handleCellEditRequest}
+          onRowGroupOpened={handleRowGroupOpened}
           autoGroupColumnDef={{
             headerName: "Store / Department / Class",
             pinned: "left",
@@ -569,6 +602,7 @@ function getRowKey(row: GridRowView | GridRow): string {
 }
 
 type GrowthCellRendererProps = {
+  api: GridApi<GridRowView>;
   value?: number;
   data?: GridRowView;
   measure: GridMeasure;
@@ -582,6 +616,7 @@ function GrowthCellRenderer(props: GrowthCellRendererProps) {
   const currentValue = Number(props.value ?? 0);
   const cell = data?.cells[period.timePeriodId]?.measures[measure.measureId];
   const [draftGrowthFactor, setDraftGrowthFactor] = useState(String(cell?.growthFactor ?? 1));
+  const isApplyingGrowthFactorRef = useRef(false);
 
   useEffect(() => {
     setDraftGrowthFactor(String(cell?.growthFactor ?? 1));
@@ -604,6 +639,21 @@ function GrowthCellRenderer(props: GrowthCellRendererProps) {
 
   const canEditGrowthFactor = showGrowthFactors && (isLeafMonthEditable || isAggregateEditable);
 
+  const commitGrowthFactor = async () => {
+    const parsed = Number(draftGrowthFactor);
+    if (!data || !Number.isFinite(parsed) || parsed < 0 || parsed === Number(cell?.growthFactor ?? 1)) {
+      setDraftGrowthFactor(String(cell?.growthFactor ?? 1));
+      return;
+    }
+
+    isApplyingGrowthFactorRef.current = true;
+    try {
+      await onApplyGrowthFactor(data, period.timePeriodId, measure.measureId, parsed, currentValue);
+    } finally {
+      isApplyingGrowthFactorRef.current = false;
+    }
+  };
+
   return (
     <div className="measure-cell">
       <span className="measure-value">{formatValue({ value: currentValue } as ValueFormatterParams<GridRowView>, measure)}</span>
@@ -615,25 +665,30 @@ function GrowthCellRenderer(props: GrowthCellRendererProps) {
           step="0.1"
           value={draftGrowthFactor}
           disabled={!canEditGrowthFactor}
+          onFocus={() => props.api.stopEditing()}
+          onMouseDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
           onDoubleClick={(event) => event.stopPropagation()}
           onChange={(event) => setDraftGrowthFactor(event.target.value)}
           onBlur={() => {
-            const parsed = Number(draftGrowthFactor);
-            if (!data || !Number.isFinite(parsed) || parsed < 0 || parsed === Number(cell?.growthFactor ?? 1)) {
-              setDraftGrowthFactor(String(cell?.growthFactor ?? 1));
+            if (isApplyingGrowthFactorRef.current) {
               return;
             }
 
-            void onApplyGrowthFactor(data, period.timePeriodId, measure.measureId, parsed, currentValue);
+            setDraftGrowthFactor(String(cell?.growthFactor ?? 1));
           }}
-          onKeyDown={(event) => {
+          onKeyDown={async (event) => {
+            event.stopPropagation();
             if (event.key === "Enter") {
-              event.currentTarget.blur();
+              event.preventDefault();
+              props.api.stopEditing();
+              await commitGrowthFactor();
             }
 
             if (event.key === "Escape") {
               setDraftGrowthFactor(String(cell?.growthFactor ?? 1));
+              event.preventDefault();
+              props.api.stopEditing();
               event.currentTarget.blur();
             }
           }}

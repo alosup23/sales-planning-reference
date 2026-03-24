@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 
-const gridCell = (rowId: string, colId: string) => `[row-id="${rowId}"] [col-id="${colId}"]`;
 const storeRowId = (storeId: number, productNodeId: number) => `store-view:${storeId}:${productNodeId}`;
+const storeRootRowId = "synthetic:Store Total:-10";
+const departmentRootRowId = "synthetic:Department Total:-1";
 
 async function openGrid(page: import("@playwright/test").Page) {
   await page.goto("/");
@@ -24,8 +25,47 @@ async function expandYears(page: import("@playwright/test").Page) {
   await page.getByRole("button", { name: "Expand Years" }).click();
 }
 
+async function toggleRowCaret(page: import("@playwright/test").Page, rowId: string) {
+  const row = page.locator(`.ag-pinned-left-cols-container [row-id="${rowId}"]`);
+  const toggle = row.locator(".ag-group-contracted:not(.ag-hidden), .ag-group-expanded:not(.ag-hidden)").first();
+  await expect(toggle).toBeVisible();
+  await toggle.click();
+}
+
+async function ensurePinnedRowVisible(page: import("@playwright/test").Page, rowId: string, ancestorRowIds: string[] = []) {
+  const row = page.locator(`.ag-pinned-left-cols-container [row-id="${rowId}"]`).first();
+  if (await row.count()) {
+    return;
+  }
+
+  for (const ancestorRowId of ancestorRowIds) {
+    const ancestorRow = page.locator(`.ag-pinned-left-cols-container [row-id="${ancestorRowId}"]`).first();
+    if (await ancestorRow.count()) {
+      const contractedToggle = ancestorRow.locator(".ag-group-contracted:not(.ag-hidden)").first();
+      if (await contractedToggle.count()) {
+        await contractedToggle.click();
+      }
+    }
+
+    if (await row.count()) {
+      return;
+    }
+  }
+
+  await expect(row).toBeVisible();
+}
+
+async function gridCell(page: import("@playwright/test").Page, rowId: string, colId: string) {
+  await ensurePinnedRowVisible(page, rowId, [storeRootRowId, departmentRootRowId]);
+  const pinnedRow = page.locator(`.ag-pinned-left-cols-container [row-id="${rowId}"]`).first();
+  await expect(pinnedRow).toBeVisible();
+  const rowIndex = await pinnedRow.getAttribute("row-index");
+  expect(rowIndex).not.toBeNull();
+  return page.locator(`.ag-center-cols-container [row-index="${rowIndex}"] [col-id="${colId}"]`).first();
+}
+
 async function editCell(page: import("@playwright/test").Page, rowId: string, colId: string, nextValue: string) {
-  const cell = page.locator(gridCell(rowId, colId));
+  const cell = await gridCell(page, rowId, colId);
   await cell.dblclick();
 
   const editor = page.locator(".ag-cell-inline-editing input").last();
@@ -143,16 +183,16 @@ test.beforeEach(async ({ page, request }) => {
 test("loads the live grid with FY26 and FY27 columns", async ({ page }) => {
   await expect(page.locator(".ag-header-group-text", { hasText: "FY26" }).first()).toBeVisible();
   await expect(page.locator(".ag-header-group-text", { hasText: "FY27" }).first()).toBeVisible();
-  await expect(page.locator(gridCell(storeRowId(101, 2000), "202600:1"))).toContainText(/[0-9,]+/);
+  await expect(await gridCell(page, storeRowId(101, 2000), "202600:1")).toContainText(/[0-9,]+/);
 });
 
 test("supports expand and collapse controls for rows and years", async ({ page }) => {
   const pinnedRow = page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2110)}"]`);
-  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2000)}"]`).click({ button: "right" });
+  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
   await page.getByRole("button", { name: "Collapse All" }).click();
   await expect(pinnedRow).toHaveCount(0);
 
-  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2000)}"]`).click({ button: "right" });
+  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
   await page.getByRole("button", { name: "Expand All" }).click();
   await expect(pinnedRow).toHaveCount(1);
 
@@ -160,19 +200,44 @@ test("supports expand and collapse controls for rows and years", async ({ page }
   await expect(page.locator(".ag-header-group-text", { hasText: "FY26" }).first()).toBeVisible();
 });
 
+test("does not pin year total measure columns and keeps caret expansion working in every view", async ({ page }) => {
+  await expect(page.locator(`.ag-pinned-left-cols-container [col-id="202600:1"]`)).toHaveCount(0);
+
+  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
+  await page.getByRole("button", { name: "Expand All" }).click();
+  await toggleRowCaret(page, storeRowId(101, 2100));
+  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2110)}"]`)).toHaveCount(0);
+  await toggleRowCaret(page, storeRowId(101, 2100));
+  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2110)}"]`)).toBeVisible();
+
+  await page.getByRole("button", { name: "Planning - by Department" }).click();
+  await expectReady(page);
+  const departmentStoreRowId = "department-view:department-store-class:Beverages:Store A";
+  const departmentClassRowId = "department-view:department-store-class:Beverages:Store A:Soft Drinks";
+  await page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"]`).click({ button: "right" });
+  await page.getByRole("button", { name: "Expand All" }).click();
+  await toggleRowCaret(page, departmentStoreRowId);
+  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentClassRowId}"]`)).toHaveCount(0);
+  await toggleRowCaret(page, departmentStoreRowId);
+  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentClassRowId}"]`)).toBeVisible();
+});
+
 test("editing a visible Sales Revenue year total refreshes the row total", async ({ page }) => {
-  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2000)}"]`).click({ button: "right" });
+  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
   await page.getByRole("button", { name: "Expand All" }).click();
   const revenueCol = "202600:1";
-  const before = await page.locator(gridCell(storeRowId(101, 2110), revenueCol)).textContent();
+  const targetCell = await gridCell(page, storeRowId(101, 2110), revenueCol);
+  const before = await targetCell.textContent();
 
   await editCell(page, storeRowId(101, 2110), revenueCol, "12000");
   await expectReady(page);
-  await expect(page.locator(gridCell(storeRowId(101, 2110), revenueCol))).not.toContainText(before ?? "");
+  await expect(await gridCell(page, storeRowId(101, 2110), revenueCol)).not.toContainText(before ?? "");
 });
 
 test("adds Department and Class rows and shows them in hierarchy maintenance", async ({ page }) => {
-  await page.locator(gridCell(storeRowId(101, 2000), "202600:1")).click();
+  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
+  await page.getByRole("button", { name: "Expand All" }).click();
+  await (await gridCell(page, storeRowId(101, 2000), "202600:1")).click();
   page.once("dialog", (dialog) => dialog.accept("Frozen E2E"));
   await page.getByRole("button", { name: "Add Department" }).click();
   await expectReady(page);
@@ -228,16 +293,32 @@ test("deletes a year with confirmation", async ({ page }) => {
   await expect(page.locator('.year-picker option[value="202700"]')).toHaveCount(0);
 });
 
-test("shows growth factor inputs and applies an aggregate uplift", async ({ page }) => {
-  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2000)}"]`).click({ button: "right" });
-  await page.getByRole("button", { name: "Expand All" }).click();
+test("commits growth factors only on Enter and preserves row expansion state", async ({ page }) => {
   await page.getByRole("button", { name: "Growth Factors" }).click();
-  const growthInput = page.locator(`${gridCell(storeRowId(101, 2110), "202600:1")} input`).first();
+  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
+  await page.getByRole("button", { name: "Expand All" }).click();
+  await toggleRowCaret(page, storeRowId(101, 2100));
+
+  const aggregateRowId = storeRowId(101, 2100);
+  const classRow = page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2110)}"]`);
+  await expect(classRow).toBeVisible();
+
+  const valueCell = await gridCell(page, aggregateRowId, "202600:1");
+  const beforeValue = await valueCell.textContent();
+  const growthInput = valueCell.locator("input").first();
   await expect(growthInput).toBeVisible();
   await growthInput.fill("1.1");
   await growthInput.press("Tab");
+  await expect(valueCell).toContainText(beforeValue ?? "");
+  await expect(classRow).toBeVisible();
+
+  await growthInput.fill("1.1");
+  await growthInput.press("Enter");
   await expectReady(page);
-  await expect(page.locator(`${gridCell(storeRowId(101, 2110), "202600:1")} input`).first()).toHaveValue("1.1");
+  await expect(valueCell).not.toContainText(beforeValue ?? "");
+  await expect(classRow).toBeVisible();
+  await expect(page.locator(".ag-cell-inline-editing")).toHaveCount(0);
+  await expect((await gridCell(page, aggregateRowId, "202600:1")).locator("input").first()).toHaveValue("1.1");
 });
 
 test("generates the following year from the active year", async ({ page }) => {
