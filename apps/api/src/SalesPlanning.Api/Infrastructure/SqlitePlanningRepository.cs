@@ -9,7 +9,7 @@ namespace SalesPlanning.Api.Infrastructure;
 
 public sealed class SqlitePlanningRepository : IPlanningRepository
 {
-    private static readonly long[] SupportedMeasureIds = [1, 2];
+    private static readonly IReadOnlyList<long> SupportedMeasureIds = PlanningMeasures.SupportedMeasureIds;
 
     static SqlitePlanningRepository()
     {
@@ -94,13 +94,13 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         return ReadPlanningCell(reader);
     }
 
-    public async Task<IReadOnlyList<PlanningCell>> GetScenarioCellsAsync(long scenarioVersionId, long measureId, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<PlanningCell>> GetScenarioCellsAsync(long scenarioVersionId, CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         var cells = await LoadCellsAsync(connection, null, cancellationToken);
         return cells
-            .Where(cell => cell.Coordinate.ScenarioVersionId == scenarioVersionId && cell.Coordinate.MeasureId == measureId)
+            .Where(cell => cell.Coordinate.ScenarioVersionId == scenarioVersionId)
             .Select(cell => cell.Clone())
             .ToList();
     }
@@ -301,14 +301,14 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         return audits;
     }
 
-    public async Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long measureId, CancellationToken cancellationToken)
+    public async Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         var productNodes = await LoadProductNodesAsync(connection, null, cancellationToken);
         var timePeriods = await LoadTimePeriodsAsync(connection, null, cancellationToken);
         var scenarioCells = (await LoadCellsAsync(connection, null, cancellationToken))
-            .Where(cell => cell.Coordinate.ScenarioVersionId == scenarioVersionId && cell.Coordinate.MeasureId == measureId)
+            .Where(cell => cell.Coordinate.ScenarioVersionId == scenarioVersionId)
             .ToList();
 
         var rows = productNodes.Values
@@ -318,15 +318,19 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             {
                 var cells = scenarioCells
                     .Where(cell => cell.Coordinate.StoreId == node.StoreId && cell.Coordinate.ProductNodeId == node.ProductNodeId)
+                    .GroupBy(cell => cell.Coordinate.TimePeriodId)
                     .ToDictionary(
-                        cell => cell.Coordinate.TimePeriodId,
-                        cell => new GridCellDto(
-                            cell.EffectiveValue,
-                            IsEffectivelyLocked(cell.Coordinate, scenarioCells, productNodes, timePeriods),
-                            cell.CellKind == "calculated",
-                            cell.OverrideValue is not null,
-                            cell.RowVersion,
-                            cell.CellKind));
+                        group => group.Key,
+                        group => new GridPeriodCellDto(
+                            group.ToDictionary(
+                                cell => cell.Coordinate.MeasureId,
+                                cell => new GridCellDto(
+                                    cell.EffectiveValue,
+                                    IsEffectivelyLocked(cell.Coordinate, scenarioCells, productNodes, timePeriods),
+                                    cell.CellKind == "calculated",
+                                    cell.OverrideValue is not null,
+                                    cell.RowVersion,
+                                    cell.CellKind))));
 
                 return new GridRowDto(
                     node.StoreId,
@@ -344,7 +348,11 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             .Select(node => new GridPeriodDto(node.TimePeriodId, node.Label, node.Grain, node.ParentTimePeriodId, node.SortOrder))
             .ToList();
 
-        return new GridSliceResponse(scenarioVersionId, measureId, periods, rows);
+        var measures = PlanningMeasures.Definitions
+            .Select(definition => new GridMeasureDto(definition.MeasureId, definition.Label, definition.DecimalPlaces, definition.DerivedAtAggregateLevels))
+            .ToList();
+
+        return new GridSliceResponse(scenarioVersionId, measures, periods, rows);
     }
 
     public async Task<ProductNode> AddRowAsync(AddRowRequest request, CancellationToken cancellationToken)
@@ -379,7 +387,6 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                             connection,
                             transaction,
                             request.ScenarioVersionId,
-                            request.MeasureId,
                             request.CopyFromStoreId.Value,
                             node,
                             productNodes,
@@ -392,8 +399,9 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                     break;
                 }
                 case "category":
+                case "department":
                 {
-                    var parent = GetRequiredNode(productNodes, request.ParentProductNodeId, 0, "category");
+                    var parent = GetRequiredNode(productNodes, request.ParentProductNodeId, 0, "department");
                     node = new ProductNode(
                         ++nextProductNodeId,
                         parent.StoreId,
@@ -404,12 +412,13 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                         false);
                     await InsertProductNodeAsync(connection, transaction, node, cancellationToken);
                     await InitializeCellsForNodeAsync(connection, transaction, request.ScenarioVersionId, node, SupportedMeasureIds, timePeriods.Values, cancellationToken);
-                    await UpsertHierarchyCategoryInternalAsync(connection, transaction, node.Label, cancellationToken);
+                    await UpsertHierarchyDepartmentInternalAsync(connection, transaction, node.Label, cancellationToken);
                     break;
                 }
                 case "subcategory":
+                case "class":
                 {
-                    var parent = GetRequiredNode(productNodes, request.ParentProductNodeId, 1, "subcategory");
+                    var parent = GetRequiredNode(productNodes, request.ParentProductNodeId, 1, "class");
                     if (parent.IsLeaf)
                     {
                         parent = parent with { IsLeaf = false };
@@ -426,7 +435,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                         true);
                     await InsertProductNodeAsync(connection, transaction, node, cancellationToken);
                     await InitializeCellsForNodeAsync(connection, transaction, request.ScenarioVersionId, node, SupportedMeasureIds, timePeriods.Values, cancellationToken);
-                    await UpsertHierarchySubcategoryInternalAsync(connection, transaction, parent.Label, node.Label, cancellationToken);
+                    await UpsertHierarchyClassInternalAsync(connection, transaction, parent.Label, node.Label, cancellationToken);
                     break;
                 }
                 default:
@@ -449,7 +458,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         return await LoadHierarchyMappingsAsync(connection, null, cancellationToken);
     }
 
-    public async Task UpsertHierarchyCategoryAsync(string categoryLabel, CancellationToken cancellationToken)
+    public async Task UpsertHierarchyDepartmentAsync(string departmentLabel, CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
         await _gate.WaitAsync(cancellationToken);
@@ -457,7 +466,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         {
             await using var connection = await OpenConnectionAsync(cancellationToken);
             await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-            await UpsertHierarchyCategoryInternalAsync(connection, transaction, categoryLabel, cancellationToken);
+            await UpsertHierarchyDepartmentInternalAsync(connection, transaction, departmentLabel, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
         finally
@@ -466,7 +475,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         }
     }
 
-    public async Task UpsertHierarchySubcategoryAsync(string categoryLabel, string subcategoryLabel, CancellationToken cancellationToken)
+    public async Task UpsertHierarchyClassAsync(string departmentLabel, string classLabel, CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
         await _gate.WaitAsync(cancellationToken);
@@ -474,7 +483,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         {
             await using var connection = await OpenConnectionAsync(cancellationToken);
             await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-            await UpsertHierarchySubcategoryInternalAsync(connection, transaction, categoryLabel, subcategoryLabel, cancellationToken);
+            await UpsertHierarchyClassInternalAsync(connection, transaction, departmentLabel, classLabel, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
         finally
@@ -491,6 +500,181 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         return productNodes.Values.FirstOrDefault(candidate =>
             candidate.Path.Length == path.Length &&
             candidate.Path.Zip(path, (left, right) => string.Equals(left, right, StringComparison.OrdinalIgnoreCase)).All(match => match));
+    }
+
+    public async Task<int> DeleteRowAsync(long scenarioVersionId, long productNodeId, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            var productNodes = await LoadProductNodesAsync(connection, transaction, cancellationToken);
+            if (!productNodes.TryGetValue(productNodeId, out var targetNode))
+            {
+                throw new InvalidOperationException($"Product node {productNodeId} was not found.");
+            }
+
+            var nodeIdsToDelete = productNodes.Values
+                .Where(node => IsAncestorOrSelf(productNodes, productNodeId, node.ProductNodeId))
+                .Select(node => node.ProductNodeId)
+                .ToList();
+
+            var deletedCells = 0;
+            await using (var deleteCellsCommand = connection.CreateCommand())
+            {
+                deleteCellsCommand.Transaction = transaction;
+                deleteCellsCommand.CommandText = $"""
+                    delete from planning_cells
+                    where scenario_version_id = $scenarioVersionId
+                      and product_node_id in ({string.Join(", ", nodeIdsToDelete)});
+                    """;
+                deleteCellsCommand.Parameters.AddWithValue("$scenarioVersionId", scenarioVersionId);
+                deletedCells = await deleteCellsCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await using (var deleteAuditCommand = connection.CreateCommand())
+            {
+                deleteAuditCommand.Transaction = transaction;
+                deleteAuditCommand.CommandText = $"""
+                    delete from audit_deltas
+                    where scenario_version_id = $scenarioVersionId
+                      and product_node_id in ({string.Join(", ", nodeIdsToDelete)});
+                    """;
+                deleteAuditCommand.Parameters.AddWithValue("$scenarioVersionId", scenarioVersionId);
+                await deleteAuditCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await using (var deleteNodesCommand = connection.CreateCommand())
+            {
+                deleteNodesCommand.Transaction = transaction;
+                deleteNodesCommand.CommandText = $"""
+                    delete from product_nodes
+                    where product_node_id in ({string.Join(", ", nodeIdsToDelete)});
+                    """;
+                await deleteNodesCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await RebuildHierarchyMappingsAsync(connection, transaction, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return deletedCells;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<int> DeleteYearAsync(long scenarioVersionId, long yearTimePeriodId, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            var timePeriods = await LoadTimePeriodsAsync(connection, transaction, cancellationToken);
+            if (!timePeriods.TryGetValue(yearTimePeriodId, out var yearNode) || !string.Equals(yearNode.Grain, "year", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"Year time period {yearTimePeriodId} was not found.");
+            }
+
+            var timeIdsToDelete = timePeriods.Values
+                .Where(period => IsAncestorOrSelf(timePeriods, yearTimePeriodId, period.TimePeriodId))
+                .Select(period => period.TimePeriodId)
+                .ToList();
+
+            var deletedCells = 0;
+            await using (var deleteCellsCommand = connection.CreateCommand())
+            {
+                deleteCellsCommand.Transaction = transaction;
+                deleteCellsCommand.CommandText = $"""
+                    delete from planning_cells
+                    where scenario_version_id = $scenarioVersionId
+                      and time_period_id in ({string.Join(", ", timeIdsToDelete)});
+                    """;
+                deleteCellsCommand.Parameters.AddWithValue("$scenarioVersionId", scenarioVersionId);
+                deletedCells = await deleteCellsCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await using (var deleteAuditCommand = connection.CreateCommand())
+            {
+                deleteAuditCommand.Transaction = transaction;
+                deleteAuditCommand.CommandText = $"""
+                    delete from audit_deltas
+                    where scenario_version_id = $scenarioVersionId
+                      and time_period_id in ({string.Join(", ", timeIdsToDelete)});
+                    """;
+                deleteAuditCommand.Parameters.AddWithValue("$scenarioVersionId", scenarioVersionId);
+                await deleteAuditCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await using (var deleteTimeCommand = connection.CreateCommand())
+            {
+                deleteTimeCommand.Transaction = transaction;
+                deleteTimeCommand.CommandText = $"""
+                    delete from time_periods
+                    where time_period_id in ({string.Join(", ", timeIdsToDelete)});
+                    """;
+                await deleteTimeCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return deletedCells;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task EnsureYearAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            var timePeriods = await LoadTimePeriodsAsync(connection, transaction, cancellationToken);
+            var desiredPeriods = BuildYearPeriods(fiscalYear);
+            var addedAny = false;
+            foreach (var period in desiredPeriods.Values.OrderBy(period => period.SortOrder))
+            {
+                if (timePeriods.ContainsKey(period.TimePeriodId))
+                {
+                    continue;
+                }
+
+                addedAny = true;
+                await using var command = connection.CreateCommand();
+                command.Transaction = transaction;
+                command.CommandText = """
+                    insert into time_periods (time_period_id, parent_time_period_id, label, grain, sort_order)
+                    values ($timePeriodId, $parentTimePeriodId, $label, $grain, $sortOrder);
+                    """;
+                command.Parameters.AddWithValue("$timePeriodId", period.TimePeriodId);
+                command.Parameters.AddWithValue("$parentTimePeriodId", (object?)period.ParentTimePeriodId ?? DBNull.Value);
+                command.Parameters.AddWithValue("$label", period.Label);
+                command.Parameters.AddWithValue("$grain", period.Grain);
+                command.Parameters.AddWithValue("$sortOrder", period.SortOrder);
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            if (addedAny)
+            {
+                var productNodes = await LoadProductNodesAsync(connection, transaction, cancellationToken);
+                var refreshedTimePeriods = await LoadTimePeriodsAsync(connection, transaction, cancellationToken);
+                await EnsureSupportedMeasureCellsAsync(connection, transaction, productNodes.Values, refreshedTimePeriods.Values, cancellationToken);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     public async Task ResetAsync(CancellationToken cancellationToken)
@@ -628,10 +812,12 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 }
             }
 
+            await EnsureSupportedTimePeriodsAsync(connection, transaction, cancellationToken);
             var productNodes = await LoadProductNodesAsync(connection, transaction, cancellationToken);
             var timePeriods = await LoadTimePeriodsAsync(connection, transaction, cancellationToken);
             await EnsureSupportedMeasureCellsAsync(connection, transaction, productNodes.Values, timePeriods.Values, cancellationToken);
             await EnsureQuantitySeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
+            await EnsureAspSeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
 
             await transaction.CommitAsync(cancellationToken);
             _initialized = true;
@@ -957,6 +1143,34 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         }
     }
 
+    private static async Task EnsureSupportedTimePeriodsAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        var existingPeriods = await LoadTimePeriodsAsync(connection, transaction, cancellationToken);
+        foreach (var period in BuildTimePeriods().Values.OrderBy(period => period.SortOrder))
+        {
+            if (existingPeriods.ContainsKey(period.TimePeriodId))
+            {
+                continue;
+            }
+
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                insert into time_periods (time_period_id, parent_time_period_id, label, grain, sort_order)
+                values ($timePeriodId, $parentTimePeriodId, $label, $grain, $sortOrder);
+                """;
+            command.Parameters.AddWithValue("$timePeriodId", period.TimePeriodId);
+            command.Parameters.AddWithValue("$parentTimePeriodId", (object?)period.ParentTimePeriodId ?? DBNull.Value);
+            command.Parameters.AddWithValue("$label", period.Label);
+            command.Parameters.AddWithValue("$grain", period.Grain);
+            command.Parameters.AddWithValue("$sortOrder", period.SortOrder);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+    }
+
     private static async Task EnsureQuantitySeedAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
@@ -1026,6 +1240,81 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         }
     }
 
+    private static async Task EnsureAspSeedAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        IReadOnlyDictionary<long, ProductNode> productNodes,
+        IReadOnlyDictionary<long, TimePeriodNode> timePeriods,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "select count(*) from planning_cells where measure_id = 3 and input_value is not null;";
+        var existingAspInputs = Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));
+        if (existingAspInputs > 0)
+        {
+            return;
+        }
+
+        var cells = await LoadCellsAsync(connection, transaction, cancellationToken);
+        var revenueCells = cells.Where(cell => cell.Coordinate.MeasureId == PlanningMeasures.SalesRevenue)
+            .ToDictionary(cell => (cell.Coordinate.StoreId, cell.Coordinate.ProductNodeId, cell.Coordinate.TimePeriodId), cell => cell);
+        var quantityCells = cells.Where(cell => cell.Coordinate.MeasureId == PlanningMeasures.SoldQuantity)
+            .ToDictionary(cell => (cell.Coordinate.StoreId, cell.Coordinate.ProductNodeId, cell.Coordinate.TimePeriodId), cell => cell);
+        var aspCells = cells.Where(cell => cell.Coordinate.MeasureId == PlanningMeasures.AverageSellingPrice)
+            .ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
+
+        foreach (var productNode in productNodes.Values.Where(node => node.IsLeaf))
+        {
+            foreach (var period in timePeriods.Values.Where(period => string.Equals(period.Grain, "month", StringComparison.OrdinalIgnoreCase)))
+            {
+                var coordinateKey = (productNode.StoreId, productNode.ProductNodeId, period.TimePeriodId);
+                var quantity = quantityCells[coordinateKey].EffectiveValue;
+                var currentRevenue = revenueCells[coordinateKey].EffectiveValue;
+                var asp = quantity > 0 ? Math.Round(currentRevenue / quantity, 2, MidpointRounding.AwayFromZero) : 1.00m;
+                var normalizedRevenue = decimal.Ceiling(quantity * asp);
+                var revenueCell = revenueCells[coordinateKey];
+                revenueCell.InputValue = normalizedRevenue;
+                revenueCell.DerivedValue = normalizedRevenue;
+                revenueCell.EffectiveValue = normalizedRevenue;
+                revenueCell.RowVersion = Math.Max(revenueCell.RowVersion, 2);
+                revenueCell.CellKind = "input";
+            }
+        }
+
+        RecalculateSeedTotals(
+            1,
+            PlanningMeasures.SalesRevenue,
+            revenueCells.ToDictionary(entry => entry.Value.Coordinate.Key, entry => entry.Value),
+            productNodes,
+            timePeriods);
+
+        foreach (var aspCell in aspCells.Values)
+        {
+            var coordinateKey = (aspCell.Coordinate.StoreId, aspCell.Coordinate.ProductNodeId, aspCell.Coordinate.TimePeriodId);
+            var revenue = revenueCells[coordinateKey].EffectiveValue;
+            var quantity = quantityCells[coordinateKey].EffectiveValue;
+            var asp = quantity > 0 ? Math.Round(revenue / quantity, 2, MidpointRounding.AwayFromZero) : 1.00m;
+            var isLeafMonth = productNodes[aspCell.Coordinate.ProductNodeId].IsLeaf &&
+                              string.Equals(timePeriods[aspCell.Coordinate.TimePeriodId].Grain, "month", StringComparison.OrdinalIgnoreCase);
+            aspCell.InputValue = isLeafMonth ? asp : null;
+            aspCell.DerivedValue = asp;
+            aspCell.EffectiveValue = asp;
+            aspCell.RowVersion = Math.Max(aspCell.RowVersion, 2);
+            aspCell.CellKind = isLeafMonth ? "input" : "calculated";
+        }
+
+        foreach (var cell in aspCells.Values)
+        {
+            await UpsertCellAsync(connection, transaction, cell, cancellationToken);
+        }
+
+        foreach (var cell in revenueCells.Values)
+        {
+            await UpsertCellAsync(connection, transaction, cell, cancellationToken);
+        }
+    }
+
     private static ProductNode GetRequiredNode(
         IReadOnlyDictionary<long, ProductNode> productNodes,
         long? productNodeId,
@@ -1049,7 +1338,6 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         SqliteConnection connection,
         SqliteTransaction transaction,
         long scenarioVersionId,
-        long measureId,
         long sourceStoreId,
         ProductNode targetStoreNode,
         IReadOnlyDictionary<long, ProductNode> productNodes,
@@ -1158,12 +1446,41 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             StringComparer.OrdinalIgnoreCase);
     }
 
-    private static async Task UpsertHierarchyCategoryInternalAsync(SqliteConnection connection, SqliteTransaction transaction, string categoryLabel, CancellationToken cancellationToken)
+    private static async Task RebuildHierarchyMappingsAsync(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
     {
-        var normalizedLabel = categoryLabel.Trim();
+        await using (var deleteClassesCommand = connection.CreateCommand())
+        {
+            deleteClassesCommand.Transaction = transaction;
+            deleteClassesCommand.CommandText = "delete from hierarchy_subcategories;";
+            await deleteClassesCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var deleteDepartmentsCommand = connection.CreateCommand())
+        {
+            deleteDepartmentsCommand.Transaction = transaction;
+            deleteDepartmentsCommand.CommandText = "delete from hierarchy_categories;";
+            await deleteDepartmentsCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var productNodes = await LoadProductNodesAsync(connection, transaction, cancellationToken);
+        foreach (var department in productNodes.Values.Where(node => node.Level == 1))
+        {
+            await UpsertHierarchyDepartmentInternalAsync(connection, transaction, department.Label, cancellationToken);
+        }
+
+        foreach (var classNode in productNodes.Values.Where(node => node.Level == 2))
+        {
+            var department = productNodes[classNode.ParentProductNodeId!.Value];
+            await UpsertHierarchyClassInternalAsync(connection, transaction, department.Label, classNode.Label, cancellationToken);
+        }
+    }
+
+    private static async Task UpsertHierarchyDepartmentInternalAsync(SqliteConnection connection, SqliteTransaction transaction, string departmentLabel, CancellationToken cancellationToken)
+    {
+        var normalizedLabel = departmentLabel.Trim();
         if (string.IsNullOrWhiteSpace(normalizedLabel))
         {
-            throw new InvalidOperationException("Category labels cannot be empty.");
+            throw new InvalidOperationException("Department labels cannot be empty.");
         }
 
         await using var command = connection.CreateCommand();
@@ -1177,20 +1494,20 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static async Task UpsertHierarchySubcategoryInternalAsync(
+    private static async Task UpsertHierarchyClassInternalAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
-        string categoryLabel,
-        string subcategoryLabel,
+        string departmentLabel,
+        string classLabel,
         CancellationToken cancellationToken)
     {
-        var normalizedSubcategory = subcategoryLabel.Trim();
-        if (string.IsNullOrWhiteSpace(normalizedSubcategory))
+        var normalizedClass = classLabel.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedClass))
         {
-            throw new InvalidOperationException("Subcategory labels cannot be empty.");
+            throw new InvalidOperationException("Class labels cannot be empty.");
         }
 
-        await UpsertHierarchyCategoryInternalAsync(connection, transaction, categoryLabel, cancellationToken);
+        await UpsertHierarchyDepartmentInternalAsync(connection, transaction, departmentLabel, cancellationToken);
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
@@ -1198,8 +1515,8 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             values ($categoryLabel, $subcategoryLabel)
             on conflict (category_label, subcategory_label) do nothing;
             """;
-        command.Parameters.AddWithValue("$categoryLabel", categoryLabel.Trim());
-        command.Parameters.AddWithValue("$subcategoryLabel", normalizedSubcategory);
+        command.Parameters.AddWithValue("$categoryLabel", departmentLabel.Trim());
+        command.Parameters.AddWithValue("$subcategoryLabel", normalizedClass);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -1369,13 +1686,13 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
 
         foreach (var category in productNodes.Values.Where(node => node.Level == 1))
         {
-            await UpsertHierarchyCategoryInternalAsync(connection, transaction, category.Label, cancellationToken);
+            await UpsertHierarchyDepartmentInternalAsync(connection, transaction, category.Label, cancellationToken);
         }
 
         foreach (var subcategory in productNodes.Values.Where(node => node.Level == 2))
         {
             var category = productNodes[subcategory.ParentProductNodeId!.Value];
-            await UpsertHierarchySubcategoryInternalAsync(connection, transaction, category.Label, subcategory.Label, cancellationToken);
+            await UpsertHierarchyClassInternalAsync(connection, transaction, category.Label, subcategory.Label, cancellationToken);
         }
 
         foreach (var cell in cells.Values)
@@ -1473,21 +1790,36 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
 
     private static Dictionary<long, TimePeriodNode> BuildTimePeriods()
     {
-        return new List<TimePeriodNode>
+        return new[] { 2026, 2027 }
+            .SelectMany(year => BuildYearPeriods(year).Values)
+            .ToDictionary(period => period.TimePeriodId);
+    }
+
+    private static Dictionary<long, TimePeriodNode> BuildYearPeriods(int fiscalYear)
+    {
+        var yearId = fiscalYear * 100;
+        var fiscalSuffix = fiscalYear % 100;
+        var months = new[]
         {
-            new(202600, null, "FY26", "year", 1),
-            new(202601, 202600, "Jan", "month", 2),
-            new(202602, 202600, "Feb", "month", 3),
-            new(202603, 202600, "Mar", "month", 4),
-            new(202604, 202600, "Apr", "month", 5),
-            new(202605, 202600, "May", "month", 6),
-            new(202606, 202600, "Jun", "month", 7),
-            new(202607, 202600, "Jul", "month", 8),
-            new(202608, 202600, "Aug", "month", 9),
-            new(202609, 202600, "Sep", "month", 10),
-            new(202610, 202600, "Oct", "month", 11),
-            new(202611, 202600, "Nov", "month", 12),
-            new(202612, 202600, "Dec", "month", 13)
-        }.ToDictionary(period => period.TimePeriodId);
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+        };
+
+        var periods = new Dictionary<long, TimePeriodNode>
+        {
+            [yearId] = new(yearId, null, $"FY{fiscalSuffix:00}", "year", (fiscalYear - 2000) * 100)
+        };
+
+        for (var monthIndex = 0; monthIndex < months.Length; monthIndex += 1)
+        {
+            periods[yearId + monthIndex + 1] = new(
+                yearId + monthIndex + 1,
+                yearId,
+                months[monthIndex],
+                "month",
+                ((fiscalYear - 2000) * 100) + monthIndex + 1);
+        }
+
+        return periods;
     }
 }

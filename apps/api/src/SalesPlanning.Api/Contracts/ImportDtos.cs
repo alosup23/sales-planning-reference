@@ -4,4 +4,6 @@ public sealed record ImportWorkbookResponse(
     int RowsProcessed,
     int CellsUpdated,
     int RowsCreated,
-    string Status);
+    string Status,
+    string? ExceptionFileName,
+    string? ExceptionWorkbookBase64);

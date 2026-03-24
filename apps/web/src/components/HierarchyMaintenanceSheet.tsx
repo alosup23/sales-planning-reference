@@ -1,69 +1,69 @@
 import { useEffect, useState } from "react";
-import type { HierarchyCategory } from "../lib/types";
+import type { HierarchyDepartment } from "../lib/types";
 
 type HierarchyMaintenanceSheetProps = {
-  categories: HierarchyCategory[];
-  onAddCategory: () => Promise<void>;
-  onAddSubcategory: (categoryLabel: string) => Promise<void>;
+  departments: HierarchyDepartment[];
+  onAddDepartment: () => Promise<void>;
+  onAddClass: (departmentLabel: string) => Promise<void>;
 };
 
 export function HierarchyMaintenanceSheet({
-  categories,
-  onAddCategory,
-  onAddSubcategory,
+  departments,
+  onAddDepartment,
+  onAddClass,
 }: HierarchyMaintenanceSheetProps) {
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(categories[0]?.categoryLabel ?? null);
+  const [selectedDepartment, setSelectedDepartment] = useState<string | null>(departments[0]?.departmentLabel ?? null);
 
   useEffect(() => {
-    if (!selectedCategory || categories.some((category) => category.categoryLabel === selectedCategory)) {
+    if (!selectedDepartment || departments.some((department) => department.departmentLabel === selectedDepartment)) {
       return;
     }
 
-    setSelectedCategory(categories[0]?.categoryLabel ?? null);
-  }, [categories, selectedCategory]);
+    setSelectedDepartment(departments[0]?.departmentLabel ?? null);
+  }, [departments, selectedDepartment]);
 
   return (
     <section className="maintenance-shell">
       <div className="maintenance-toolbar">
         <div>
           <div className="eyebrow">Maintenance</div>
-          <strong>Category / Subcategory Mapping</strong>
+          <strong>Department / Class Mapping</strong>
         </div>
         <div className="toolbar-actions">
-          <button type="button" className="secondary-button" onClick={() => void onAddCategory()}>
-            Add Category
+          <button type="button" className="secondary-button" onClick={() => void onAddDepartment()}>
+            Add Department
           </button>
           <button
             type="button"
             className="secondary-button"
-            disabled={!selectedCategory}
+            disabled={!selectedDepartment}
             onClick={() => {
-              if (!selectedCategory) {
+              if (!selectedDepartment) {
                 return;
               }
 
-              void onAddSubcategory(selectedCategory);
+              void onAddClass(selectedDepartment);
             }}
           >
-            Add Subcategory
+            Add Class
           </button>
         </div>
       </div>
 
       <div className="maintenance-grid">
         <div className="maintenance-header">
-          <div>Category</div>
-          <div>Subcategories</div>
+          <div>Department</div>
+          <div>Classes</div>
         </div>
-        {categories.map((category) => (
+        {departments.map((department) => (
           <button
-            key={category.categoryLabel}
+            key={department.departmentLabel}
             type="button"
-            className={`maintenance-row${selectedCategory === category.categoryLabel ? " maintenance-row-selected" : ""}`}
-            onClick={() => setSelectedCategory(category.categoryLabel)}
+            className={`maintenance-row${selectedDepartment === department.departmentLabel ? " maintenance-row-selected" : ""}`}
+            onClick={() => setSelectedDepartment(department.departmentLabel)}
           >
-            <span>{category.categoryLabel}</span>
-            <span>{category.subcategoryLabels.length > 0 ? category.subcategoryLabels.join(", ") : "No subcategories yet"}</span>
+            <span>{department.departmentLabel}</span>
+            <span>{department.classLabels.length > 0 ? department.classLabels.join(", ") : "No classes yet"}</span>
           </button>
         ))}
       </div>

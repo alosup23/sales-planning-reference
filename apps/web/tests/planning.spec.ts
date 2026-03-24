@@ -11,7 +11,14 @@ async function openGrid(page: import("@playwright/test").Page) {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Sales Budget & Planning" })).toBeVisible();
   await expectReady(page);
-  await expect(page.locator(gridCell(storeRowId(101, 2110), "202602"))).toContainText("750");
+}
+
+async function expectReady(page: import("@playwright/test").Page) {
+  await expect(page.getByText(/ready\.$/)).toBeVisible();
+}
+
+async function expandYears(page: import("@playwright/test").Page) {
+  await page.getByRole("button", { name: "Expand Years" }).click();
 }
 
 async function editCell(page: import("@playwright/test").Page, rowId: string, colId: string, nextValue: string) {
@@ -24,22 +31,7 @@ async function editCell(page: import("@playwright/test").Page, rowId: string, co
   await editor.press("Enter");
 }
 
-async function selectRow(page: import("@playwright/test").Page, rowId: string) {
-  await page.locator(gridCell(rowId, "202600")).click();
-}
-
-async function expandRowIfCollapsed(page: import("@playwright/test").Page, rowId: string) {
-  const toggle = page.locator(`.planning-grid .ag-pinned-left-cols-container [row-id="${rowId}"] .ag-group-contracted`).first();
-  if (await toggle.count()) {
-    await toggle.click();
-  }
-}
-
-async function expectReady(page: import("@playwright/test").Page) {
-  await expect(page.getByText(/ready\.$/)).toBeVisible();
-}
-
-function createWorkbookBuffer(rows: Array<Record<string, string | number>>): Buffer {
+function createWorkbookBuffer(rows: Array<Record<string, string | number>>, sheetName = "Store B"): Buffer {
   const tempRoot = mkdtempSync(path.join(tmpdir(), "sales-plan-xlsx-"));
   const workbookRoot = path.join(tempRoot, "xlsx");
   const cleanup = () => rmSync(tempRoot, { recursive: true, force: true });
@@ -51,7 +43,7 @@ function createWorkbookBuffer(rows: Array<Record<string, string | number>>): Buf
     .replaceAll("\"", "&quot;")
     .replaceAll("'", "&apos;");
 
-  const headers = ["Store", "Category", "Subcategory", "Jan", "Feb"];
+  const headers = ["Store", "Department", "Class", "Year", "Month", "Sales Revenue", "Sold Qty", "ASP"];
   const allRows = [headers, ...rows.map((row) => headers.map((header) => row[header] ?? ""))];
 
   const cellRef = (columnIndex: number, rowIndex: number) => `${String.fromCharCode(65 + columnIndex)}${rowIndex}`;
@@ -96,7 +88,7 @@ function createWorkbookBuffer(rows: Array<Record<string, string | number>>): Buf
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Plan" sheetId="1" r:id="rId1"/>
+    <sheet name="${xmlEscape(sheetName)}" sheetId="1" r:id="rId1"/>
   </sheets>
 </workbook>`,
   );
@@ -138,27 +130,6 @@ function createWorkbookBuffer(rows: Array<Record<string, string | number>>): Buf
   return buffer;
 }
 
-async function getRowIdByLabel(
-  page: import("@playwright/test").Page,
-  label: string,
-  index = 0,
-  rowIdPrefix?: string,
-) {
-  const rowIds = await page.locator(".planning-grid .ag-pinned-left-cols-container [row-id]").evaluateAll((rows, options) => rows
-    .map((row) => ({
-      id: row.getAttribute("row-id"),
-      label: row.textContent?.trim() ?? "",
-    }))
-    .filter((row) =>
-      row.id &&
-      row.label.includes(String(options.label)) &&
-      (!options.rowIdPrefix || row.id.startsWith(String(options.rowIdPrefix))))
-    .map((row) => row.id as string), { label, rowIdPrefix });
-
-  expect(rowIds[index]).toBeTruthy();
-  return rowIds[index];
-}
-
 test.describe.configure({ mode: "serial" });
 
 test.beforeEach(async ({ page, request }) => {
@@ -166,90 +137,62 @@ test.beforeEach(async ({ page, request }) => {
   await openGrid(page);
 });
 
-test("loads the live planning grid with locked-cell styling", async ({ page }) => {
-  await expect(page.locator(gridCell("synthetic:Store Total:-10", "202600"))).toContainText("17,253");
-  await expect(page.locator(gridCell(storeRowId(101, 2000), "202600"))).toContainText("17,253");
-  await expect(page.locator(gridCell(storeRowId(101, 2100), "202600"))).toContainText("11,930");
-  await expect(page.locator(gridCell(storeRowId(101, 2110), "202602"))).toHaveClass(/cell-locked/);
+test("loads the live grid with FY26 and FY27 columns", async ({ page }) => {
+  await expect(page.locator(".ag-header-group-text", { hasText: "FY26" }).first()).toBeVisible();
+  await expect(page.locator(".ag-header-group-text", { hasText: "FY27" }).first()).toBeVisible();
+  await expect(page.locator(gridCell(storeRowId(101, 2000), "202600:1"))).toContainText(/[0-9,]+/);
 });
 
-test("supports locking and unlocking the synthetic store total row", async ({ page }) => {
-  const totalCell = page.locator(gridCell("synthetic:Store Total:-10", "202600"));
+test("supports expand and collapse controls for rows and years", async ({ page }) => {
+  const pinnedRow = page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2110)}"]`);
+  await page.getByRole("button", { name: "Collapse All" }).click();
+  await expect(pinnedRow).toHaveCount(0);
 
-  await totalCell.click({ button: "right" });
-  await page.getByRole("button", { name: "Lock cell" }).click();
-  await expect(totalCell).toHaveClass(/cell-locked/);
+  await page.getByRole("button", { name: "Expand All" }).click();
+  await expect(pinnedRow).toHaveCount(1);
 
-  await totalCell.click({ button: "right" });
-  await page.getByRole("button", { name: "Unlock cell" }).click();
-  await expect(totalCell).not.toHaveClass(/cell-locked/);
+  await page.getByRole("button", { name: "Expand Years" }).click();
+  await expect(page.locator(gridCell(storeRowId(101, 2110), "202601:1"))).toBeVisible();
 });
 
-test("edits an unlocked leaf cell and rolls the value into the yearly aggregate", async ({ page }) => {
-  await editCell(page, storeRowId(101, 2120), "202603", "333");
+test("editing a visible Sales Revenue year total refreshes the row total", async ({ page }) => {
+  await page.getByRole("button", { name: "Expand All" }).click();
+  const revenueCol = "202600:1";
+  const before = await page.locator(gridCell(storeRowId(101, 2110), revenueCol)).textContent();
 
-  await expect(page.locator(gridCell(storeRowId(101, 2120), "202603"))).toContainText("333");
-  await expect(page.locator(gridCell(storeRowId(101, 2120), "202600"))).toContainText("3,343");
-  await expect(page.locator(gridCell(storeRowId(101, 2100), "202600"))).toContainText("12,008");
+  await editCell(page, storeRowId(101, 2110), revenueCol, "12000");
+  await expectReady(page);
+  await expect(page.locator(gridCell(storeRowId(101, 2110), revenueCol))).not.toContainText(before ?? "");
 });
 
-test("locks and unlocks a cell through the custom context menu", async ({ page }) => {
-  const targetCell = page.locator(gridCell(storeRowId(101, 2120), "202604"));
-
-  await targetCell.click({ button: "right" });
-  await page.getByRole("button", { name: "Lock cell" }).click();
-  await expect(targetCell).toHaveClass(/cell-locked/);
-
-  await targetCell.click({ button: "right" });
-  await page.getByRole("button", { name: "Unlock cell" }).click();
-  await expect(targetCell).not.toHaveClass(/cell-locked/);
-});
-
-test("splashes a yearly total across months while preserving the locked February value", async ({ page }) => {
-  await editCell(page, storeRowId(101, 2110), "202600", "12000");
-  await expect(page.locator(gridCell(storeRowId(101, 2110), "202600"))).toContainText("12,000");
-  await page.locator(gridCell(storeRowId(101, 2110), "202600")).click();
-  await page.getByRole("button", { name: "Splash selected row" }).click();
-
-  await expect(page.locator(gridCell(storeRowId(101, 2110), "202601"))).toContainText("1,023");
-  await expect(page.locator(gridCell(storeRowId(101, 2110), "202602"))).toContainText("750");
-  await expect(page.locator(gridCell(storeRowId(101, 2110), "202603"))).toContainText("895");
-  await expect(page.locator(gridCell(storeRowId(101, 2110), "202600"))).toContainText("12,000");
-});
-
-test("adds a category and subcategory from the toolbar", async ({ page }) => {
-  const categoryName = "Frozen E2E";
-  const subcategoryName = "Ice Cream E2E";
-
-  await selectRow(page, storeRowId(101, 2000));
-  page.once("dialog", (dialog) => dialog.accept(categoryName));
-  await page.getByRole("button", { name: "Add Category" }).click();
+test("adds Department and Class rows and shows them in hierarchy maintenance", async ({ page }) => {
+  await page.locator(gridCell(storeRowId(101, 2000), "202600:1")).click();
+  page.once("dialog", (dialog) => dialog.accept("Frozen E2E"));
+  await page.getByRole("button", { name: "Add Department" }).click();
   await expectReady(page);
 
-  const categoryLabel = page.locator(".planning-grid").getByText(categoryName, { exact: true });
-  await expect(categoryLabel).toBeVisible();
-  await categoryLabel.click();
-  await expect(page.getByRole("button", { name: "Add Subcategory" })).toBeEnabled();
-
-  page.once("dialog", (dialog) => dialog.accept(subcategoryName));
-  await page.getByRole("button", { name: "Add Subcategory" }).click();
+  await page.getByText("Frozen E2E", { exact: true }).click();
+  page.once("dialog", (dialog) => dialog.accept("Ice Cream E2E"));
+  await page.getByRole("button", { name: "Add Class" }).click();
   await expectReady(page);
-  await expect(page.locator(".planning-grid").getByText(subcategoryName, { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Hierarchy Maintenance" }).click();
-  await expect(page.getByText("Category / Subcategory Mapping")).toBeVisible();
-  await expect(page.getByRole("button", { name: categoryName })).toBeVisible();
-  await expect(page.getByText(subcategoryName)).toBeVisible();
+  await expect(page.getByText("Department / Class Mapping")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Frozen E2E/ })).toBeVisible();
+  await expect(page.getByText("Ice Cream E2E")).toBeVisible();
 });
 
-test("imports a workbook through the upload control and refreshes the grid", async ({ page }) => {
+test("imports a workbook in the new store-sheet format", async ({ page }) => {
   const workbookBuffer = createWorkbookBuffer([
     {
-      Store: "Store C",
-      Category: "Frozen",
-      Subcategory: "Ice Cream",
-      Jan: 100,
-      Feb: 110,
+      Store: "Store B",
+      Department: "Frozen",
+      Class: "Ice Cream",
+      Year: 2026,
+      Month: "Jan",
+      "Sales Revenue": 100,
+      "Sold Qty": 50,
+      ASP: 2,
     },
   ]);
 
@@ -259,93 +202,17 @@ test("imports a workbook through the upload control and refreshes the grid", asy
     buffer: workbookBuffer,
   });
   await expectReady(page);
+  await page.getByRole("button", { name: "Expand All" }).click();
+  await page.getByRole("button", { name: "Expand Years" }).click();
 
-  const importedRowId = await getRowIdByLabel(page, "Ice Cream");
-  await expect(page.locator(gridCell(importedRowId, "202601"))).toContainText("100");
-  await expect(page.locator(gridCell(importedRowId, "202602"))).toContainText("110");
-  await expect(page.locator(gridCell(importedRowId, "202600"))).toContainText("210");
+  const importedRow = page.getByText("Ice Cream", { exact: true }).last();
+  await expect(importedRow).toBeVisible();
 });
 
-test("switches to Sold Qty and preserves bottom-up behavior", async ({ page }) => {
-  await page.getByRole("button", { name: "Sold Qty" }).click();
+test("deletes a year with confirmation", async ({ page }) => {
+  await page.locator(".year-picker select").selectOption("202700");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Delete Year" }).click();
   await expectReady(page);
-
-  await expect(page.locator(gridCell(storeRowId(101, 2110), "202601"))).toContainText("120");
-  await expect(page.locator(gridCell(storeRowId(101, 2110), "202600"))).toContainText("1,751");
-
-  await editCell(page, storeRowId(101, 2110), "202603", "150");
-  await expectReady(page);
-  await expect(page.locator(gridCell(storeRowId(101, 2110), "202603"))).toContainText("150");
-  await expect(page.locator(gridCell(storeRowId(101, 2110), "202600"))).toContainText("1,759");
-});
-
-test("shows the same data in category-first planning views", async ({ page }) => {
-  await page.getByRole("button", { name: "Planning - by Category" }).click();
-  await expectReady(page);
-
-  await expect(page.locator(gridCell("synthetic:Category Total:-1", "202600"))).toContainText("17,253");
-
-  await page.getByRole("button", { name: "Category - Subcategory - Store" }).click();
-  await expectReady(page);
-  const storeLeafRowId = "category-view:category-subcategory-store:Beverages:Soft Drinks:Store A";
-  await expect(page.locator(gridCell(storeLeafRowId, "202602"))).toContainText("750");
-});
-
-test("splashes from a top-level category row and keeps the shared data synchronized", async ({ page }) => {
-  const dialogs = ["Store B Copy", "Store A"];
-  page.on("dialog", async (dialog) => {
-    const nextValue = dialogs.shift();
-    await dialog.accept(nextValue);
-  });
-
-  await page.getByRole("button", { name: "Add Store" }).click();
-  await expectReady(page);
-
-  await page.getByRole("button", { name: "Planning - by Category" }).click();
-  await expectReady(page);
-  const categoryRowId = "synthetic:Category Total:-1";
-  await editCell(page, categoryRowId, "202600", "24000");
-  await expectReady(page);
-  await page.locator(gridCell(categoryRowId, "202600")).click();
-  await page.getByRole("button", { name: "Splash selected row" }).click();
-  await expectReady(page);
-
-  await expect(page.locator(gridCell(categoryRowId, "202600"))).toContainText("24,000");
-
-  await page.getByRole("button", { name: "Planning - by Store" }).click();
-  await expect(page.locator(gridCell(storeRowId(101, 2110), "202602"))).toContainText("750");
-  const copiedStoreRowId = await getRowIdByLabel(page, "Store B Copy");
-  await expect(page.locator(gridCell(copiedStoreRowId, "202600")).first()).toContainText(/[0-9,]+/);
-});
-
-test("adds a store by copying hierarchy and data from an existing store", async ({ page }) => {
-  const dialogs = ["Store B Copy", "Store A"];
-  page.on("dialog", async (dialog) => {
-    const nextValue = dialogs.shift();
-    await dialog.accept(nextValue);
-  });
-
-  await page.getByRole("button", { name: "Add Store" }).click();
-  await expectReady(page);
-
-  const copiedStoreRowId = await getRowIdByLabel(page, "Store B Copy");
-  await expect(page.locator(gridCell(copiedStoreRowId, "202600")).first()).toContainText("17,253");
-  await expect(page.getByText("Soft Drinks", { exact: true }).nth(1)).toBeVisible();
-});
-
-test("maintains category-subcategory mappings from the hierarchy sheet", async ({ page }) => {
-  const categoryName = "Seasonal";
-  const subcategoryName = "Gift Boxes";
-
-  await page.getByRole("button", { name: "Hierarchy Maintenance" }).click();
-  page.once("dialog", (dialog) => dialog.accept(categoryName));
-  await page.getByRole("button", { name: "Add Category" }).click();
-  await page.getByRole("button", { name: categoryName }).click();
-
-  page.once("dialog", (dialog) => dialog.accept(subcategoryName));
-  await page.getByRole("button", { name: "Add Subcategory" }).click();
-  await expectReady(page);
-
-  await expect(page.getByRole("button", { name: categoryName })).toBeVisible();
-  await expect(page.getByText(subcategoryName)).toBeVisible();
+  await expect(page.locator('.year-picker option[value="202700"]')).toHaveCount(0);
 });

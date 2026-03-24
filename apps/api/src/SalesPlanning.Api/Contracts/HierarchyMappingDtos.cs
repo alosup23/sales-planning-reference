@@ -1,12 +1,12 @@
 namespace SalesPlanning.Api.Contracts;
 
 public sealed record HierarchyMappingResponse(
-    IReadOnlyList<HierarchyCategoryDto> Categories);
+    IReadOnlyList<HierarchyDepartmentDto> Departments);
 
-public sealed record HierarchyCategoryDto(
-    string CategoryLabel,
-    IReadOnlyList<string> SubcategoryLabels);
+public sealed record HierarchyDepartmentDto(
+    string DepartmentLabel,
+    IReadOnlyList<string> ClassLabels);
 
-public sealed record AddHierarchyCategoryRequest(string CategoryLabel);
+public sealed record AddHierarchyDepartmentRequest(string DepartmentLabel);
 
-public sealed record AddHierarchySubcategoryRequest(string CategoryLabel, string SubcategoryLabel);
+public sealed record AddHierarchyClassRequest(string DepartmentLabel, string ClassLabel);

@@ -2,9 +2,11 @@ namespace SalesPlanning.Api.Contracts;
 
 public sealed record GridSliceResponse(
     long ScenarioVersionId,
-    long MeasureId,
+    IReadOnlyList<GridMeasureDto> Measures,
     IReadOnlyList<GridPeriodDto> Periods,
     IReadOnlyList<GridRowDto> Rows);
+
+public sealed record GridMeasureDto(long MeasureId, string Label, int DecimalPlaces, bool DerivedAtAggregateLevels);
 
 public sealed record GridPeriodDto(long TimePeriodId, string Label, string Grain, long? ParentTimePeriodId, int SortOrder);
 
@@ -15,7 +17,9 @@ public sealed record GridRowDto(
     int Level,
     string[] Path,
     bool IsLeaf,
-    Dictionary<long, GridCellDto> Cells);
+    Dictionary<long, GridPeriodCellDto> Cells);
+
+public sealed record GridPeriodCellDto(Dictionary<long, GridCellDto> Measures);
 
 public sealed record GridCellDto(
     decimal Value,
@@ -24,4 +28,3 @@ public sealed record GridCellDto(
     bool IsOverride,
     long RowVersion,
     string CellKind);
-

@@ -16,9 +16,9 @@ public sealed class PlanningController : ControllerBase
     }
 
     [HttpGet("grid-slices")]
-    public Task<GridSliceResponse> GetGridSlice([FromQuery] long scenarioVersionId = 1, [FromQuery] long measureId = 1, CancellationToken cancellationToken = default)
+    public Task<GridSliceResponse> GetGridSlice([FromQuery] long scenarioVersionId = 1, CancellationToken cancellationToken = default)
     {
-        return _planningService.GetGridSliceAsync(scenarioVersionId, measureId, cancellationToken);
+        return _planningService.GetGridSliceAsync(scenarioVersionId, cancellationToken);
     }
 
     [HttpPost("cell-edits")]
@@ -56,40 +56,57 @@ public sealed class PlanningController : ControllerBase
         return _planningService.AddRowAsync(request, cancellationToken);
     }
 
+    [HttpPost("rows/delete")]
+    public Task<DeleteEntityResponse> DeleteRow([FromBody] DeleteRowRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.DeleteRowAsync(request, cancellationToken);
+    }
+
+    [HttpPost("years/delete")]
+    public Task<DeleteEntityResponse> DeleteYear([FromBody] DeleteYearRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.DeleteYearAsync(request, cancellationToken);
+    }
+
     [HttpGet("hierarchy-mappings")]
     public Task<HierarchyMappingResponse> GetHierarchyMappings(CancellationToken cancellationToken)
     {
         return _planningService.GetHierarchyMappingsAsync(cancellationToken);
     }
 
-    [HttpPost("hierarchy-mappings/categories")]
-    public Task<HierarchyMappingResponse> AddHierarchyCategory([FromBody] AddHierarchyCategoryRequest request, CancellationToken cancellationToken)
+    [HttpPost("hierarchy-mappings/departments")]
+    public Task<HierarchyMappingResponse> AddHierarchyDepartment([FromBody] AddHierarchyDepartmentRequest request, CancellationToken cancellationToken)
     {
-        return _planningService.AddHierarchyCategoryAsync(request, cancellationToken);
+        return _planningService.AddHierarchyDepartmentAsync(request, cancellationToken);
     }
 
-    [HttpPost("hierarchy-mappings/subcategories")]
-    public Task<HierarchyMappingResponse> AddHierarchySubcategory([FromBody] AddHierarchySubcategoryRequest request, CancellationToken cancellationToken)
+    [HttpPost("hierarchy-mappings/classes")]
+    public Task<HierarchyMappingResponse> AddHierarchyClass([FromBody] AddHierarchyClassRequest request, CancellationToken cancellationToken)
     {
-        return _planningService.AddHierarchySubcategoryAsync(request, cancellationToken);
+        return _planningService.AddHierarchyClassAsync(request, cancellationToken);
     }
 
     [HttpPost("imports/workbook")]
     [RequestSizeLimit(10_000_000)]
     public async Task<ImportWorkbookResponse> ImportWorkbook(
         [FromForm] long scenarioVersionId,
-        [FromForm] long measureId,
         [FromForm] IFormFile file,
         CancellationToken cancellationToken)
     {
         await using var stream = file.OpenReadStream();
         return await _planningService.ImportWorkbookAsync(
             scenarioVersionId,
-            measureId,
             stream,
             file.FileName,
             User.Identity?.Name ?? "demo.user",
             cancellationToken);
+    }
+
+    [HttpGet("exports/workbook")]
+    public async Task<IActionResult> ExportWorkbook([FromQuery] long scenarioVersionId = 1, CancellationToken cancellationToken = default)
+    {
+        var result = await _planningService.ExportWorkbookAsync(scenarioVersionId, cancellationToken);
+        return File(result.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", result.FileName);
     }
 
     [HttpPost("test/reset")]

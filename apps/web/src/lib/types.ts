@@ -7,12 +7,23 @@ export type GridCell = {
   cellKind: string;
 };
 
+export type GridMeasure = {
+  measureId: number;
+  label: string;
+  decimalPlaces: number;
+  derivedAtAggregateLevels: boolean;
+};
+
 export type GridPeriod = {
   timePeriodId: number;
   label: string;
   grain: "year" | "month";
   parentTimePeriodId: number | null;
   sortOrder: number;
+};
+
+export type GridPeriodCell = {
+  measures: Record<number, GridCell>;
 };
 
 export type GridRow = {
@@ -23,8 +34,8 @@ export type GridRow = {
   level: number;
   path: string[];
   isLeaf: boolean;
-  cells: Record<number, GridCell>;
-  structureRole?: "store" | "category" | "subcategory" | "virtual";
+  cells: Record<number, GridPeriodCell>;
+  structureRole?: "store" | "department" | "class" | "virtual";
   bindingStoreId?: number | null;
   bindingProductNodeId?: number | null;
   splashRoots?: Array<{
@@ -35,7 +46,7 @@ export type GridRow = {
 
 export type GridSliceResponse = {
   scenarioVersionId: number;
-  measureId: number;
+  measures: GridMeasure[];
   periods: GridPeriod[];
   rows: GridRow[];
 };
@@ -87,18 +98,36 @@ export type LockCellsRequest = {
 
 export type AddRowRequest = {
   scenarioVersionId: number;
-  measureId: number;
-  level: "store" | "category" | "subcategory";
+  level: "store" | "department" | "class";
   parentProductNodeId: number | null;
   label: string;
   copyFromStoreId: number | null;
 };
 
-export type HierarchyCategory = {
-  categoryLabel: string;
-  subcategoryLabels: string[];
+export type DeleteRowRequest = {
+  scenarioVersionId: number;
+  productNodeId: number;
+};
+
+export type DeleteYearRequest = {
+  scenarioVersionId: number;
+  yearTimePeriodId: number;
+};
+
+export type ImportWorkbookResponse = {
+  rowsProcessed: number;
+  cellsUpdated: number;
+  rowsCreated: number;
+  status: string;
+  exceptionFileName?: string | null;
+  exceptionWorkbookBase64?: string | null;
+};
+
+export type HierarchyDepartment = {
+  departmentLabel: string;
+  classLabels: string[];
 };
 
 export type HierarchyMappingResponse = {
-  categories: HierarchyCategory[];
+  departments: HierarchyDepartment[];
 };

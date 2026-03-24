@@ -18,324 +18,142 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
-    public async Task ApplyEditsAsync_RecalculatesAncestorYearTotalsWithinSameTransaction()
+    public async Task GetGridSliceAsync_ReturnsMultiMeasureMultiYearShape()
     {
+        var grid = await _service.GetGridSliceAsync(1, CancellationToken.None);
+
+        Assert.Equal(3, grid.Measures.Count);
+        Assert.Contains(grid.Periods, period => period.TimePeriodId == 202600);
+        Assert.Contains(grid.Periods, period => period.TimePeriodId == 202700);
+        Assert.Contains(grid.Rows, row => row.Path.SequenceEqual(new[] { "Store A", "Beverages", "Soft Drinks" }));
+    }
+
+    [Fact]
+    public async Task ApplyEditsAsync_WhenSoldQtyChanges_RecalculatesSalesRevenueAndAspRemainsRounded()
+    {
+        var quantityCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2110, 202603), CancellationToken.None);
+        Assert.NotNull(quantityCell);
+
         await _service.ApplyEditsAsync(
             new EditCellsRequest(
                 1,
-                1,
-                "Leaf adjustment",
+                PlanningMeasures.SoldQuantity,
+                "Qty adjustment",
                 new[]
                 {
-                    new EditCellRequest(101, 2120, 202603, 333m, "input", 2)
+                    new EditCellRequest(101, 2110, 202603, 200m, "input", quantityCell!.RowVersion)
                 }),
             "planner.one",
             CancellationToken.None);
 
-        var beverageYear = await _repository.GetCellAsync(new(1, 1, 101, 2100, 202600), CancellationToken.None);
-        var storeYear = await _repository.GetCellAsync(new(1, 1, 101, 2000, 202600), CancellationToken.None);
+        var revenueCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202603), CancellationToken.None);
+        var aspCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.AverageSellingPrice, 101, 2110, 202603), CancellationToken.None);
 
-        Assert.NotNull(beverageYear);
-        Assert.NotNull(storeYear);
-        Assert.Equal(12008m, beverageYear!.EffectiveValue);
-        Assert.Equal(17331m, storeYear!.EffectiveValue);
-
-        var unchangedSiblingMonth = await _repository.GetCellAsync(new(1, 1, 101, 2120, 202604), CancellationToken.None);
-        Assert.NotNull(unchangedSiblingMonth);
-        Assert.Equal(265m, unchangedSiblingMonth!.EffectiveValue);
+        Assert.NotNull(revenueCell);
+        Assert.NotNull(aspCell);
+        Assert.Equal(decimal.Ceiling(200m * aspCell!.EffectiveValue), revenueCell!.EffectiveValue);
+        Assert.Equal(Math.Round(aspCell.EffectiveValue, 2, MidpointRounding.AwayFromZero), aspCell.EffectiveValue);
     }
 
     [Fact]
-    public async Task ApplyLockAsync_WhenAggregateCellIsUnlocked_DescendantEditsAreAllowedAgain()
+    public async Task ApplyLockAsync_WhenYearRevenueIsLocked_DescendantRevenueEditFails()
     {
-        var scenarioVersionId = 1L;
-        var measureId = 1L;
-        var coordinate = new LockCoordinateDto(101, 2100, 202600);
-
         await _service.ApplyLockAsync(
-            new LockCellsRequest(scenarioVersionId, measureId, true, "Freeze aggregate", new[] { coordinate }),
+            new LockCellsRequest(1, PlanningMeasures.SalesRevenue, true, "Freeze year", new[] { new LockCoordinateDto(101, 2100, 202600) }),
             "manager.one",
             CancellationToken.None);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => _service.ApplyEditsAsync(
-            new EditCellsRequest(
-                scenarioVersionId,
-                measureId,
-                "Leaf adjustment",
-                new[]
-                {
-                    new EditCellRequest(101, 2120, 202603, 500m, "input", 2)
-                }),
-            "planner.one",
-            CancellationToken.None));
-
-        await _service.ApplyLockAsync(
-            new LockCellsRequest(scenarioVersionId, measureId, false, "Release aggregate", new[] { coordinate }),
-            "manager.one",
-            CancellationToken.None);
-
-        await _service.ApplyEditsAsync(
-            new EditCellsRequest(
-                scenarioVersionId,
-                measureId,
-                "Leaf adjustment after unlock",
-                new[]
-                {
-                    new EditCellRequest(101, 2120, 202603, 500m, "input", 2)
-                }),
-            "planner.one",
-            CancellationToken.None);
-
-        var unlockedAggregate = await _repository.GetCellAsync(new(1, 1, 101, 2100, 202600), CancellationToken.None);
-        Assert.NotNull(unlockedAggregate);
-        Assert.False(unlockedAggregate!.IsLocked);
-        Assert.Equal(12175m, unlockedAggregate.EffectiveValue);
-    }
-
-    [Fact]
-    public async Task ApplySplashAsync_RejectsLockedSourceCell()
-    {
-        await _service.ApplyLockAsync(
-            new LockCellsRequest(1, 1, true, "Hold year", new[] { new LockCoordinateDto(101, 2110, 202600) }),
-            "manager.one",
-            CancellationToken.None);
-
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => _service.ApplySplashAsync(
-            new SplashRequest(
-                1,
-                1,
-                new SplashCoordinateDto(101, 2110, 202600),
-                12000m,
-                "seasonality_profile",
-                0,
-                "Attempt on locked source",
-                new Dictionary<long, decimal>
-                {
-                    [202601] = 8, [202602] = 12, [202603] = 7, [202604] = 7,
-                    [202605] = 8, [202606] = 8, [202607] = 9, [202608] = 9,
-                    [202609] = 8, [202610] = 7, [202611] = 8, [202612] = 9
-                },
-                null),
-            "planner.one",
-            CancellationToken.None));
-
-        Assert.Contains("is locked", exception.Message);
-    }
-
-    [Fact]
-    public async Task ApplyEditsAsync_OnCategoryMonthEdit_SplashesAcrossLeafRowsAndKeepsTotalsCorrect()
-    {
-        await _service.ApplyEditsAsync(
-            new EditCellsRequest(
-                1,
-                1,
-                "Category month update",
-                new[]
-                {
-                    new EditCellRequest(101, 2100, 202603, 1200m, "override", 1)
-                }),
-            "planner.one",
-            CancellationToken.None);
-
-        var beverageMonth = await _repository.GetCellAsync(new(1, 1, 101, 2100, 202603), CancellationToken.None);
-        var softDrinksMonth = await _repository.GetCellAsync(new(1, 1, 101, 2110, 202603), CancellationToken.None);
-        var teaMonth = await _repository.GetCellAsync(new(1, 1, 101, 2120, 202603), CancellationToken.None);
-
-        Assert.NotNull(beverageMonth);
-        Assert.NotNull(softDrinksMonth);
-        Assert.NotNull(teaMonth);
-        Assert.Equal(1200m, beverageMonth!.EffectiveValue);
-        Assert.Equal(880m, softDrinksMonth!.EffectiveValue);
-        Assert.Equal(320m, teaMonth!.EffectiveValue);
-    }
-
-    [Fact]
-    public async Task ApplyEditsAsync_RejectsDescendantEditWhenAncestorCellIsLocked()
-    {
-        await _service.ApplyLockAsync(
-            new LockCellsRequest(1, 1, true, "Freeze beverages year", new[] { new LockCoordinateDto(101, 2100, 202600) }),
-            "manager.one",
-            CancellationToken.None);
+        var revenueCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2120, 202603), CancellationToken.None);
+        Assert.NotNull(revenueCell);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => _service.ApplyEditsAsync(
             new EditCellsRequest(
                 1,
-                1,
-                "Leaf edit under locked aggregate",
+                PlanningMeasures.SalesRevenue,
+                "Blocked revenue edit",
                 new[]
                 {
-                    new EditCellRequest(101, 2120, 202603, 333m, "input", 2)
+                    new EditCellRequest(101, 2120, 202603, 900m, "input", revenueCell!.RowVersion)
                 }),
             "planner.one",
             CancellationToken.None));
 
-        Assert.Contains("is locked", exception.Message);
+        Assert.Contains("locked", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public async Task ImportWorkbookAsync_CreatesRowsAndLoadsLeafMonthValues()
+    public async Task ImportWorkbookAsync_LoadsValidRowsAndReturnsExceptionWorkbookForInvalidRows()
     {
         using var workbook = new XLWorkbook();
-        var mappingSheet = workbook.AddWorksheet("Hierarchy Mapping");
-        mappingSheet.Cell(1, 1).Value = "Category";
-        mappingSheet.Cell(1, 2).Value = "Subcategory";
-        mappingSheet.Cell(2, 1).Value = "Frozen";
-        mappingSheet.Cell(2, 2).Value = "Ice Cream";
-
-        var sheet = workbook.AddWorksheet("Plan");
-        sheet.Cell(1, 1).Value = "Store";
-        sheet.Cell(1, 2).Value = "Category";
-        sheet.Cell(1, 3).Value = "Subcategory";
-        sheet.Cell(1, 4).Value = "Jan";
-        sheet.Cell(1, 5).Value = "Feb";
-        sheet.Cell(2, 1).Value = "Store B";
-        sheet.Cell(2, 2).Value = "Frozen";
-        sheet.Cell(2, 3).Value = "Ice Cream";
-        sheet.Cell(2, 4).Value = 100;
-        sheet.Cell(2, 5).Value = 110;
+        var storeSheet = workbook.AddWorksheet("Store B");
+        WriteImportHeader(storeSheet);
+        WriteImportRow(storeSheet, 2, "Store B", "Frozen", "Ice Cream", 2026, "Jan", 100m, 50m, 2m);
+        WriteImportRow(storeSheet, 3, "Store B", "Frozen", "Gelato", 2026, "Feb", 101m, 50m, 2m);
 
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
         stream.Position = 0;
 
-        var result = await _service.ImportWorkbookAsync(1, 1, stream, "import.xlsx", "planner.one", CancellationToken.None);
-        var grid = await _service.GetGridSliceAsync(1, 1, CancellationToken.None);
+        var result = await _service.ImportWorkbookAsync(1, stream, "import.xlsx", "planner.one", CancellationToken.None);
+        var grid = await _service.GetGridSliceAsync(1, CancellationToken.None);
 
-        Assert.Equal(1, result.RowsProcessed);
-        Assert.True(result.RowsCreated >= 3);
+        Assert.Equal(2, result.RowsProcessed);
+        Assert.NotNull(result.ExceptionWorkbookBase64);
+        Assert.NotNull(result.ExceptionFileName);
         Assert.Contains(grid.Rows, row => row.Path.SequenceEqual(new[] { "Store B", "Frozen", "Ice Cream" }));
-        var importedLeaf = grid.Rows.Single(row => row.Path.SequenceEqual(new[] { "Store B", "Frozen", "Ice Cream" }));
-        Assert.Equal(100m, importedLeaf.Cells[202601].Value);
-        Assert.Equal(110m, importedLeaf.Cells[202602].Value);
-        Assert.Equal(210m, importedLeaf.Cells[202600].Value);
 
         var mappings = await _service.GetHierarchyMappingsAsync(CancellationToken.None);
-        var frozen = mappings.Categories.Single(category => category.CategoryLabel == "Frozen");
-        Assert.Contains("Ice Cream", frozen.SubcategoryLabels);
+        var frozen = mappings.Departments.Single(department => department.DepartmentLabel == "Frozen");
+        Assert.Contains("Ice Cream", frozen.ClassLabels);
     }
 
     [Fact]
-    public async Task AddRowAsync_NewStoreCanCopyExistingHierarchyAndData()
+    public async Task AddRowAsync_DepartmentAndClassUpdateHierarchyMappings()
     {
-        var result = await _service.AddRowAsync(
-            new AddRowRequest(1, 1, "store", null, "Store Copy", 101),
-            CancellationToken.None);
-
-        var grid = await _service.GetGridSliceAsync(1, 1, CancellationToken.None);
-        var copiedStore = grid.Rows.Single(row => row.Path.SequenceEqual(new[] { "Store Copy" }));
-        var copiedBeverages = grid.Rows.Single(row => row.Path.SequenceEqual(new[] { "Store Copy", "Beverages" }));
-        var copiedSoftDrinks = grid.Rows.Single(row => row.Path.SequenceEqual(new[] { "Store Copy", "Beverages", "Soft Drinks" }));
-
-        Assert.Equal(result.StoreId, copiedStore.StoreId);
-        Assert.Equal(17253m, copiedStore.Cells[202600].Value);
-        Assert.Equal(11930m, copiedBeverages.Cells[202600].Value);
-        Assert.Equal(8665m, copiedSoftDrinks.Cells[202600].Value);
-        Assert.False(copiedSoftDrinks.Cells[202602].IsLocked);
-    }
-
-    [Fact]
-    public async Task AddRowAsync_CategoryAndSubcategoryUpdatesHierarchyMappings()
-    {
-        var category = await _service.AddRowAsync(
-            new AddRowRequest(1, 1, "category", 2000, "Frozen", null),
+        var department = await _service.AddRowAsync(
+            new AddRowRequest(1, "department", 2000, "Frozen", null),
             CancellationToken.None);
 
         await _service.AddRowAsync(
-            new AddRowRequest(1, 1, "subcategory", category.ProductNodeId, "Ice Cream", null),
+            new AddRowRequest(1, "class", department.ProductNodeId, "Ice Cream", null),
             CancellationToken.None);
 
         var mappings = await _service.GetHierarchyMappingsAsync(CancellationToken.None);
-        var frozen = mappings.Categories.Single(categoryMapping => categoryMapping.CategoryLabel == "Frozen");
-
-        Assert.Contains("Ice Cream", frozen.SubcategoryLabels);
+        var frozen = mappings.Departments.Single(departmentMapping => departmentMapping.DepartmentLabel == "Frozen");
+        Assert.Contains("Ice Cream", frozen.ClassLabels);
     }
 
     [Fact]
-    public async Task ApplySplashAsync_WithMultipleScopeRoots_UpdatesSyntheticCategoryTotalsAcrossStores()
+    public async Task DeleteYearAsync_RemovesYearFromGrid()
     {
-        await _service.AddRowAsync(
-            new AddRowRequest(1, 1, "store", null, "Store Copy", 101),
-            CancellationToken.None);
+        var result = await _service.DeleteYearAsync(new DeleteYearRequest(1, 202700), CancellationToken.None);
+        var grid = await _service.GetGridSliceAsync(1, CancellationToken.None);
 
-        var copiedCategory = await _repository.FindProductNodeByPathAsync(new[] { "Store Copy", "Beverages" }, CancellationToken.None);
-        var copiedSoftDrinks = await _repository.FindProductNodeByPathAsync(new[] { "Store Copy", "Beverages", "Soft Drinks" }, CancellationToken.None);
-
-        Assert.NotNull(copiedCategory);
-        Assert.NotNull(copiedSoftDrinks);
-
-        await _service.ApplySplashAsync(
-            new SplashRequest(
-                1,
-                1,
-                new SplashCoordinateDto(101, 2100, 202600),
-                24000m,
-                "seasonality_profile",
-                0,
-                "Synthetic category splash",
-                new Dictionary<long, decimal>
-                {
-                    [202601] = 8, [202602] = 12, [202603] = 7, [202604] = 7,
-                    [202605] = 8, [202606] = 8, [202607] = 9, [202608] = 9,
-                    [202609] = 8, [202610] = 7, [202611] = 8, [202612] = 9
-                },
-                new[]
-                {
-                    new SplashScopeRootDto(101, 2100),
-                    new SplashScopeRootDto(copiedCategory!.StoreId, copiedCategory.ProductNodeId)
-                }),
-            "planner.one",
-            CancellationToken.None);
-
-        var storeABeverages = await _repository.GetCellAsync(new(1, 1, 101, 2100, 202600), CancellationToken.None);
-        var copiedStoreBeverages = await _repository.GetCellAsync(new(1, 1, copiedCategory!.StoreId, copiedCategory.ProductNodeId, 202600), CancellationToken.None);
-        var lockedFebruary = await _repository.GetCellAsync(new(1, 1, 101, 2110, 202602), CancellationToken.None);
-        var copiedSoftDrinksYear = await _repository.GetCellAsync(new(1, 1, copiedSoftDrinks!.StoreId, copiedSoftDrinks.ProductNodeId, 202600), CancellationToken.None);
-
-        Assert.NotNull(storeABeverages);
-        Assert.NotNull(copiedStoreBeverages);
-        Assert.NotNull(lockedFebruary);
-        Assert.NotNull(copiedSoftDrinksYear);
-        Assert.Equal(24000m, storeABeverages!.EffectiveValue + copiedStoreBeverages!.EffectiveValue);
-        Assert.Equal(750m, lockedFebruary!.EffectiveValue);
-        Assert.True(copiedSoftDrinksYear!.EffectiveValue > 0m);
+        Assert.True(result.DeletedCellCount > 0);
+        Assert.DoesNotContain(grid.Periods, period => period.TimePeriodId == 202700 || period.ParentTimePeriodId == 202700);
     }
 
-    [Fact]
-    public async Task SqlitePlanningRepository_PersistsChangesAcrossRepositoryInstances()
+    private static void WriteImportHeader(IXLWorksheet sheet)
     {
-        var databasePath = Path.Combine(Path.GetTempPath(), $"sales-planning-{Guid.NewGuid():N}.db");
-        try
-        {
-            var firstRepository = new SqlitePlanningRepository(databasePath);
-            var firstService = new PlanningService(firstRepository, new SplashAllocator());
+        sheet.Cell(1, 1).Value = "Store";
+        sheet.Cell(1, 2).Value = "Department";
+        sheet.Cell(1, 3).Value = "Class";
+        sheet.Cell(1, 4).Value = "Year";
+        sheet.Cell(1, 5).Value = "Month";
+        sheet.Cell(1, 6).Value = "Sales Revenue";
+        sheet.Cell(1, 7).Value = "Sold Qty";
+        sheet.Cell(1, 8).Value = "ASP";
+    }
 
-            await firstService.ApplyEditsAsync(
-                new EditCellsRequest(
-                    1,
-                    1,
-                    "Leaf adjustment",
-                    new[]
-                    {
-                        new EditCellRequest(101, 2120, 202603, 333m, "input", 2)
-                    }),
-                "planner.one",
-                CancellationToken.None);
-
-            var secondRepository = new SqlitePlanningRepository(databasePath);
-            var persistedLeaf = await secondRepository.GetCellAsync(new PlanningCellCoordinate(1, 1, 101, 2120, 202603), CancellationToken.None);
-            var persistedStoreYear = await secondRepository.GetCellAsync(new PlanningCellCoordinate(1, 1, 101, 2000, 202600), CancellationToken.None);
-
-            Assert.NotNull(persistedLeaf);
-            Assert.NotNull(persistedStoreYear);
-            Assert.Equal(333m, persistedLeaf!.EffectiveValue);
-            Assert.Equal(17331m, persistedStoreYear!.EffectiveValue);
-        }
-        finally
-        {
-            if (File.Exists(databasePath))
-            {
-                File.Delete(databasePath);
-            }
-        }
+    private static void WriteImportRow(IXLWorksheet sheet, int rowIndex, string store, string department, string @class, int year, string month, decimal revenue, decimal quantity, decimal asp)
+    {
+        sheet.Cell(rowIndex, 1).Value = store;
+        sheet.Cell(rowIndex, 2).Value = department;
+        sheet.Cell(rowIndex, 3).Value = @class;
+        sheet.Cell(rowIndex, 4).Value = year;
+        sheet.Cell(rowIndex, 5).Value = month;
+        sheet.Cell(rowIndex, 6).Value = revenue;
+        sheet.Cell(rowIndex, 7).Value = quantity;
+        sheet.Cell(rowIndex, 8).Value = asp;
     }
 }

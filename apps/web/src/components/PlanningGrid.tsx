@@ -1,20 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   type CellClickedEvent,
-  ClientSideRowModelModule,
-  CommunityFeaturesModule,
-  ModuleRegistry,
   type CellContextMenuEvent,
   type CellEditRequestEvent,
   type CellFocusedEvent,
+  ClientSideRowModelModule,
+  CommunityFeaturesModule,
+  ModuleRegistry,
   type ColDef,
+  type ColGroupDef,
   type RowClickedEvent,
   type SelectionChangedEvent,
   type ValueFormatterParams,
 } from "ag-grid-community";
 import "ag-grid-enterprise";
 import { AgGridReact } from "ag-grid-react";
-import type { GridRow, GridSliceResponse } from "../lib/types";
+import type { GridMeasure, GridPeriod, GridRow, GridSliceResponse } from "../lib/types";
 import "ag-grid-community/styles/ag-grid.css";
 import "ag-grid-community/styles/ag-theme-quartz.css";
 
@@ -25,13 +26,15 @@ ModuleRegistry.registerModules([
 
 type PlanningGridProps = {
   data: GridSliceResponse;
-  onCellEdit: (row: GridRow, timePeriodId: number, newValue: number) => Promise<void>;
-  onToggleLock: (row: GridRow, timePeriodId: number, locked: boolean) => Promise<void>;
-  onSplashYear: (row: GridRow, yearValue: number) => Promise<void>;
-  onAddRow: (level: "store" | "category" | "subcategory", parentRow: GridRow | null) => Promise<void>;
+  selectedYearId: number | null;
+  onSelectedYearChange: (yearTimePeriodId: number | null) => void;
+  onCellEdit: (row: GridRow, timePeriodId: number, measureId: number, newValue: number) => Promise<void>;
+  onToggleLock: (row: GridRow, timePeriodId: number, measureId: number, locked: boolean) => Promise<void>;
+  onSplashYear: (row: GridRow, yearTimePeriodId: number, measureId: number) => Promise<void>;
+  onAddRow: (level: "store" | "department" | "class", parentRow: GridRow | null) => Promise<void>;
+  onDeleteRow: (row: GridRow | null) => Promise<void>;
   onImportWorkbook: (file: File) => Promise<void>;
   sheetLabel: string;
-  measureLabel: string;
 };
 
 type GridRowView = GridRow & {
@@ -47,25 +50,36 @@ type ContextMenuState = {
   y: number;
   rowKey: RowKey;
   timePeriodId: number;
+  measureId: number;
 };
 
-function formatValue(params: ValueFormatterParams<GridRowView>): string {
+function formatValue(params: ValueFormatterParams<GridRowView>, measure: GridMeasure): string {
   const value = Number(params.value ?? 0);
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
+  return new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: measure.decimalPlaces,
+    maximumFractionDigits: measure.decimalPlaces,
+  }).format(value);
 }
 
-export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onAddRow, onImportWorkbook, sheetLabel, measureLabel }: PlanningGridProps) {
+export function PlanningGrid({
+  data,
+  selectedYearId,
+  onSelectedYearChange,
+  onCellEdit,
+  onToggleLock,
+  onSplashYear,
+  onAddRow,
+  onDeleteRow,
+  onImportWorkbook,
+  sheetLabel,
+}: PlanningGridProps) {
   const [selectedRowKey, setSelectedRowKey] = useState<RowKey | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const gridRef = useRef<AgGridReact<GridRowView> | null>(null);
 
-  const monthPeriods = useMemo(
-    () => data.periods.filter((period) => period.grain === "month"),
-    [data.periods],
-  );
-  const yearPeriod = useMemo(
-    () => data.periods.find((period) => period.grain === "year"),
+  const yearPeriods = useMemo(
+    () => data.periods.filter((period) => period.grain === "year"),
     [data.periods],
   );
 
@@ -82,74 +96,70 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
     return lookup;
   }, [rowData]);
 
-  const selectedRow = selectedRowKey
-    ? rowLookup.get(selectedRowKey.id) ?? null
-    : null;
-  const contextRow = contextMenu
-    ? rowLookup.get(contextMenu.rowKey.id) ?? null
-    : null;
-  const canAddCategory = selectedRow?.structureRole === "store";
-  const canAddSubcategory = selectedRow?.structureRole === "category";
-  const canSplashSelectedRow = Boolean(selectedRow?.splashRoots && selectedRow.splashRoots.length > 0);
+  const selectedRow = selectedRowKey ? rowLookup.get(selectedRowKey.id) ?? null : null;
+  const contextRow = contextMenu ? rowLookup.get(contextMenu.rowKey.id) ?? null : null;
+  const canAddDepartment = selectedRow?.structureRole === "store";
+  const canAddClass = selectedRow?.structureRole === "department";
+  const canDeleteSelectedRow = Boolean(selectedRow?.bindingProductNodeId);
+  const canSplashSelectedRow = Boolean(selectedRow?.splashRoots?.length && selectedYearId);
 
   const syncSelectedRow = (row: GridRowView | null | undefined) => {
-    setSelectedRowKey(
-      row
-        ? { id: getRowKey(row) }
-        : null,
-    );
+    setSelectedRowKey(row ? { id: getRowKey(row) } : null);
   };
 
-  const columnDefs = useMemo<ColDef<GridRowView>[]>(() => {
-    const isLeafMonthEditable = (row: GridRowView | undefined, timePeriodId: number) =>
-      Boolean(
-        row?.bindingProductNodeId &&
-        row.structureRole === "subcategory" &&
-        monthPeriods.some((period) => period.timePeriodId === timePeriodId) &&
-        !row.cells[timePeriodId]?.isLocked,
-      );
-    const isTopDownEditable = (row: GridRowView | undefined, timePeriodId: number) =>
-      Boolean(
-        row?.splashRoots?.length &&
-        !isLeafMonthEditable(row, timePeriodId) &&
-        !row?.cells[timePeriodId]?.isLocked,
-      );
+  const columnDefs = useMemo<(ColDef<GridRowView> | ColGroupDef<GridRowView>)[]>(() => {
+    const buildMeasureColumn = (period: GridPeriod, measure: GridMeasure): ColDef<GridRowView> => {
+      const isLeafMonthEditable = (row: GridRowView | undefined) =>
+        Boolean(
+          row?.bindingProductNodeId &&
+          row.structureRole === "class" &&
+          period.grain === "month" &&
+          !row.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked,
+        );
+      const isTopDownEditable = (row: GridRowView | undefined) =>
+        Boolean(
+          row?.splashRoots?.length &&
+          !isLeafMonthEditable(row) &&
+          !row?.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked,
+        );
 
-    const yearCol: ColDef<GridRowView> = {
-      headerName: yearPeriod?.label ?? "Year",
-      colId: yearPeriod ? String(yearPeriod.timePeriodId) : "year",
-      editable: (params) => Boolean(yearPeriod && isTopDownEditable(params.data, yearPeriod.timePeriodId)),
-      valueGetter: (params) => yearPeriod ? params.data?.cells[yearPeriod.timePeriodId]?.value ?? 0 : 0,
-      valueFormatter: formatValue,
-      width: 112,
-      cellClassRules: {
-        "cell-locked": (params) => Boolean(yearPeriod && params.data?.cells[yearPeriod.timePeriodId]?.isLocked),
-        "cell-calculated": (params) => Boolean(yearPeriod && params.data?.cells[yearPeriod.timePeriodId]?.isCalculated),
-        "cell-override": (params) => Boolean(yearPeriod && params.data?.cells[yearPeriod.timePeriodId]?.isOverride),
-      },
+      return {
+        headerName: measure.label,
+        colId: `${period.timePeriodId}:${measure.measureId}`,
+        editable: (params) => isLeafMonthEditable(params.data) || isTopDownEditable(params.data),
+        valueGetter: (params) => params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.value ?? 0,
+        valueFormatter: (params) => formatValue(params, measure),
+        width: 112,
+        cellClassRules: {
+          "cell-locked": (params) => Boolean(params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked),
+          "cell-calculated": (params) => Boolean(params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.isCalculated),
+          "cell-override": (params) => Boolean(params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.isOverride),
+        },
+      };
     };
 
-    const monthCols: ColDef<GridRowView>[] = monthPeriods.map((period) => ({
-      headerName: period.label,
-      colId: String(period.timePeriodId),
-      editable: (params) => isLeafMonthEditable(params.data, period.timePeriodId) || isTopDownEditable(params.data, period.timePeriodId),
-      valueGetter: (params) => params.data?.cells[period.timePeriodId]?.value ?? 0,
-      valueFormatter: formatValue,
-      width: 96,
-      cellClassRules: {
-        "cell-locked": (params) => Boolean(params.data?.cells[period.timePeriodId]?.isLocked),
-        "cell-calculated": (params) => Boolean(params.data?.cells[period.timePeriodId]?.isCalculated),
-        "cell-override": (params) => Boolean(params.data?.cells[period.timePeriodId]?.isOverride),
-      },
-    }));
+    return yearPeriods.map((yearPeriod) => {
+      const monthPeriods = data.periods
+        .filter((period) => period.parentTimePeriodId === yearPeriod.timePeriodId)
+        .sort((left, right) => left.sortOrder - right.sortOrder);
 
-    return [
-      {
-        headerName: "Revenue Plan",
-        children: [yearCol, ...monthCols],
-      },
-    ];
-  }, [monthPeriods, yearPeriod]);
+      return {
+        headerName: yearPeriod.label,
+        groupId: `year-${yearPeriod.timePeriodId}`,
+        children: [
+          {
+            headerName: "Total",
+            children: data.measures.map((measure) => buildMeasureColumn(yearPeriod, measure)),
+          },
+          ...monthPeriods.map<ColGroupDef<GridRowView>>((monthPeriod) => ({
+            headerName: monthPeriod.label,
+            columnGroupShow: "open",
+            children: data.measures.map((measure) => buildMeasureColumn(monthPeriod, measure)),
+          })),
+        ],
+      };
+    });
+  }, [data.measures, data.periods, yearPeriods]);
 
   const defaultColDef = useMemo<ColDef<GridRowView>>(
     () => ({
@@ -188,17 +198,19 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
     }
 
     api.forEachNode((node) => {
-      node.setExpanded((node.level ?? 0) < 3);
+      node.setExpanded((node.level ?? 0) < 2);
     });
   }, [rowData]);
 
   const handleCellContextMenu = (event: CellContextMenuEvent<GridRowView>) => {
     event.event?.preventDefault();
     const row = event.data;
-    const timePeriodId = Number(event.column?.getColId() ?? 0);
     const mouseEvent = event.event instanceof MouseEvent ? event.event : null;
+    const [timePeriodIdRaw, measureIdRaw] = String(event.column?.getColId() ?? "").split(":");
+    const timePeriodId = Number(timePeriodIdRaw);
+    const measureId = Number(measureIdRaw);
 
-    if (!row || !timePeriodId || !mouseEvent) {
+    if (!row || !timePeriodId || !measureId || !mouseEvent) {
       setContextMenu(null);
       return;
     }
@@ -208,16 +220,18 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
       y: mouseEvent.clientY,
       rowKey: { id: getRowKey(row) },
       timePeriodId,
+      measureId,
     });
   };
 
   const copyCurrentCell = async () => {
-    if (!contextMenu) {
+    if (!contextMenu || !navigator.clipboard) {
+      setContextMenu(null);
       return;
     }
 
-    const value = contextRow?.cells[contextMenu.timePeriodId]?.value;
-    if (value === undefined || value === null || !navigator.clipboard) {
+    const value = contextRow?.cells[contextMenu.timePeriodId]?.measures[contextMenu.measureId]?.value;
+    if (value === undefined || value === null) {
       setContextMenu(null);
       return;
     }
@@ -227,12 +241,14 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
   };
 
   const handleCellEditRequest = async (event: CellEditRequestEvent<GridRowView>) => {
-    const timePeriodId = Number(event.column.getColId());
-    if (!event.data || !Number.isFinite(Number(event.newValue))) {
+    const [timePeriodIdRaw, measureIdRaw] = event.column.getColId().split(":");
+    const timePeriodId = Number(timePeriodIdRaw);
+    const measureId = Number(measureIdRaw);
+    if (!event.data || !Number.isFinite(Number(event.newValue)) || !timePeriodId || !measureId) {
       return;
     }
 
-    await onCellEdit(event.data, timePeriodId, Number(event.newValue));
+    await onCellEdit(event.data, timePeriodId, measureId, Number(event.newValue));
   };
 
   const handleSelectionChanged = (event: SelectionChangedEvent<GridRowView>) => {
@@ -241,6 +257,12 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
 
   const handleCellClicked = (event: CellClickedEvent<GridRowView>) => {
     syncSelectedRow(event.data);
+    const [timePeriodIdRaw] = String(event.column?.getColId() ?? "").split(":");
+    const timePeriodId = Number(timePeriodIdRaw);
+    const yearPeriod = data.periods.find((period) => period.timePeriodId === timePeriodId || period.timePeriodId === data.periods.find((candidate) => candidate.timePeriodId === timePeriodId)?.parentTimePeriodId);
+    if (yearPeriod) {
+      onSelectedYearChange(yearPeriod.grain === "year" ? yearPeriod.timePeriodId : yearPeriod.parentTimePeriodId);
+    }
   };
 
   const handleRowClicked = (event: RowClickedEvent<GridRowView>) => {
@@ -256,6 +278,34 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
     syncSelectedRow(row);
   };
 
+  const expandSelectedRow = () => {
+    if (!selectedRow) {
+      return;
+    }
+
+    gridRef.current?.api.getRowNode(getRowKey(selectedRow))?.setExpanded(true);
+  };
+
+  const collapseSelectedRow = () => {
+    if (!selectedRow) {
+      return;
+    }
+
+    gridRef.current?.api.getRowNode(getRowKey(selectedRow))?.setExpanded(false);
+  };
+
+  const setAllRowExpansion = (expanded: boolean) => {
+    gridRef.current?.api.forEachNode((node) => {
+      node.setExpanded(expanded);
+    });
+  };
+
+  const setAllYearGroups = (opened: boolean) => {
+    yearPeriods.forEach((year) => {
+      gridRef.current?.api.setColumnGroupOpened(`year-${year.timePeriodId}`, opened);
+    });
+  };
+
   return (
     <div className="planning-shell">
       <div className="planning-toolbar">
@@ -265,53 +315,55 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
         </div>
         <div>
           <div className="eyebrow">Scenario</div>
-          <strong>{`Budget FY26 / ${measureLabel}`}</strong>
+          <strong>Budget Multi-Year</strong>
         </div>
-        <div className="toolbar-actions">
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => void onAddRow("store", null)}
-          >
+        <div className="toolbar-actions toolbar-actions-wrap">
+          <button type="button" className="secondary-button" onClick={() => void onAddRow("store", null)}>
             Add Store
           </button>
-          <button
-            type="button"
-            className="secondary-button"
-            disabled={!canAddCategory}
-            onClick={() => void onAddRow("category", selectedRow)}
-          >
-            Add Category
+          <button type="button" className="secondary-button" disabled={!canAddDepartment} onClick={() => void onAddRow("department", selectedRow)}>
+            Add Department
           </button>
-          <button
-            type="button"
-            className="secondary-button"
-            disabled={!canAddSubcategory}
-            onClick={() => void onAddRow("subcategory", selectedRow)}
-          >
-            Add Subcategory
+          <button type="button" className="secondary-button" disabled={!canAddClass} onClick={() => void onAddRow("class", selectedRow)}>
+            Add Class
           </button>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => importInputRef.current?.click()}
-          >
+          <button type="button" className="secondary-button danger-button" disabled={!canDeleteSelectedRow} onClick={() => void onDeleteRow(selectedRow)}>
+            Delete Selected Row
+          </button>
+          <button type="button" className="secondary-button" onClick={() => importInputRef.current?.click()}>
             Upload Workbook
           </button>
           <button
             type="button"
             className="secondary-button"
-            disabled={!canSplashSelectedRow}
+            disabled={!canSplashSelectedRow || !selectedYearId}
             onClick={() => {
-              if (!selectedRow) {
+              if (!selectedRow || !selectedYearId) {
                 return;
               }
 
-              const yearValue = selectedRow.cells[202600]?.value ?? 0;
-              void onSplashYear(selectedRow, yearValue);
+              void Promise.all(data.measures.map((measure) => onSplashYear(selectedRow, selectedYearId, measure.measureId)));
             }}
           >
-            Splash selected row
+            Splash Selected Year
+          </button>
+          <button type="button" className="secondary-button" disabled={!selectedRow} onClick={expandSelectedRow}>
+            Expand
+          </button>
+          <button type="button" className="secondary-button" disabled={!selectedRow} onClick={collapseSelectedRow}>
+            Collapse
+          </button>
+          <button type="button" className="secondary-button" onClick={() => setAllRowExpansion(true)}>
+            Expand All
+          </button>
+          <button type="button" className="secondary-button" onClick={() => setAllRowExpansion(false)}>
+            Collapse All
+          </button>
+          <button type="button" className="secondary-button" onClick={() => setAllYearGroups(true)}>
+            Expand Years
+          </button>
+          <button type="button" className="secondary-button" onClick={() => setAllYearGroups(false)}>
+            Collapse Years
           </button>
           <input
             ref={importInputRef}
@@ -339,8 +391,8 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
           defaultColDef={defaultColDef}
           treeData
           animateRows
-          getDataPath={(data) => data.__path}
-          groupDefaultExpanded={3}
+          getDataPath={(dataRow) => dataRow.__path}
+          groupDefaultExpanded={1}
           getRowId={(params) => getRowKey(params.data)}
           suppressAggFuncInHeader
           enableCellTextSelection
@@ -356,9 +408,9 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
           onCellContextMenu={handleCellContextMenu}
           onCellEditRequest={handleCellEditRequest}
           autoGroupColumnDef={{
-            headerName: "Store / Category / Subcategory",
+            headerName: "Store / Department / Class",
             pinned: "left",
-            minWidth: 280,
+            minWidth: 320,
             cellRendererParams: {
               suppressCount: true,
             },
@@ -381,15 +433,15 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
                   return;
                 }
 
-                const cell = contextRow.cells[contextMenu.timePeriodId];
+                const cell = contextRow.cells[contextMenu.timePeriodId]?.measures[contextMenu.measureId];
                 if (contextRow.splashRoots?.length) {
-                  void onToggleLock(contextRow, contextMenu.timePeriodId, !cell?.isLocked);
+                  void onToggleLock(contextRow, contextMenu.timePeriodId, contextMenu.measureId, !cell?.isLocked);
                 }
                 setContextMenu(null);
               }}
               disabled={!contextRow?.splashRoots?.length}
             >
-              {contextRow?.cells[contextMenu.timePeriodId]?.isLocked ? "Unlock cell" : "Lock cell"}
+              {contextRow?.cells[contextMenu.timePeriodId]?.measures[contextMenu.measureId]?.isLocked ? "Unlock cell" : "Lock cell"}
             </button>
             <button
               type="button"
@@ -399,15 +451,13 @@ export function PlanningGrid({ data, onCellEdit, onToggleLock, onSplashYear, onA
                   return;
                 }
 
-                if (contextRow.splashRoots?.length) {
-                  const total = contextRow.cells[202600]?.value ?? 0;
-                  void onSplashYear(contextRow, total);
-                }
+                const yearTimePeriodId = data.periods.find((period) => period.timePeriodId === contextMenu.timePeriodId)?.parentTimePeriodId ?? contextMenu.timePeriodId;
+                void onSplashYear(contextRow, yearTimePeriodId, contextMenu.measureId);
                 setContextMenu(null);
               }}
               disabled={!contextRow?.splashRoots?.length}
             >
-              Splash from year total
+              Splash current year
             </button>
           </div>
         ) : null}

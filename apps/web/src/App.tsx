@@ -1,18 +1,22 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  downloadBase64Workbook,
+  downloadWorkbookExport,
   getGridSlice,
   getHierarchyMappings,
   postAddRow,
+  postDeleteRow,
+  postDeleteYear,
   postEdit,
-  postHierarchyCategory,
-  postHierarchySubcategory,
+  postHierarchyClass,
+  postHierarchyDepartment,
   postLock,
   postSplash,
   postWorkbookImport,
 } from "./lib/api";
 import { HierarchyMaintenanceSheet } from "./components/HierarchyMaintenanceSheet";
-import type { GridCell, GridRow, GridSliceResponse } from "./lib/types";
+import type { GridCell, GridMeasure, GridRow, GridSliceResponse } from "./lib/types";
 
 const preloadPlanningGrid = () => import("./components/PlanningGrid");
 
@@ -21,56 +25,41 @@ const PlanningGrid = lazy(async () => {
   return { default: module.PlanningGrid };
 });
 
-const seasonalityWeights: Record<number, number> = {
-  202601: 8,
-  202602: 12,
-  202603: 7,
-  202604: 7,
-  202605: 8,
-  202606: 8,
-  202607: 9,
-  202608: 9,
-  202609: 8,
-  202610: 7,
-  202611: 8,
-  202612: 9,
-};
-
-type ActiveView = "planning-store" | "planning-category" | "hierarchy";
-type CategoryLayout = "category-store-subcategory" | "category-subcategory-store";
-type MeasureOption = {
-  id: number;
-  label: string;
-};
-
-const measures: MeasureOption[] = [
-  { id: 1, label: "Sales Revenue" },
-  { id: 2, label: "Sold Qty" },
-];
+type ActiveView = "planning-store" | "planning-department" | "hierarchy";
+type DepartmentLayout = "department-store-class" | "department-class-store";
 
 export default function App() {
   const queryClient = useQueryClient();
   const [lastError, setLastError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ActiveView>("planning-store");
-  const [categoryLayout, setCategoryLayout] = useState<CategoryLayout>("category-store-subcategory");
-  const [activeMeasureId, setActiveMeasureId] = useState<number>(1);
+  const [departmentLayout, setDepartmentLayout] = useState<DepartmentLayout>("department-store-class");
+  const [selectedYearId, setSelectedYearId] = useState<number | null>(null);
 
   useEffect(() => {
     void preloadPlanningGrid();
   }, []);
 
   const gridQuery = useQuery({
-    queryKey: ["grid-slice", 1, activeMeasureId],
-    queryFn: () => getGridSlice(activeMeasureId),
+    queryKey: ["grid-slice", 1],
+    queryFn: () => getGridSlice(),
   });
   const hierarchyQuery = useQuery({
     queryKey: ["hierarchy-mappings"],
     queryFn: getHierarchyMappings,
   });
 
+  useEffect(() => {
+    if (selectedYearId || !gridQuery.data) {
+      return;
+    }
+
+    const firstYear = gridQuery.data.periods.find((period) => period.grain === "year");
+    setSelectedYearId(firstYear?.timePeriodId ?? null);
+  }, [gridQuery.data, selectedYearId]);
+
   const refresh = async () => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["grid-slice", 1, activeMeasureId] }),
+      queryClient.invalidateQueries({ queryKey: ["grid-slice", 1] }),
       queryClient.invalidateQueries({ queryKey: ["hierarchy-mappings"] }),
     ]);
   };
@@ -111,9 +100,45 @@ export default function App() {
     onError: (error: Error) => setLastError(error.message),
   });
 
+  const deleteRowMutation = useMutation({
+    mutationFn: postDeleteRow,
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const deleteYearMutation = useMutation({
+    mutationFn: postDeleteYear,
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
   const importMutation = useMutation({
-    mutationFn: ({ file, scenarioVersionId, measureId }: { file: File; scenarioVersionId: number; measureId: number }) =>
-      postWorkbookImport(scenarioVersionId, measureId, file),
+    mutationFn: ({ file, scenarioVersionId }: { file: File; scenarioVersionId: number }) => postWorkbookImport(scenarioVersionId, file),
+    onSuccess: async (result) => {
+      setLastError(null);
+      if (result.exceptionWorkbookBase64 && result.exceptionFileName) {
+        downloadBase64Workbook(result.exceptionWorkbookBase64, result.exceptionFileName);
+      }
+
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const exportMutation = useMutation({
+    mutationFn: downloadWorkbookExport,
+    onSuccess: () => setLastError(null),
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const addHierarchyDepartmentMutation = useMutation({
+    mutationFn: postHierarchyDepartment,
     onSuccess: async () => {
       setLastError(null);
       await refresh();
@@ -121,18 +146,9 @@ export default function App() {
     onError: (error: Error) => setLastError(error.message),
   });
 
-  const addHierarchyCategoryMutation = useMutation({
-    mutationFn: postHierarchyCategory,
-    onSuccess: async () => {
-      setLastError(null);
-      await refresh();
-    },
-    onError: (error: Error) => setLastError(error.message),
-  });
-
-  const addHierarchySubcategoryMutation = useMutation({
-    mutationFn: ({ categoryLabel, subcategoryLabel }: { categoryLabel: string; subcategoryLabel: string }) =>
-      postHierarchySubcategory(categoryLabel, subcategoryLabel),
+  const addHierarchyClassMutation = useMutation({
+    mutationFn: ({ departmentLabel, classLabel }: { departmentLabel: string; classLabel: string }) =>
+      postHierarchyClass(departmentLabel, classLabel),
     onSuccess: async () => {
       setLastError(null);
       await refresh();
@@ -145,9 +161,12 @@ export default function App() {
     lockMutation.isPending ||
     splashMutation.isPending ||
     addRowMutation.isPending ||
+    deleteRowMutation.isPending ||
+    deleteYearMutation.isPending ||
     importMutation.isPending ||
-    addHierarchyCategoryMutation.isPending ||
-    addHierarchySubcategoryMutation.isPending;
+    exportMutation.isPending ||
+    addHierarchyDepartmentMutation.isPending ||
+    addHierarchyClassMutation.isPending;
 
   const statusText = useMemo(() => {
     if (gridQuery.isLoading || hierarchyQuery.isLoading) {
@@ -167,22 +186,20 @@ export default function App() {
     }
 
     return activeView === "hierarchy"
-      ? "Hierarchy maintenance sheet ready."
-      : "Lock-safe planning grid ready.";
+      ? "Department / Class maintenance sheet ready."
+      : "Multi-year planning grid ready.";
   }, [activeView, gridQuery.isError, gridQuery.isLoading, hierarchyQuery.isError, hierarchyQuery.isLoading, isMutating, lastError]);
-
-  const activeMeasure = measures.find((measure) => measure.id === activeMeasureId) ?? measures[0];
 
   const storeViewData = useMemo(
     () => (gridQuery.data ? buildStoreView(gridQuery.data) : null),
     [gridQuery.data],
   );
-  const categoryViewData = useMemo(
-    () => (storeViewData ? buildCategoryView(storeViewData, categoryLayout) : null),
-    [categoryLayout, storeViewData],
+  const departmentViewData = useMemo(
+    () => (storeViewData ? buildDepartmentView(storeViewData, departmentLayout) : null),
+    [departmentLayout, storeViewData],
   );
 
-  if (!gridQuery.data || !hierarchyQuery.data || !storeViewData || !categoryViewData) {
+  if (!gridQuery.data || !hierarchyQuery.data || !storeViewData || !departmentViewData) {
     return (
       <main className="app-shell">
         <section className="hero">
@@ -192,18 +209,20 @@ export default function App() {
       </main>
     );
   }
-  const activeGridData = activeView === "planning-category" ? categoryViewData : storeViewData;
 
-  const handleCellEdit = async (row: GridRow, timePeriodId: number, newValue: number) => {
-    const cell = row.cells[timePeriodId];
+  const activeGridData = activeView === "planning-department" ? departmentViewData : storeViewData;
+  const yearPeriods = gridQuery.data.periods.filter((period) => period.grain === "year");
+
+  const handleCellEdit = async (row: GridRow, timePeriodId: number, measureId: number, newValue: number) => {
+    const measureCell = row.cells[timePeriodId]?.measures[measureId];
     const period = gridQuery.data.periods.find((item) => item.timePeriodId === timePeriodId);
-    const isLeafMonth = row.structureRole === "subcategory" && period?.grain === "month";
+    const isLeafMonth = row.structureRole === "class" && period?.grain === "month";
     const scopeRoots = row.splashRoots ?? [];
 
     if (isLeafMonth && row.bindingProductNodeId) {
       await editMutation.mutateAsync({
         scenarioVersionId: gridQuery.data.scenarioVersionId,
-        measureId: gridQuery.data.measureId,
+        measureId,
         comment: "Grid edit",
         cells: [
           {
@@ -212,7 +231,7 @@ export default function App() {
             timePeriodId,
             newValue,
             editMode: "input",
-            rowVersion: cell.rowVersion,
+            rowVersion: measureCell?.rowVersion ?? 0,
           },
         ],
       });
@@ -226,21 +245,22 @@ export default function App() {
 
     await splashMutation.mutateAsync({
       scenarioVersionId: gridQuery.data.scenarioVersionId,
-      measureId: gridQuery.data.measureId,
+      measureId,
       sourceCell: {
         storeId: scopeRoots[0].storeId,
         productNodeId: scopeRoots[0].productNodeId,
         timePeriodId,
       },
       totalValue: newValue,
-      method: "existing_plan",
-      roundingScale: 0,
+      method: period?.grain === "year" ? "seasonality_profile" : "existing_plan",
+      roundingScale: measureId === 3 ? 2 : 0,
       comment: "Grid top-down edit",
+      manualWeights: period?.grain === "year" ? buildSeasonalityWeights(gridQuery.data, timePeriodId) : undefined,
       scopeRoots,
     });
   };
 
-  const handleToggleLock = async (row: GridRow, timePeriodId: number, locked: boolean) => {
+  const handleToggleLock = async (row: GridRow, timePeriodId: number, measureId: number, locked: boolean) => {
     const scopeRoots = row.splashRoots ?? [];
     if (scopeRoots.length === 0) {
       setLastError("This row cannot be locked in the current view.");
@@ -249,42 +269,43 @@ export default function App() {
 
     await lockMutation.mutateAsync({
       scenarioVersionId: gridQuery.data.scenarioVersionId,
-      measureId: gridQuery.data.measureId,
+      measureId,
       locked,
       reason: locked ? "Manager review hold" : "Released",
       coordinates: scopeRoots.map((scopeRoot) => ({
-          storeId: scopeRoot.storeId,
-          productNodeId: scopeRoot.productNodeId,
-          timePeriodId,
-        })),
+        storeId: scopeRoot.storeId,
+        productNodeId: scopeRoot.productNodeId,
+        timePeriodId,
+      })),
     });
   };
 
-  const handleSplashYear = async (row: GridRow, yearValue: number) => {
+  const handleSplashYear = async (row: GridRow, yearTimePeriodId: number, measureId: number) => {
     const scopeRoots = row.splashRoots ?? [];
     if (scopeRoots.length === 0) {
       setLastError("This row cannot be splashed in the current view.");
       return;
     }
 
+    const totalValue = row.cells[yearTimePeriodId]?.measures[measureId]?.value ?? 0;
     await splashMutation.mutateAsync({
       scenarioVersionId: gridQuery.data.scenarioVersionId,
-      measureId: gridQuery.data.measureId,
+      measureId,
       sourceCell: {
         storeId: scopeRoots[0].storeId,
         productNodeId: scopeRoots[0].productNodeId,
-        timePeriodId: 202600,
+        timePeriodId: yearTimePeriodId,
       },
-      totalValue: yearValue,
+      totalValue,
       method: "seasonality_profile",
-      roundingScale: 0,
+      roundingScale: measureId === 3 ? 2 : 0,
       comment: "Spread annual value across months",
-      manualWeights: seasonalityWeights,
+      manualWeights: buildSeasonalityWeights(gridQuery.data, yearTimePeriodId),
       scopeRoots,
     });
   };
 
-  const handleAddRow = async (level: "store" | "category" | "subcategory", parentRow: GridRow | null) => {
+  const handleAddRow = async (level: "store" | "department" | "class", parentRow: GridRow | null) => {
     const label = window.prompt(`New ${level} name`);
     if (!label) {
       return;
@@ -310,7 +331,6 @@ export default function App() {
 
     await addRowMutation.mutateAsync({
       scenarioVersionId: gridQuery.data.scenarioVersionId,
-      measureId: gridQuery.data.measureId,
       level,
       parentProductNodeId: level === "store" ? null : parentRow?.bindingProductNodeId ?? null,
       label,
@@ -318,30 +338,62 @@ export default function App() {
     });
   };
 
+  const handleDeleteRow = async (row: GridRow | null) => {
+    if (!row?.bindingProductNodeId) {
+      setLastError("Select a Store, Department, or Class row to delete.");
+      return;
+    }
+
+    if (!window.confirm(`Delete '${row.label}' and its related data? Deletes cannot be undone.`)) {
+      return;
+    }
+
+    await deleteRowMutation.mutateAsync({
+      scenarioVersionId: gridQuery.data.scenarioVersionId,
+      productNodeId: row.bindingProductNodeId,
+    });
+  };
+
+  const handleDeleteYear = async (yearTimePeriodId: number | null) => {
+    if (!yearTimePeriodId) {
+      setLastError("Select a year to delete.");
+      return;
+    }
+
+    const label = yearPeriods.find((period) => period.timePeriodId === yearTimePeriodId)?.label ?? String(yearTimePeriodId);
+    if (!window.confirm(`Delete '${label}' and all related data? Deletes cannot be undone.`)) {
+      return;
+    }
+
+    await deleteYearMutation.mutateAsync({
+      scenarioVersionId: gridQuery.data.scenarioVersionId,
+      yearTimePeriodId,
+    });
+  };
+
   const handleImportWorkbook = async (file: File) => {
     await importMutation.mutateAsync({
       file,
       scenarioVersionId: gridQuery.data.scenarioVersionId,
-      measureId: gridQuery.data.measureId,
     });
   };
 
-  const handleAddHierarchyCategory = async () => {
-    const categoryLabel = window.prompt("New category name");
-    if (!categoryLabel) {
+  const handleAddHierarchyDepartment = async () => {
+    const departmentLabel = window.prompt("New department name");
+    if (!departmentLabel) {
       return;
     }
 
-    await addHierarchyCategoryMutation.mutateAsync(categoryLabel);
+    await addHierarchyDepartmentMutation.mutateAsync(departmentLabel);
   };
 
-  const handleAddHierarchySubcategory = async (categoryLabel: string) => {
-    const subcategoryLabel = window.prompt(`New subcategory name for ${categoryLabel}`);
-    if (!subcategoryLabel) {
+  const handleAddHierarchyClass = async (departmentLabel: string) => {
+    const classLabel = window.prompt(`New class name for ${departmentLabel}`);
+    if (!classLabel) {
       return;
     }
 
-    await addHierarchySubcategoryMutation.mutateAsync({ categoryLabel, subcategoryLabel });
+    await addHierarchyClassMutation.mutateAsync({ departmentLabel, classLabel });
   };
 
   return (
@@ -351,7 +403,7 @@ export default function App() {
           <div className="eyebrow">Enterprise planning skeleton</div>
           <h1>Sales Budget & Planning</h1>
           <p>
-            Excel-like planning with store-first and category-first sheets backed by the same live planning data.
+            Excel-like planning with store-first and department-first sheets backed by the same live planning data.
           </p>
         </div>
         <div className={`status-card${lastError ? " status-card-error" : ""}`} aria-live="polite">
@@ -369,10 +421,10 @@ export default function App() {
         </button>
         <button
           type="button"
-          className={`secondary-button${activeView === "planning-category" ? " secondary-button-active" : ""}`}
-          onClick={() => setActiveView("planning-category")}
+          className={`secondary-button${activeView === "planning-department" ? " secondary-button-active" : ""}`}
+          onClick={() => setActiveView("planning-department")}
         >
-          Planning - by Category
+          Planning - by Department
         </button>
         <button
           type="button"
@@ -383,43 +435,49 @@ export default function App() {
         </button>
       </div>
 
-      <div className="layout-switcher" role="group" aria-label="Measure selector">
-        {measures.map((measure) => (
-          <button
-            key={measure.id}
-            type="button"
-            className={`secondary-button${activeMeasureId === measure.id ? " secondary-button-active" : ""}`}
-            onClick={() => setActiveMeasureId(measure.id)}
-          >
-            {measure.label}
-          </button>
-        ))}
-      </div>
-
-      {activeView === "planning-category" ? (
-        <div className="layout-switcher" role="group" aria-label="Category planning layout">
+      {activeView === "planning-department" ? (
+        <div className="layout-switcher" role="group" aria-label="Department planning layout">
           <button
             type="button"
-            className={`secondary-button${categoryLayout === "category-store-subcategory" ? " secondary-button-active" : ""}`}
-            onClick={() => setCategoryLayout("category-store-subcategory")}
+            className={`secondary-button${departmentLayout === "department-store-class" ? " secondary-button-active" : ""}`}
+            onClick={() => setDepartmentLayout("department-store-class")}
           >
-            Category - Store - Subcategory
+            Department - Store - Class
           </button>
           <button
             type="button"
-            className={`secondary-button${categoryLayout === "category-subcategory-store" ? " secondary-button-active" : ""}`}
-            onClick={() => setCategoryLayout("category-subcategory-store")}
+            className={`secondary-button${departmentLayout === "department-class-store" ? " secondary-button-active" : ""}`}
+            onClick={() => setDepartmentLayout("department-class-store")}
           >
-            Category - Subcategory - Store
+            Department - Class - Store
           </button>
         </div>
       ) : null}
 
+      <div className="layout-switcher" role="group" aria-label="Year actions">
+        <label className="year-picker">
+          <span>Active Year</span>
+          <select value={selectedYearId ?? ""} onChange={(event) => setSelectedYearId(Number(event.target.value) || null)}>
+            {yearPeriods.map((period) => (
+              <option key={period.timePeriodId} value={period.timePeriodId}>
+                {period.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button type="button" className="secondary-button" onClick={() => void exportMutation.mutateAsync()}>
+          Export Workbook
+        </button>
+        <button type="button" className="secondary-button danger-button" onClick={() => void handleDeleteYear(selectedYearId)}>
+          Delete Year
+        </button>
+      </div>
+
       {activeView === "hierarchy" ? (
         <HierarchyMaintenanceSheet
-          categories={hierarchyQuery.data.categories}
-          onAddCategory={handleAddHierarchyCategory}
-          onAddSubcategory={handleAddHierarchySubcategory}
+          departments={hierarchyQuery.data.departments}
+          onAddDepartment={handleAddHierarchyDepartment}
+          onAddClass={handleAddHierarchyClass}
         />
       ) : (
         <Suspense
@@ -431,13 +489,15 @@ export default function App() {
         >
           <PlanningGrid
             data={activeGridData}
+            selectedYearId={selectedYearId}
+            onSelectedYearChange={setSelectedYearId}
             onCellEdit={handleCellEdit}
             onToggleLock={handleToggleLock}
             onSplashYear={handleSplashYear}
             onAddRow={handleAddRow}
+            onDeleteRow={handleDeleteRow}
             onImportWorkbook={handleImportWorkbook}
-            sheetLabel={activeView === "planning-store" ? "Planning - by Store" : "Planning - by Category"}
-            measureLabel={activeMeasure.label}
+            sheetLabel={activeView === "planning-store" ? "Planning - by Store" : "Planning - by Department"}
           />
         </Suspense>
       )}
@@ -452,7 +512,7 @@ function buildStoreView(data: GridSliceResponse): GridSliceResponse {
     viewRowId: `store-view:${row.storeId}:${row.productNodeId}`,
     level: row.level + 1,
     path: [rootLabel, ...row.path],
-    structureRole: (row.level === 0 ? "store" : row.level === 1 ? "category" : "subcategory") as GridRow["structureRole"],
+    structureRole: (row.level === 0 ? "store" : row.level === 1 ? "department" : "class") as GridRow["structureRole"],
     bindingStoreId: row.storeId,
     bindingProductNodeId: row.productNodeId,
     splashRoots: [{ storeId: row.storeId, productNodeId: row.productNodeId }],
@@ -463,11 +523,12 @@ function buildStoreView(data: GridSliceResponse): GridSliceResponse {
     ...data,
     rows: [
       createSyntheticRow({
+        data,
         storeId: 0,
         productNodeId: -10,
         label: rootLabel,
         path: [rootLabel],
-        cells: sumCells(storeRows, data),
+        rows: storeRows,
         splashRoots: storeRows.map(toSplashRoot),
       }),
       ...directRows,
@@ -475,108 +536,111 @@ function buildStoreView(data: GridSliceResponse): GridSliceResponse {
   };
 }
 
-function buildCategoryView(data: GridSliceResponse, layout: CategoryLayout): GridSliceResponse {
+function buildDepartmentView(data: GridSliceResponse, layout: DepartmentLayout): GridSliceResponse {
   const storeRows = data.rows.filter((row) => row.structureRole === "store");
-  const categoryRows = data.rows.filter((row) => row.structureRole === "category");
-  const leafRows = data.rows.filter((row) => row.structureRole === "subcategory");
+  const departmentRows = data.rows.filter((row) => row.structureRole === "department");
+  const classRows = data.rows.filter((row) => row.structureRole === "class");
   const storeLabels = new Map(storeRows.map((row) => [row.storeId, row.label]));
   let syntheticRowSeed = -1;
 
-  const categoryGroups = new Map<string, { categoryRows: GridRow[]; leafRows: GridRow[] }>();
-  for (const categoryRow of categoryRows) {
-    const categoryLabel = categoryRow.path[2];
-    const group = categoryGroups.get(categoryLabel) ?? { categoryRows: [], leafRows: [] };
-    group.categoryRows.push(categoryRow);
-    categoryGroups.set(categoryLabel, group);
+  const departmentGroups = new Map<string, { departmentRows: GridRow[]; classRows: GridRow[] }>();
+  for (const departmentRow of departmentRows) {
+    const departmentLabel = departmentRow.path[2];
+    const group = departmentGroups.get(departmentLabel) ?? { departmentRows: [], classRows: [] };
+    group.departmentRows.push(departmentRow);
+    departmentGroups.set(departmentLabel, group);
   }
 
-  for (const leafRow of leafRows) {
-    const categoryLabel = leafRow.path[2];
-    const group = categoryGroups.get(categoryLabel) ?? { categoryRows: [], leafRows: [] };
-    group.leafRows.push(leafRow);
-    categoryGroups.set(categoryLabel, group);
+  for (const classRow of classRows) {
+    const departmentLabel = classRow.path[2];
+    const group = departmentGroups.get(departmentLabel) ?? { departmentRows: [], classRows: [] };
+    group.classRows.push(classRow);
+    departmentGroups.set(departmentLabel, group);
   }
 
   const rows: GridRow[] = [];
   rows.push(createSyntheticRow({
+    data,
     storeId: 0,
     productNodeId: syntheticRowSeed--,
-    label: "Category Total",
-    path: ["Category Total"],
-    cells: sumCells(storeRows, data),
+    label: "Department Total",
+    path: ["Department Total"],
+    rows: storeRows,
     splashRoots: storeRows.map(toSplashRoot),
   }));
 
-  for (const [categoryLabel, group] of [...categoryGroups.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+  for (const [departmentLabel, group] of [...departmentGroups.entries()].sort(([left], [right]) => left.localeCompare(right))) {
     rows.push(createSyntheticRow({
+      data,
       storeId: 0,
       productNodeId: syntheticRowSeed--,
-      label: categoryLabel,
-      path: ["Category Total", categoryLabel],
-      cells: sumCells(group.categoryRows, data),
-      splashRoots: group.categoryRows.map(toSplashRoot),
+      label: departmentLabel,
+      path: ["Department Total", departmentLabel],
+      rows: group.departmentRows,
+      splashRoots: group.departmentRows.map(toSplashRoot),
     }));
 
-    if (layout === "category-store-subcategory") {
-      for (const categoryRow of [...group.categoryRows].sort((left, right) => {
+    if (layout === "department-store-class") {
+      for (const departmentRow of [...group.departmentRows].sort((left, right) => {
         const leftLabel = storeLabels.get(left.storeId) ?? "";
         const rightLabel = storeLabels.get(right.storeId) ?? "";
         return leftLabel.localeCompare(rightLabel);
       })) {
-        const storeLabel = storeLabels.get(categoryRow.storeId) ?? `Store ${categoryRow.storeId}`;
+        const storeLabel = storeLabels.get(departmentRow.storeId) ?? `Store ${departmentRow.storeId}`;
         rows.push({
-          ...categoryRow,
-          viewRowId: `category-view:${layout}:${categoryLabel}:${storeLabel}`,
+          ...departmentRow,
+          viewRowId: `department-view:${layout}:${departmentLabel}:${storeLabel}`,
           label: storeLabel,
           level: 2,
-          path: ["Category Total", categoryLabel, storeLabel],
+          path: ["Department Total", departmentLabel, storeLabel],
         });
 
-        const matchingLeaves = group.leafRows
-          .filter((leafRow) => leafRow.storeId === categoryRow.storeId)
+        const matchingClasses = group.classRows
+          .filter((classRow) => classRow.storeId === departmentRow.storeId)
           .sort((left, right) => left.label.localeCompare(right.label));
 
-        rows.push(...matchingLeaves.map((leafRow) => ({
-          ...leafRow,
-          viewRowId: `category-view:${layout}:${categoryLabel}:${storeLabel}:${leafRow.label}`,
+        rows.push(...matchingClasses.map((classRow) => ({
+          ...classRow,
+          viewRowId: `department-view:${layout}:${departmentLabel}:${storeLabel}:${classRow.label}`,
           level: 3,
-          path: ["Category Total", categoryLabel, storeLabel, leafRow.label],
+          path: ["Department Total", departmentLabel, storeLabel, classRow.label],
         })));
       }
 
       continue;
     }
 
-    const subcategoryGroups = new Map<string, GridRow[]>();
-    for (const leafRow of group.leafRows) {
-      const subcategoryLabel = leafRow.label;
-      const subcategoryGroup = subcategoryGroups.get(subcategoryLabel) ?? [];
-      subcategoryGroup.push(leafRow);
-      subcategoryGroups.set(subcategoryLabel, subcategoryGroup);
+    const classGroups = new Map<string, GridRow[]>();
+    for (const classRow of group.classRows) {
+      const classLabel = classRow.label;
+      const classGroup = classGroups.get(classLabel) ?? [];
+      classGroup.push(classRow);
+      classGroups.set(classLabel, classGroup);
     }
 
-    for (const [subcategoryLabel, subcategoryRows] of [...subcategoryGroups.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    for (const [classLabel, groupedClassRows] of [...classGroups.entries()].sort(([left], [right]) => left.localeCompare(right))) {
       rows.push(createSyntheticRow({
+        data,
         storeId: 0,
         productNodeId: syntheticRowSeed--,
-        label: subcategoryLabel,
-        path: ["Category Total", categoryLabel, subcategoryLabel],
-        cells: sumCells(subcategoryRows, data),
-        splashRoots: subcategoryRows.map(toSplashRoot),
+        label: classLabel,
+        path: ["Department Total", departmentLabel, classLabel],
+        rows: groupedClassRows,
+        splashRoots: groupedClassRows.map(toSplashRoot),
       }));
 
-      for (const leafRow of [...subcategoryRows].sort((left, right) => {
+      for (const classRow of [...groupedClassRows].sort((left, right) => {
         const leftLabel = storeLabels.get(left.storeId) ?? "";
         const rightLabel = storeLabels.get(right.storeId) ?? "";
         return leftLabel.localeCompare(rightLabel);
       })) {
-        const storeLabel = storeLabels.get(leafRow.storeId) ?? `Store ${leafRow.storeId}`;
+        const storeLabel = storeLabels.get(classRow.storeId) ?? `Store ${classRow.storeId}`;
         rows.push({
-          ...leafRow,
-          viewRowId: `category-view:${layout}:${categoryLabel}:${subcategoryLabel}:${storeLabel}`,
+          ...classRow,
+          viewRowId: `department-view:${layout}:${departmentLabel}:${classLabel}:${storeLabel}`,
           label: storeLabel,
           level: 3,
-          path: ["Category Total", categoryLabel, subcategoryLabel, storeLabel],
+          path: ["Department Total", departmentLabel, classLabel, storeLabel],
         });
       }
     }
@@ -588,34 +652,68 @@ function buildCategoryView(data: GridSliceResponse, layout: CategoryLayout): Gri
   };
 }
 
-function createSyntheticRow(row: Pick<GridRow, "storeId" | "productNodeId" | "label" | "path" | "cells" | "splashRoots">): GridRow {
+function createSyntheticRow({
+  data,
+  storeId,
+  productNodeId,
+  label,
+  path,
+  rows,
+  splashRoots,
+}: {
+  data: GridSliceResponse;
+  storeId: number;
+  productNodeId: number;
+  label: string;
+  path: string[];
+  rows: GridRow[];
+  splashRoots: Array<{ storeId: number; productNodeId: number }>;
+}): GridRow {
   return {
-    ...row,
-    viewRowId: `synthetic:${row.path.join(">")}:${row.productNodeId}`,
-    level: row.path.length - 1,
+    storeId,
+    productNodeId,
+    viewRowId: `synthetic:${path.join(">")}:${productNodeId}`,
+    label,
+    level: path.length - 1,
+    path,
     isLeaf: false,
     structureRole: "virtual",
     bindingStoreId: null,
     bindingProductNodeId: null,
-    splashRoots: row.splashRoots ?? [],
+    splashRoots,
+    cells: sumCells(rows, data),
   };
 }
 
-function sumCells(rows: GridRow[], data: GridSliceResponse): Record<number, GridCell> {
+function sumCells(rows: GridRow[], data: GridSliceResponse): Record<number, { measures: Record<number, GridCell> }> {
   return Object.fromEntries(
     data.periods.map((period) => {
-      const value = rows.reduce((total, row) => total + (row.cells[period.timePeriodId]?.value ?? 0), 0);
-      const isLocked = rows.length > 0 && rows.every((row) => row.cells[period.timePeriodId]?.isLocked);
+      const revenueValue = rows.reduce((total, row) => total + (row.cells[period.timePeriodId]?.measures[1]?.value ?? 0), 0);
+      const quantityValue = rows.reduce((total, row) => total + (row.cells[period.timePeriodId]?.measures[2]?.value ?? 0), 0);
+      const aspValue = quantityValue > 0 ? Math.round((revenueValue / quantityValue) * 100) / 100 : 1;
+
       return [
         period.timePeriodId,
         {
-          value,
-          isLocked,
-          isCalculated: true,
-          isOverride: false,
-          rowVersion: 0,
-          cellKind: "calculated",
-        } satisfies GridCell,
+          measures: Object.fromEntries(
+            data.measures.map((measure) => {
+              const value = measure.measureId === 1 ? revenueValue : measure.measureId === 2 ? quantityValue : aspValue;
+              const isLocked = rows.length > 0 && rows.every((row) => row.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked);
+
+              return [
+                measure.measureId,
+                {
+                  value,
+                  isLocked,
+                  isCalculated: true,
+                  isOverride: false,
+                  rowVersion: 0,
+                  cellKind: "calculated",
+                } satisfies GridCell,
+              ];
+            }),
+          ),
+        },
       ];
     }),
   );
@@ -626,4 +724,13 @@ function toSplashRoot(row: GridRow): { storeId: number; productNodeId: number } 
     storeId: row.bindingStoreId ?? row.storeId,
     productNodeId: row.bindingProductNodeId ?? row.productNodeId,
   };
+}
+
+function buildSeasonalityWeights(data: GridSliceResponse, yearTimePeriodId: number): Record<number, number> {
+  const monthWeights = [8, 12, 7, 7, 8, 8, 9, 9, 8, 7, 8, 9];
+  const monthPeriods = data.periods
+    .filter((period) => period.parentTimePeriodId === yearTimePeriodId)
+    .sort((left, right) => left.sortOrder - right.sortOrder);
+
+  return Object.fromEntries(monthPeriods.map((period, index) => [period.timePeriodId, monthWeights[index] ?? 1]));
 }

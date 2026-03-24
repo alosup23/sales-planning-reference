@@ -112,6 +112,11 @@ button {
   gap: 8px;
 }
 
+.toolbar-actions-wrap {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .secondary-button {
   border: 1px solid #0e5f76;
   background: #ffffff;
@@ -128,6 +133,33 @@ button {
 .secondary-button-active {
   background: #0e5f76;
   color: #ffffff;
+}
+
+.danger-button {
+  border-color: #9a2f2f;
+  color: #9a2f2f;
+}
+
+.year-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(16, 33, 47, 0.12);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.year-picker span {
+  font-size: 0.9rem;
+  color: #44505a;
+}
+
+.year-picker select {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: #10212f;
 }
 
 .planning-grid {
