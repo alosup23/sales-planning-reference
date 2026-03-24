@@ -12,6 +12,9 @@ export type GridMeasure = {
   label: string;
   decimalPlaces: number;
   derivedAtAggregateLevels: boolean;
+  displayAsPercent: boolean;
+  editableAtLeaf: boolean;
+  editableAtAggregate: boolean;
 };
 
 export type GridPeriod = {
@@ -121,6 +124,17 @@ export type ImportWorkbookResponse = {
   status: string;
   exceptionFileName?: string | null;
   exceptionWorkbookBase64?: string | null;
+};
+
+export type SaveScenarioRequest = {
+  scenarioVersionId: number;
+  mode: "manual" | "autosave";
+};
+
+export type SaveScenarioResponse = {
+  status: string;
+  mode: string;
+  savedAt: string;
 };
 
 export type HierarchyDepartment = {

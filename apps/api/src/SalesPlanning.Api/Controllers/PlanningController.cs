@@ -86,6 +86,12 @@ public sealed class PlanningController : ControllerBase
         return _planningService.AddHierarchyClassAsync(request, cancellationToken);
     }
 
+    [HttpPost("save")]
+    public Task<SaveScenarioResponse> SaveScenario([FromBody] SaveScenarioRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.SaveScenarioAsync(request, User.Identity?.Name ?? "demo.user", cancellationToken);
+    }
+
     [HttpPost("imports/workbook")]
     [RequestSizeLimit(10_000_000)]
     public async Task<ImportWorkbookResponse> ImportWorkbook(

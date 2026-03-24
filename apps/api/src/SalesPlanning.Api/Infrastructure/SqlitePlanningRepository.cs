@@ -349,7 +349,14 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             .ToList();
 
         var measures = PlanningMeasures.Definitions
-            .Select(definition => new GridMeasureDto(definition.MeasureId, definition.Label, definition.DecimalPlaces, definition.DerivedAtAggregateLevels))
+            .Select(definition => new GridMeasureDto(
+                definition.MeasureId,
+                definition.Label,
+                definition.DecimalPlaces,
+                definition.DerivedAtAggregateLevels,
+                definition.DisplayAsPercent,
+                definition.EditableAtLeaf,
+                definition.EditableAtAggregate))
             .ToList();
 
         return new GridSliceResponse(scenarioVersionId, measures, periods, rows);
@@ -818,6 +825,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             await EnsureSupportedMeasureCellsAsync(connection, transaction, productNodes.Values, timePeriods.Values, cancellationToken);
             await EnsureQuantitySeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
             await EnsureAspSeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
+            await EnsureExtendedMeasureSeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
 
             await transaction.CommitAsync(cancellationToken);
             _initialized = true;
@@ -1315,6 +1323,66 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         }
     }
 
+    private static async Task EnsureExtendedMeasureSeedAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        IReadOnlyDictionary<long, ProductNode> productNodes,
+        IReadOnlyDictionary<long, TimePeriodNode> timePeriods,
+        CancellationToken cancellationToken)
+    {
+        var cells = await LoadCellsAsync(connection, transaction, cancellationToken);
+        var workingCells = cells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
+
+        foreach (var productNode in productNodes.Values.Where(node => node.IsLeaf))
+        {
+            foreach (var period in timePeriods.Values.Where(period => string.Equals(period.Grain, "month", StringComparison.OrdinalIgnoreCase)))
+            {
+                var revenueCell = workingCells[new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, productNode.StoreId, productNode.ProductNodeId, period.TimePeriodId).Key];
+                var quantityCell = workingCells[new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, productNode.StoreId, productNode.ProductNodeId, period.TimePeriodId).Key];
+                var aspCell = workingCells[new PlanningCellCoordinate(1, PlanningMeasures.AverageSellingPrice, productNode.StoreId, productNode.ProductNodeId, period.TimePeriodId).Key];
+                var unitCostCell = workingCells[new PlanningCellCoordinate(1, PlanningMeasures.UnitCost, productNode.StoreId, productNode.ProductNodeId, period.TimePeriodId).Key];
+                var totalCostsCell = workingCells[new PlanningCellCoordinate(1, PlanningMeasures.TotalCosts, productNode.StoreId, productNode.ProductNodeId, period.TimePeriodId).Key];
+                var grossProfitCell = workingCells[new PlanningCellCoordinate(1, PlanningMeasures.GrossProfit, productNode.StoreId, productNode.ProductNodeId, period.TimePeriodId).Key];
+                var grossProfitPercentCell = workingCells[new PlanningCellCoordinate(1, PlanningMeasures.GrossProfitPercent, productNode.StoreId, productNode.ProductNodeId, period.TimePeriodId).Key];
+
+                var quantity = PlanningMath.NormalizeQuantity(quantityCell.InputValue ?? quantityCell.EffectiveValue);
+                var revenue = PlanningMath.NormalizeRevenue(revenueCell.InputValue ?? revenueCell.EffectiveValue);
+                var asp = aspCell.InputValue is not null || aspCell.EffectiveValue > 0m
+                    ? PlanningMath.NormalizeAsp(aspCell.InputValue ?? aspCell.EffectiveValue)
+                    : PlanningMath.DeriveAspFromRevenue(revenue, quantity);
+                var unitCost = unitCostCell.InputValue is not null || unitCostCell.EffectiveValue > 0m
+                    ? PlanningMath.NormalizeUnitCost(unitCostCell.InputValue ?? unitCostCell.EffectiveValue)
+                    : PlanningMath.DefaultSeedUnitCost(asp);
+
+                revenue = PlanningMath.CalculateRevenue(quantity, asp);
+                var totalCosts = PlanningMath.CalculateTotalCosts(quantity, unitCost);
+                var grossProfit = PlanningMath.CalculateGrossProfit(quantity, asp, unitCost);
+                var grossProfitPercent = PlanningMath.CalculateGrossProfitPercent(asp, unitCost);
+
+                SetSeedInputValue(quantityCell, quantity);
+                SetSeedInputValue(aspCell, asp);
+                SetSeedInputValue(unitCostCell, unitCost);
+                SetSeedInputValue(revenueCell, revenue);
+                SetSeedCalculatedValue(totalCostsCell, totalCosts, true);
+                SetSeedCalculatedValue(grossProfitCell, grossProfit, true);
+                SetSeedCalculatedValue(grossProfitPercentCell, grossProfitPercent, true);
+            }
+        }
+
+        RecalculateSeedTotals(1, PlanningMeasures.SalesRevenue, workingCells, productNodes, timePeriods);
+        RecalculateSeedTotals(1, PlanningMeasures.SoldQuantity, workingCells, productNodes, timePeriods);
+        RecalculateSeedTotals(1, PlanningMeasures.TotalCosts, workingCells, productNodes, timePeriods);
+        RecalculateSeedTotals(1, PlanningMeasures.GrossProfit, workingCells, productNodes, timePeriods);
+        RecalculateSeedDerivedRateTotals(1, PlanningMeasures.AverageSellingPrice, workingCells, productNodes, timePeriods);
+        RecalculateSeedDerivedRateTotals(1, PlanningMeasures.UnitCost, workingCells, productNodes, timePeriods);
+        RecalculateSeedDerivedRateTotals(1, PlanningMeasures.GrossProfitPercent, workingCells, productNodes, timePeriods);
+
+        foreach (var cell in workingCells.Values)
+        {
+            await UpsertCellAsync(connection, transaction, cell, cancellationToken);
+        }
+    }
+
     private static ProductNode GetRequiredNode(
         IReadOnlyDictionary<long, ProductNode> productNodes,
         long? productNodeId,
@@ -1721,6 +1789,28 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         }
     }
 
+    private static void SetSeedInputValue(PlanningCell cell, decimal value)
+    {
+        cell.InputValue = value;
+        cell.OverrideValue = null;
+        cell.IsSystemGeneratedOverride = false;
+        cell.DerivedValue = value;
+        cell.EffectiveValue = value;
+        cell.RowVersion = Math.Max(cell.RowVersion, 2);
+        cell.CellKind = "input";
+    }
+
+    private static void SetSeedCalculatedValue(PlanningCell cell, decimal value, bool isLeafMonth)
+    {
+        cell.InputValue = null;
+        cell.OverrideValue = null;
+        cell.IsSystemGeneratedOverride = false;
+        cell.DerivedValue = value;
+        cell.EffectiveValue = value;
+        cell.RowVersion = Math.Max(cell.RowVersion, 2);
+        cell.CellKind = isLeafMonth ? "calculated" : "calculated";
+    }
+
     private static void RecalculateSeedTotals(
         long scenarioVersionId,
         long measureId,
@@ -1771,6 +1861,45 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                     childId,
                     period.TimePeriodId).Key].EffectiveValue);
                 cell.EffectiveValue = cell.DerivedValue;
+            }
+        }
+    }
+
+    private static void RecalculateSeedDerivedRateTotals(
+        long scenarioVersionId,
+        long measureId,
+        IDictionary<string, PlanningCell> cells,
+        IReadOnlyDictionary<long, ProductNode> productNodes,
+        IReadOnlyDictionary<long, TimePeriodNode> timePeriods)
+    {
+        foreach (var productNode in productNodes.Values)
+        {
+            foreach (var timePeriod in timePeriods.Values)
+            {
+                var rateCell = cells[new PlanningCellCoordinate(scenarioVersionId, measureId, productNode.StoreId, productNode.ProductNodeId, timePeriod.TimePeriodId).Key];
+                var quantity = cells[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SoldQuantity, productNode.StoreId, productNode.ProductNodeId, timePeriod.TimePeriodId).Key].EffectiveValue;
+                var revenue = cells[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SalesRevenue, productNode.StoreId, productNode.ProductNodeId, timePeriod.TimePeriodId).Key].EffectiveValue;
+                var totalCosts = cells[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.TotalCosts, productNode.StoreId, productNode.ProductNodeId, timePeriod.TimePeriodId).Key].EffectiveValue;
+
+                var value = measureId switch
+                {
+                    PlanningMeasures.AverageSellingPrice => quantity > 0m ? PlanningMath.NormalizeAsp(revenue / quantity) : 1.00m,
+                    PlanningMeasures.UnitCost => quantity > 0m ? PlanningMath.NormalizeUnitCost(totalCosts / quantity) : 0m,
+                    PlanningMeasures.GrossProfitPercent => PlanningMath.CalculateGrossProfitPercent(
+                        quantity > 0m ? revenue / quantity : 1.00m,
+                        quantity > 0m ? totalCosts / quantity : 0m),
+                    _ => 0m
+                };
+
+                var isLeafMonth = productNode.IsLeaf && string.Equals(timePeriod.Grain, "month", StringComparison.OrdinalIgnoreCase);
+                if (isLeafMonth && measureId is PlanningMeasures.AverageSellingPrice or PlanningMeasures.UnitCost)
+                {
+                    SetSeedInputValue(rateCell, value);
+                }
+                else
+                {
+                    SetSeedCalculatedValue(rateCell, value, isLeafMonth);
+                }
             }
         }
     }

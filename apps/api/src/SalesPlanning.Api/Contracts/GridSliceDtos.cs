@@ -6,7 +6,7 @@ public sealed record GridSliceResponse(
     IReadOnlyList<GridPeriodDto> Periods,
     IReadOnlyList<GridRowDto> Rows);
 
-public sealed record GridMeasureDto(long MeasureId, string Label, int DecimalPlaces, bool DerivedAtAggregateLevels);
+public sealed record GridMeasureDto(long MeasureId, string Label, int DecimalPlaces, bool DerivedAtAggregateLevels, bool DisplayAsPercent, bool EditableAtLeaf, bool EditableAtAggregate);
 
 public sealed record GridPeriodDto(long TimePeriodId, string Label, string Grain, long? ParentTimePeriodId, int SortOrder);
 

@@ -18,41 +18,51 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
-    public async Task GetGridSliceAsync_ReturnsMultiMeasureMultiYearShape()
+    public async Task GetGridSliceAsync_ReturnsExpandedMeasureSetAndMultiYearShape()
     {
         var grid = await _service.GetGridSliceAsync(1, CancellationToken.None);
 
-        Assert.Equal(3, grid.Measures.Count);
+        Assert.Equal(7, grid.Measures.Count);
+        Assert.Contains(grid.Measures, measure => measure.MeasureId == PlanningMeasures.GrossProfitPercent && measure.DisplayAsPercent);
         Assert.Contains(grid.Periods, period => period.TimePeriodId == 202600);
         Assert.Contains(grid.Periods, period => period.TimePeriodId == 202700);
         Assert.Contains(grid.Rows, row => row.Path.SequenceEqual(new[] { "Store A", "Beverages", "Soft Drinks" }));
     }
 
     [Fact]
-    public async Task ApplyEditsAsync_WhenSoldQtyChanges_RecalculatesSalesRevenueAndAspRemainsRounded()
+    public async Task ApplyEditsAsync_WhenGrossProfitPercentChanges_RecalculatesAspRevenueAndGrossProfit()
     {
-        var quantityCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2110, 202603), CancellationToken.None);
-        Assert.NotNull(quantityCell);
+        var gpPercentCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.GrossProfitPercent, 101, 2110, 202603), CancellationToken.None);
+        Assert.NotNull(gpPercentCell);
 
         await _service.ApplyEditsAsync(
             new EditCellsRequest(
                 1,
-                PlanningMeasures.SoldQuantity,
-                "Qty adjustment",
+                PlanningMeasures.GrossProfitPercent,
+                "Margin update",
                 new[]
                 {
-                    new EditCellRequest(101, 2110, 202603, 200m, "input", quantityCell!.RowVersion)
+                    new EditCellRequest(101, 2110, 202603, 30m, "input", gpPercentCell!.RowVersion)
                 }),
             "planner.one",
             CancellationToken.None);
 
-        var revenueCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202603), CancellationToken.None);
+        var quantityCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2110, 202603), CancellationToken.None);
         var aspCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.AverageSellingPrice, 101, 2110, 202603), CancellationToken.None);
+        var unitCostCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.UnitCost, 101, 2110, 202603), CancellationToken.None);
+        var revenueCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202603), CancellationToken.None);
+        var grossProfitCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.GrossProfit, 101, 2110, 202603), CancellationToken.None);
 
-        Assert.NotNull(revenueCell);
+        Assert.NotNull(quantityCell);
         Assert.NotNull(aspCell);
-        Assert.Equal(decimal.Ceiling(200m * aspCell!.EffectiveValue), revenueCell!.EffectiveValue);
-        Assert.Equal(Math.Round(aspCell.EffectiveValue, 2, MidpointRounding.AwayFromZero), aspCell.EffectiveValue);
+        Assert.NotNull(unitCostCell);
+        Assert.NotNull(revenueCell);
+        Assert.NotNull(grossProfitCell);
+
+        var expectedAsp = PlanningMath.DeriveAspFromGrossProfitPercent(unitCostCell!.EffectiveValue, 30m);
+        Assert.Equal(expectedAsp, aspCell!.EffectiveValue);
+        Assert.Equal(PlanningMath.CalculateRevenue(quantityCell!.EffectiveValue, aspCell.EffectiveValue), revenueCell!.EffectiveValue);
+        Assert.Equal(PlanningMath.CalculateGrossProfit(quantityCell.EffectiveValue, aspCell.EffectiveValue, unitCostCell.EffectiveValue), grossProfitCell!.EffectiveValue);
     }
 
     [Fact]
@@ -87,8 +97,8 @@ public sealed class PlanningServiceTests
         using var workbook = new XLWorkbook();
         var storeSheet = workbook.AddWorksheet("Store B");
         WriteImportHeader(storeSheet);
-        WriteImportRow(storeSheet, 2, "Store B", "Frozen", "Ice Cream", 2026, "Jan", 100m, 50m, 2m);
-        WriteImportRow(storeSheet, 3, "Store B", "Frozen", "Gelato", 2026, "Feb", 101m, 50m, 2m);
+        WriteImportRow(storeSheet, 2, "Store B", "Frozen", "Ice Cream", 2026, "Jan", 100m, 50m, 2m, 1.20m, 60m, 40m, 40m);
+        WriteImportRow(storeSheet, 3, "Store B", "Frozen", "Gelato", 2026, "Feb", 101m, 50m, 2m, 1.20m, 60m, 40m, 40m);
 
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
@@ -105,6 +115,14 @@ public sealed class PlanningServiceTests
         var mappings = await _service.GetHierarchyMappingsAsync(CancellationToken.None);
         var frozen = mappings.Departments.Single(department => department.DepartmentLabel == "Frozen");
         Assert.Contains("Ice Cream", frozen.ClassLabels);
+    }
+
+    [Fact]
+    public async Task SaveScenarioAsync_ReturnsCheckpointTimestamp()
+    {
+        var result = await _service.SaveScenarioAsync(new SaveScenarioRequest(1, "manual"), "planner.one", CancellationToken.None);
+        Assert.Equal("saved", result.Status);
+        Assert.Equal("manual", result.Mode);
     }
 
     [Fact]
@@ -143,9 +161,27 @@ public sealed class PlanningServiceTests
         sheet.Cell(1, 6).Value = "Sales Revenue";
         sheet.Cell(1, 7).Value = "Sold Qty";
         sheet.Cell(1, 8).Value = "ASP";
+        sheet.Cell(1, 9).Value = "Unit Cost";
+        sheet.Cell(1, 10).Value = "Total Costs";
+        sheet.Cell(1, 11).Value = "GP";
+        sheet.Cell(1, 12).Value = "GP%";
     }
 
-    private static void WriteImportRow(IXLWorksheet sheet, int rowIndex, string store, string department, string @class, int year, string month, decimal revenue, decimal quantity, decimal asp)
+    private static void WriteImportRow(
+        IXLWorksheet sheet,
+        int rowIndex,
+        string store,
+        string department,
+        string @class,
+        int year,
+        string month,
+        decimal revenue,
+        decimal quantity,
+        decimal asp,
+        decimal unitCost,
+        decimal totalCosts,
+        decimal gp,
+        decimal gpPercent)
     {
         sheet.Cell(rowIndex, 1).Value = store;
         sheet.Cell(rowIndex, 2).Value = department;
@@ -155,5 +191,9 @@ public sealed class PlanningServiceTests
         sheet.Cell(rowIndex, 6).Value = revenue;
         sheet.Cell(rowIndex, 7).Value = quantity;
         sheet.Cell(rowIndex, 8).Value = asp;
+        sheet.Cell(rowIndex, 9).Value = unitCost;
+        sheet.Cell(rowIndex, 10).Value = totalCosts;
+        sheet.Cell(rowIndex, 11).Value = gp;
+        sheet.Cell(rowIndex, 12).Value = gpPercent;
     }
 }

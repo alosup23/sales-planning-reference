@@ -49,16 +49,17 @@ type ContextMenuState = {
   x: number;
   y: number;
   rowKey: RowKey;
-  timePeriodId: number;
-  measureId: number;
+  timePeriodId: number | null;
+  measureId: number | null;
 };
 
 function formatValue(params: ValueFormatterParams<GridRowView>, measure: GridMeasure): string {
   const value = Number(params.value ?? 0);
-  return new Intl.NumberFormat("en-US", {
+  const formatted = new Intl.NumberFormat("en-US", {
     minimumFractionDigits: measure.decimalPlaces,
     maximumFractionDigits: measure.decimalPlaces,
   }).format(value);
+  return measure.displayAsPercent ? `${formatted}%` : formatted;
 }
 
 export function PlanningGrid({
@@ -101,27 +102,28 @@ export function PlanningGrid({
   const canAddDepartment = selectedRow?.structureRole === "store";
   const canAddClass = selectedRow?.structureRole === "department";
   const canDeleteSelectedRow = Boolean(selectedRow?.bindingProductNodeId);
-  const canSplashSelectedRow = Boolean(selectedRow?.splashRoots?.length && selectedYearId);
 
   const syncSelectedRow = (row: GridRowView | null | undefined) => {
     setSelectedRowKey(row ? { id: getRowKey(row) } : null);
   };
 
   const columnDefs = useMemo<(ColDef<GridRowView> | ColGroupDef<GridRowView>)[]>(() => {
-    const buildMeasureColumn = (period: GridPeriod, measure: GridMeasure): ColDef<GridRowView> => {
-      const isLeafMonthEditable = (row: GridRowView | undefined) =>
-        Boolean(
-          row?.bindingProductNodeId &&
-          row.structureRole === "class" &&
-          period.grain === "month" &&
-          !row.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked,
-        );
-      const isTopDownEditable = (row: GridRowView | undefined) =>
-        Boolean(
-          row?.splashRoots?.length &&
-          !isLeafMonthEditable(row) &&
-          !row?.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked,
-        );
+      const buildMeasureColumn = (period: GridPeriod, measure: GridMeasure): ColDef<GridRowView> => {
+        const isLeafMonthEditable = (row: GridRowView | undefined) =>
+          Boolean(
+            measure.editableAtLeaf &&
+            row?.bindingProductNodeId &&
+            row.structureRole === "class" &&
+            period.grain === "month" &&
+            !row.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked,
+          );
+        const isTopDownEditable = (row: GridRowView | undefined) =>
+          Boolean(
+            measure.editableAtAggregate &&
+            row?.splashRoots?.length &&
+            !isLeafMonthEditable(row) &&
+            !row?.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked,
+          );
 
       return {
         headerName: measure.label,
@@ -129,7 +131,7 @@ export function PlanningGrid({
         editable: (params) => isLeafMonthEditable(params.data) || isTopDownEditable(params.data),
         valueGetter: (params) => params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.value ?? 0,
         valueFormatter: (params) => formatValue(params, measure),
-        width: 112,
+        width: measure.displayAsPercent ? 92 : 100,
         cellClassRules: {
           "cell-locked": (params) => Boolean(params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked),
           "cell-calculated": (params) => Boolean(params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.isCalculated),
@@ -210,7 +212,7 @@ export function PlanningGrid({
     const timePeriodId = Number(timePeriodIdRaw);
     const measureId = Number(measureIdRaw);
 
-    if (!row || !timePeriodId || !measureId || !mouseEvent) {
+    if (!row || !mouseEvent) {
       setContextMenu(null);
       return;
     }
@@ -219,13 +221,18 @@ export function PlanningGrid({
       x: mouseEvent.clientX,
       y: mouseEvent.clientY,
       rowKey: { id: getRowKey(row) },
-      timePeriodId,
-      measureId,
+      timePeriodId: Number.isFinite(timePeriodId) ? timePeriodId : null,
+      measureId: Number.isFinite(measureId) ? measureId : null,
     });
   };
 
   const copyCurrentCell = async () => {
     if (!contextMenu || !navigator.clipboard) {
+      setContextMenu(null);
+      return;
+    }
+
+    if (!contextMenu.timePeriodId || !contextMenu.measureId) {
       setContextMenu(null);
       return;
     }
@@ -278,20 +285,20 @@ export function PlanningGrid({
     syncSelectedRow(row);
   };
 
-  const expandSelectedRow = () => {
-    if (!selectedRow) {
+  const expandRow = (row: GridRowView | null) => {
+    if (!row) {
       return;
     }
 
-    gridRef.current?.api.getRowNode(getRowKey(selectedRow))?.setExpanded(true);
+    gridRef.current?.api.getRowNode(getRowKey(row))?.setExpanded(true);
   };
 
-  const collapseSelectedRow = () => {
-    if (!selectedRow) {
+  const collapseRow = (row: GridRowView | null) => {
+    if (!row) {
       return;
     }
 
-    gridRef.current?.api.getRowNode(getRowKey(selectedRow))?.setExpanded(false);
+    gridRef.current?.api.getRowNode(getRowKey(row))?.setExpanded(false);
   };
 
   const setAllRowExpansion = (expanded: boolean) => {
@@ -332,32 +339,6 @@ export function PlanningGrid({
           </button>
           <button type="button" className="secondary-button" onClick={() => importInputRef.current?.click()}>
             Upload Workbook
-          </button>
-          <button
-            type="button"
-            className="secondary-button"
-            disabled={!canSplashSelectedRow || !selectedYearId}
-            onClick={() => {
-              if (!selectedRow || !selectedYearId) {
-                return;
-              }
-
-              void Promise.all(data.measures.map((measure) => onSplashYear(selectedRow, selectedYearId, measure.measureId)));
-            }}
-          >
-            Splash Selected Year
-          </button>
-          <button type="button" className="secondary-button" disabled={!selectedRow} onClick={expandSelectedRow}>
-            Expand
-          </button>
-          <button type="button" className="secondary-button" disabled={!selectedRow} onClick={collapseSelectedRow}>
-            Collapse
-          </button>
-          <button type="button" className="secondary-button" onClick={() => setAllRowExpansion(true)}>
-            Expand All
-          </button>
-          <button type="button" className="secondary-button" onClick={() => setAllRowExpansion(false)}>
-            Collapse All
           </button>
           <button type="button" className="secondary-button" onClick={() => setAllYearGroups(true)}>
             Expand Years
@@ -400,6 +381,9 @@ export function PlanningGrid({
           readOnlyEdit
           undoRedoCellEditing
           undoRedoCellEditingLimit={20}
+          rowHeight={28}
+          headerHeight={32}
+          groupHeaderHeight={34}
           rowSelection="single"
           onSelectionChanged={handleSelectionChanged}
           onCellClicked={handleCellClicked}
@@ -410,7 +394,7 @@ export function PlanningGrid({
           autoGroupColumnDef={{
             headerName: "Store / Department / Class",
             pinned: "left",
-            minWidth: 320,
+            minWidth: 260,
             cellRendererParams: {
               suppressCount: true,
             },
@@ -428,7 +412,45 @@ export function PlanningGrid({
             <button
               type="button"
               onClick={() => {
-                if (!contextRow) {
+                expandRow(contextRow);
+                setContextMenu(null);
+              }}
+              disabled={!contextRow}
+            >
+              Expand
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                collapseRow(contextRow);
+                setContextMenu(null);
+              }}
+              disabled={!contextRow}
+            >
+              Collapse
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAllRowExpansion(true);
+                setContextMenu(null);
+              }}
+            >
+              Expand All
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAllRowExpansion(false);
+                setContextMenu(null);
+              }}
+            >
+              Collapse All
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (!contextRow || !contextMenu.timePeriodId || !contextMenu.measureId) {
                   setContextMenu(null);
                   return;
                 }
@@ -439,14 +461,14 @@ export function PlanningGrid({
                 }
                 setContextMenu(null);
               }}
-              disabled={!contextRow?.splashRoots?.length}
+              disabled={!contextRow?.splashRoots?.length || !contextMenu.timePeriodId || !contextMenu.measureId}
             >
-              {contextRow?.cells[contextMenu.timePeriodId]?.measures[contextMenu.measureId]?.isLocked ? "Unlock cell" : "Lock cell"}
+              {contextMenu.timePeriodId && contextMenu.measureId && contextRow?.cells[contextMenu.timePeriodId]?.measures[contextMenu.measureId]?.isLocked ? "Unlock cell" : "Lock cell"}
             </button>
             <button
               type="button"
               onClick={() => {
-                if (!contextRow) {
+                if (!contextRow || !contextMenu.timePeriodId || !contextMenu.measureId) {
                   setContextMenu(null);
                   return;
                 }
@@ -455,7 +477,7 @@ export function PlanningGrid({
                 void onSplashYear(contextRow, yearTimePeriodId, contextMenu.measureId);
                 setContextMenu(null);
               }}
-              disabled={!contextRow?.splashRoots?.length}
+              disabled={!contextRow?.splashRoots?.length || !contextMenu.timePeriodId || !contextMenu.measureId}
             >
               Splash current year
             </button>

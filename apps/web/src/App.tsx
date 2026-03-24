@@ -12,6 +12,7 @@ import {
   postHierarchyClass,
   postHierarchyDepartment,
   postLock,
+  postSave,
   postSplash,
   postWorkbookImport,
 } from "./lib/api";
@@ -34,6 +35,8 @@ export default function App() {
   const [activeView, setActiveView] = useState<ActiveView>("planning-store");
   const [departmentLayout, setDepartmentLayout] = useState<DepartmentLayout>("department-store-class");
   const [selectedYearId, setSelectedYearId] = useState<number | null>(null);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
 
   useEffect(() => {
     void preloadPlanningGrid();
@@ -68,6 +71,7 @@ export default function App() {
     mutationFn: postEdit,
     onSuccess: async () => {
       setLastError(null);
+      setHasUnsavedChanges(true);
       await refresh();
     },
     onError: (error: Error) => setLastError(error.message),
@@ -77,6 +81,7 @@ export default function App() {
     mutationFn: postLock,
     onSuccess: async () => {
       setLastError(null);
+      setHasUnsavedChanges(true);
       await refresh();
     },
     onError: (error: Error) => setLastError(error.message),
@@ -86,6 +91,7 @@ export default function App() {
     mutationFn: postSplash,
     onSuccess: async () => {
       setLastError(null);
+      setHasUnsavedChanges(true);
       await refresh();
     },
     onError: (error: Error) => setLastError(error.message),
@@ -95,6 +101,7 @@ export default function App() {
     mutationFn: postAddRow,
     onSuccess: async () => {
       setLastError(null);
+      setHasUnsavedChanges(true);
       await refresh();
     },
     onError: (error: Error) => setLastError(error.message),
@@ -104,6 +111,7 @@ export default function App() {
     mutationFn: postDeleteRow,
     onSuccess: async () => {
       setLastError(null);
+      setHasUnsavedChanges(true);
       await refresh();
     },
     onError: (error: Error) => setLastError(error.message),
@@ -113,6 +121,7 @@ export default function App() {
     mutationFn: postDeleteYear,
     onSuccess: async () => {
       setLastError(null);
+      setHasUnsavedChanges(true);
       await refresh();
     },
     onError: (error: Error) => setLastError(error.message),
@@ -122,6 +131,7 @@ export default function App() {
     mutationFn: ({ file, scenarioVersionId }: { file: File; scenarioVersionId: number }) => postWorkbookImport(scenarioVersionId, file),
     onSuccess: async (result) => {
       setLastError(null);
+      setHasUnsavedChanges(true);
       if (result.exceptionWorkbookBase64 && result.exceptionFileName) {
         downloadBase64Workbook(result.exceptionWorkbookBase64, result.exceptionFileName);
       }
@@ -137,10 +147,21 @@ export default function App() {
     onError: (error: Error) => setLastError(error.message),
   });
 
+  const saveMutation = useMutation({
+    mutationFn: ({ mode }: { mode: "manual" | "autosave" }) => postSave({ scenarioVersionId: 1, mode }),
+    onSuccess: (result) => {
+      setLastError(null);
+      setHasUnsavedChanges(false);
+      setLastSavedAt(result.savedAt);
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
   const addHierarchyDepartmentMutation = useMutation({
     mutationFn: postHierarchyDepartment,
     onSuccess: async () => {
       setLastError(null);
+      setHasUnsavedChanges(true);
       await refresh();
     },
     onError: (error: Error) => setLastError(error.message),
@@ -151,10 +172,23 @@ export default function App() {
       postHierarchyClass(departmentLabel, classLabel),
     onSuccess: async () => {
       setLastError(null);
+      setHasUnsavedChanges(true);
       await refresh();
     },
     onError: (error: Error) => setLastError(error.message),
   });
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (!hasUnsavedChanges || saveMutation.isPending) {
+        return;
+      }
+
+      void saveMutation.mutateAsync({ mode: "autosave" });
+    }, 5 * 60 * 1000);
+
+    return () => window.clearInterval(interval);
+  }, [hasUnsavedChanges, saveMutation]);
 
   const isMutating =
     editMutation.isPending ||
@@ -165,6 +199,7 @@ export default function App() {
     deleteYearMutation.isPending ||
     importMutation.isPending ||
     exportMutation.isPending ||
+    saveMutation.isPending ||
     addHierarchyDepartmentMutation.isPending ||
     addHierarchyClassMutation.isPending;
 
@@ -183,6 +218,14 @@ export default function App() {
 
     if (lastError) {
       return lastError;
+    }
+
+    if (hasUnsavedChanges) {
+      return "Changes pending save. Autosave runs every 5 minutes.";
+    }
+
+    if (lastSavedAt) {
+      return `All changes saved. Last checkpoint ${new Date(lastSavedAt).toLocaleTimeString()}.`;
     }
 
     return activeView === "hierarchy"
@@ -212,6 +255,7 @@ export default function App() {
 
   const activeGridData = activeView === "planning-department" ? departmentViewData : storeViewData;
   const yearPeriods = gridQuery.data.periods.filter((period) => period.grain === "year");
+  const measureLookup = new Map(gridQuery.data.measures.map((measure) => [measure.measureId, measure]));
 
   const handleCellEdit = async (row: GridRow, timePeriodId: number, measureId: number, newValue: number) => {
     const measureCell = row.cells[timePeriodId]?.measures[measureId];
@@ -253,7 +297,7 @@ export default function App() {
       },
       totalValue: newValue,
       method: period?.grain === "year" ? "seasonality_profile" : "existing_plan",
-      roundingScale: measureId === 3 ? 2 : 0,
+      roundingScale: measureLookup.get(measureId)?.decimalPlaces ?? 0,
       comment: "Grid top-down edit",
       manualWeights: period?.grain === "year" ? buildSeasonalityWeights(gridQuery.data, timePeriodId) : undefined,
       scopeRoots,
@@ -298,7 +342,7 @@ export default function App() {
       },
       totalValue,
       method: "seasonality_profile",
-      roundingScale: measureId === 3 ? 2 : 0,
+      roundingScale: measureLookup.get(measureId)?.decimalPlaces ?? 0,
       comment: "Spread annual value across months",
       manualWeights: buildSeasonalityWeights(gridQuery.data, yearTimePeriodId),
       scopeRoots,
@@ -467,6 +511,14 @@ export default function App() {
         </label>
         <button type="button" className="secondary-button" onClick={() => void exportMutation.mutateAsync()}>
           Export Workbook
+        </button>
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={!hasUnsavedChanges || saveMutation.isPending}
+          onClick={() => void saveMutation.mutateAsync({ mode: "manual" })}
+        >
+          Save
         </button>
         <button type="button" className="secondary-button danger-button" onClick={() => void handleDeleteYear(selectedYearId)}>
           Delete Year
@@ -690,14 +742,37 @@ function sumCells(rows: GridRow[], data: GridSliceResponse): Record<number, { me
     data.periods.map((period) => {
       const revenueValue = rows.reduce((total, row) => total + (row.cells[period.timePeriodId]?.measures[1]?.value ?? 0), 0);
       const quantityValue = rows.reduce((total, row) => total + (row.cells[period.timePeriodId]?.measures[2]?.value ?? 0), 0);
-      const aspValue = quantityValue > 0 ? Math.round((revenueValue / quantityValue) * 100) / 100 : 1;
+      const totalCostsValue = rows.reduce((total, row) => total + (row.cells[period.timePeriodId]?.measures[5]?.value ?? 0), 0);
+      const grossProfitValue = rows.reduce((total, row) => total + (row.cells[period.timePeriodId]?.measures[6]?.value ?? 0), 0);
+      const aspValue = quantityValue > 0 ? roundToDecimals(revenueValue / quantityValue, 2) : 1;
+      const unitCostValue = quantityValue > 0 ? roundToDecimals(totalCostsValue / quantityValue, 2) : 0;
+      const grossProfitPercentValue = aspValue > 0 ? roundToDecimals(((aspValue - unitCostValue) / aspValue) * 100, 1) : 0;
 
       return [
         period.timePeriodId,
         {
           measures: Object.fromEntries(
             data.measures.map((measure) => {
-              const value = measure.measureId === 1 ? revenueValue : measure.measureId === 2 ? quantityValue : aspValue;
+              const value = (() => {
+                switch (measure.measureId) {
+                  case 1:
+                    return revenueValue;
+                  case 2:
+                    return quantityValue;
+                  case 3:
+                    return aspValue;
+                  case 4:
+                    return unitCostValue;
+                  case 5:
+                    return totalCostsValue;
+                  case 6:
+                    return grossProfitValue;
+                  case 7:
+                    return grossProfitPercentValue;
+                  default:
+                    return 0;
+                }
+              })();
               const isLocked = rows.length > 0 && rows.every((row) => row.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked);
 
               return [
@@ -733,4 +808,9 @@ function buildSeasonalityWeights(data: GridSliceResponse, yearTimePeriodId: numb
     .sort((left, right) => left.sortOrder - right.sortOrder);
 
   return Object.fromEntries(monthPeriods.map((period, index) => [period.timePeriodId, monthWeights[index] ?? 1]));
+}
+
+function roundToDecimals(value: number, decimals: number): number {
+  const scale = 10 ** decimals;
+  return Math.round(value * scale) / scale;
 }

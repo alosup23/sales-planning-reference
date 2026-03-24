@@ -14,7 +14,10 @@ async function openGrid(page: import("@playwright/test").Page) {
 }
 
 async function expectReady(page: import("@playwright/test").Page) {
-  await expect(page.getByText(/ready\.$/)).toBeVisible();
+  const statusCard = page.locator(".status-card");
+  await expect(statusCard).toBeVisible();
+  await expect(statusCard).not.toContainText("Loading planning slice...");
+  await expect(statusCard).not.toContainText("Applying changes...");
 }
 
 async function expandYears(page: import("@playwright/test").Page) {
@@ -43,7 +46,7 @@ function createWorkbookBuffer(rows: Array<Record<string, string | number>>, shee
     .replaceAll("\"", "&quot;")
     .replaceAll("'", "&apos;");
 
-  const headers = ["Store", "Department", "Class", "Year", "Month", "Sales Revenue", "Sold Qty", "ASP"];
+  const headers = ["Store", "Department", "Class", "Year", "Month", "Sales Revenue", "Sold Qty", "ASP", "Unit Cost", "Total Costs", "GP", "GP%"];
   const allRows = [headers, ...rows.map((row) => headers.map((header) => row[header] ?? ""))];
 
   const cellRef = (columnIndex: number, rowIndex: number) => `${String.fromCharCode(65 + columnIndex)}${rowIndex}`;
@@ -145,9 +148,11 @@ test("loads the live grid with FY26 and FY27 columns", async ({ page }) => {
 
 test("supports expand and collapse controls for rows and years", async ({ page }) => {
   const pinnedRow = page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2110)}"]`);
+  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2000)}"]`).click({ button: "right" });
   await page.getByRole("button", { name: "Collapse All" }).click();
   await expect(pinnedRow).toHaveCount(0);
 
+  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2000)}"]`).click({ button: "right" });
   await page.getByRole("button", { name: "Expand All" }).click();
   await expect(pinnedRow).toHaveCount(1);
 
@@ -156,6 +161,7 @@ test("supports expand and collapse controls for rows and years", async ({ page }
 });
 
 test("editing a visible Sales Revenue year total refreshes the row total", async ({ page }) => {
+  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2000)}"]`).click({ button: "right" });
   await page.getByRole("button", { name: "Expand All" }).click();
   const revenueCol = "202600:1";
   const before = await page.locator(gridCell(storeRowId(101, 2110), revenueCol)).textContent();
@@ -193,6 +199,10 @@ test("imports a workbook in the new store-sheet format", async ({ page }) => {
       "Sales Revenue": 100,
       "Sold Qty": 50,
       ASP: 2,
+      "Unit Cost": 1.2,
+      "Total Costs": 60,
+      GP: 40,
+      "GP%": 40,
     },
   ]);
 
@@ -202,6 +212,7 @@ test("imports a workbook in the new store-sheet format", async ({ page }) => {
     buffer: workbookBuffer,
   });
   await expectReady(page);
+  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2000)}"]`).click({ button: "right" });
   await page.getByRole("button", { name: "Expand All" }).click();
   await page.getByRole("button", { name: "Expand Years" }).click();
 

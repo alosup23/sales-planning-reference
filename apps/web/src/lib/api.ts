@@ -7,6 +7,8 @@ import type {
   HierarchyMappingResponse,
   ImportWorkbookResponse,
   LockCellsRequest,
+  SaveScenarioRequest,
+  SaveScenarioResponse,
   SplashRequest,
 } from "./types";
 import { sampleGridData } from "./sampleGridData";
@@ -120,6 +122,13 @@ export async function postWorkbookImport(scenarioVersionId: number, file: File):
   }
 
   return (await response.json()) as ImportWorkbookResponse;
+}
+
+export async function postSave(request: SaveScenarioRequest): Promise<SaveScenarioResponse> {
+  return await fetchJson<SaveScenarioResponse>(`${API_BASE_URL}/save`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
 }
 
 export async function downloadWorkbookExport(): Promise<void> {
