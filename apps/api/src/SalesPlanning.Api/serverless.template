@@ -26,7 +26,6 @@
         "CodeUri": "",
         "MemorySize": 1024,
         "Timeout": 30,
-        "ReservedConcurrentExecutions": 1,
         "Role": {
           "Fn::Sub": "arn:aws:iam::${AWS::AccountId}:role/sales-planning-demo-lambda-exec"
         },
