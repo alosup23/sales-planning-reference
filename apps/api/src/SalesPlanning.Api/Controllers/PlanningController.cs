@@ -92,6 +92,23 @@ public sealed class PlanningController : ControllerBase
         return _planningService.AddHierarchyClassAsync(request, cancellationToken);
     }
 
+    [HttpPost("hierarchy-mappings/subclasses")]
+    public Task<HierarchyMappingResponse> AddHierarchySubclass([FromBody] AddHierarchySubclassRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.AddHierarchySubclassAsync(request, cancellationToken);
+    }
+
+    [HttpGet("insights")]
+    public Task<PlanningInsightResponse> GetPlanningInsights(
+        [FromQuery] long scenarioVersionId,
+        [FromQuery] long storeId,
+        [FromQuery] long productNodeId,
+        [FromQuery] long yearTimePeriodId,
+        CancellationToken cancellationToken)
+    {
+        return _planningService.GetPlanningInsightsAsync(scenarioVersionId, storeId, productNodeId, yearTimePeriodId, cancellationToken);
+    }
+
     [HttpPost("growth-factors/apply")]
     public Task<ApplyGrowthFactorResponse> ApplyGrowthFactor([FromBody] ApplyGrowthFactorRequest request, CancellationToken cancellationToken)
     {

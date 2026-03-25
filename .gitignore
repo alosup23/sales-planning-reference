@@ -5,7 +5,9 @@ apps/api/src/SalesPlanning.Api/App_Data/
 dist/
 .DS_Store
 .dotnet-cli/
+.dotnet8/
 apps/web/.tmp/
 apps/web/test-results/
 apps/web/playwright-report/
 tmp-browser-smoke.png
+.aws-sam/

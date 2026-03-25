@@ -1,0 +1,27 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowFileBucketReadWrite",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::sales-planning-demo-files-427304877733-ap-southeast-5-an/*"
+      ]
+    },
+    {
+      "Sid": "AllowFileBucketList",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::sales-planning-demo-files-427304877733-ap-southeast-5-an"
+      ]
+    }
+  ]
+}

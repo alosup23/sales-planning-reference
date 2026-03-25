@@ -17,6 +17,14 @@ public sealed record GridRowDto(
     int Level,
     string[] Path,
     bool IsLeaf,
+    string NodeKind,
+    string StoreLabel,
+    string ClusterLabel,
+    string RegionLabel,
+    string LifecycleState,
+    string? RampProfileCode,
+    long? EffectiveFromTimePeriodId,
+    long? EffectiveToTimePeriodId,
     Dictionary<long, GridPeriodCellDto> Cells);
 
 public sealed record GridPeriodCellDto(Dictionary<long, GridCellDto> Measures);

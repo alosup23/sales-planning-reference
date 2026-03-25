@@ -250,6 +250,67 @@ public sealed class PlanningService : IPlanningService
         return await BuildHierarchyMappingResponseAsync(cancellationToken);
     }
 
+    public async Task<HierarchyMappingResponse> AddHierarchySubclassAsync(AddHierarchySubclassRequest request, CancellationToken cancellationToken)
+    {
+        await _repository.UpsertHierarchySubclassAsync(request.DepartmentLabel, request.ClassLabel, request.SubclassLabel, cancellationToken);
+        return await BuildHierarchyMappingResponseAsync(cancellationToken);
+    }
+
+    public async Task<PlanningInsightResponse> GetPlanningInsightsAsync(long scenarioVersionId, long storeId, long productNodeId, long yearTimePeriodId, CancellationToken cancellationToken)
+    {
+        var metadata = await _repository.GetMetadataAsync(cancellationToken);
+        var cells = await _repository.GetScenarioCellsAsync(scenarioVersionId, cancellationToken);
+        var targetNode = metadata.ProductNodes[productNodeId];
+        var monthPeriods = metadata.TimePeriods.Values
+            .Where(period => period.ParentTimePeriodId == yearTimePeriodId)
+            .OrderBy(period => period.SortOrder)
+            .ToList();
+        var scopedLeafNodes = metadata.ProductNodes.Values
+            .Where(node => node.StoreId == storeId && node.IsLeaf && IsDescendantProduct(node.ProductNodeId, productNodeId, metadata))
+            .ToList();
+
+        var monthlyRevenue = monthPeriods.Select(period => scopedLeafNodes.Sum(node =>
+            cells.FirstOrDefault(cell => cell.Coordinate.Key == new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SalesRevenue, node.StoreId, node.ProductNodeId, period.TimePeriodId).Key)?.EffectiveValue ?? 0m)).ToList();
+        var monthlyQuantity = monthPeriods.Select(period => scopedLeafNodes.Sum(node =>
+            cells.FirstOrDefault(cell => cell.Coordinate.Key == new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SoldQuantity, node.StoreId, node.ProductNodeId, period.TimePeriodId).Key)?.EffectiveValue ?? 0m)).ToList();
+        var yearlyRevenue = monthlyRevenue.Sum();
+        var yearlyQuantity = monthlyQuantity.Sum();
+        var asp = yearlyQuantity > 0m ? PlanningMath.NormalizeAsp(yearlyRevenue / yearlyQuantity) : 1.00m;
+        var unitCost = scopedLeafNodes.Count == 0
+            ? 0m
+            : scopedLeafNodes.Average(node => cells.FirstOrDefault(cell => cell.Coordinate.Key == new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.UnitCost, node.StoreId, node.ProductNodeId, yearTimePeriodId).Key)?.EffectiveValue ?? 0m);
+        var currentGrossProfitPercent = PlanningMath.CalculateGrossProfitPercent(asp, unitCost);
+        var seasonalityStrength = monthlyRevenue.Count == 0 || monthlyRevenue.Average() <= 0m
+            ? 0m
+            : Math.Round(monthlyRevenue.Max() / Math.Max(monthlyRevenue.Average(), 1m), 2, MidpointRounding.AwayFromZero);
+        var recommendedForecastModel =
+            monthlyRevenue.Count(value => value == 0m) > 4 ? "Croston / intermittent-demand" :
+            seasonalityStrength >= 1.2m ? "Seasonal Naive + causal overlay" :
+            "ETS / level-trend-seasonal";
+        var recommendedPriceFloor = PlanningMath.NormalizeAsp(Math.Max(asp * 0.95m, unitCost * 1.05m));
+        var recommendedPriceTarget = PlanningMath.NormalizeAsp(Math.Max(asp * 1.03m, unitCost * 1.12m));
+        var recommendedPriceCeiling = PlanningMath.NormalizeAsp(Math.Max(asp * 1.08m, unitCost * 1.18m));
+        var grossProfitOpportunity = PlanningMath.NormalizeGrossProfit((recommendedPriceTarget - asp) * yearlyQuantity);
+        var quantityOpportunity = PlanningMath.NormalizeQuantity(yearlyQuantity * 0.04m);
+
+        return new PlanningInsightResponse(
+            "demo-heuristic-openai-ready",
+            string.Join(" > ", targetNode.Path),
+            recommendedForecastModel,
+            PlanningMath.NormalizeGrossProfitPercent((decimal)seasonalityStrength * 10m),
+            recommendedPriceFloor,
+            recommendedPriceTarget,
+            recommendedPriceCeiling,
+            grossProfitOpportunity,
+            quantityOpportunity,
+            [
+                $"Current GP% is {currentGrossProfitPercent:0.0}% with ASP {asp:0.00} and Unit Cost {unitCost:0.00}.",
+                $"Recommended forecast family: {recommendedForecastModel}.",
+                $"Price-band analysis suggests a target ASP of {recommendedPriceTarget:0.00} with estimated GP uplift of {grossProfitOpportunity:0}.",
+                $"Seasonality strength for the selected year is {seasonalityStrength:0.00} and the branch stays coherent under the existing roll-up and splash rules."
+            ]);
+    }
+
     public async Task<ApplyGrowthFactorResponse> ApplyGrowthFactorAsync(ApplyGrowthFactorRequest request, string userId, CancellationToken cancellationToken)
     {
         var metadata = await _repository.GetMetadataAsync(cancellationToken);
@@ -356,7 +417,8 @@ public sealed class PlanningService : IPlanningService
                 var storeNode = await EnsureNodeAsync(scenarioVersionId, "store", null, normalized.Store, cancellationToken);
                 var departmentNode = await EnsureNodeAsync(scenarioVersionId, "department", storeNode.Node.ProductNodeId, normalized.Department, cancellationToken);
                 var classNode = await EnsureNodeAsync(scenarioVersionId, "class", departmentNode.Node.ProductNodeId, normalized.Class, cancellationToken);
-                rowsCreated += storeNode.CreatedCount + departmentNode.CreatedCount + classNode.CreatedCount;
+                var subclassNode = await EnsureNodeAsync(scenarioVersionId, "subclass", classNode.Node.ProductNodeId, normalized.Subclass, cancellationToken);
+                rowsCreated += storeNode.CreatedCount + departmentNode.CreatedCount + classNode.CreatedCount + subclassNode.CreatedCount;
                 metadata = await _repository.GetMetadataAsync(cancellationToken);
                 var refreshedCells = await _repository.GetScenarioCellsAsync(scenarioVersionId, cancellationToken);
                 foreach (var cell in refreshedCells)
@@ -368,13 +430,13 @@ public sealed class PlanningService : IPlanningService
                 }
 
                 var timePeriodId = BuildMonthTimePeriodId(normalized.Year, normalized.MonthIndex);
-                ApplyLeafMeasureEdit(new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SoldQuantity, classNode.Node.StoreId, classNode.Node.ProductNodeId, timePeriodId), normalized.SoldQty, workingCells, metadata);
-                ApplyLeafMeasureEdit(new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.AverageSellingPrice, classNode.Node.StoreId, classNode.Node.ProductNodeId, timePeriodId), normalized.Asp, workingCells, metadata);
-                ApplyLeafMeasureEdit(new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.UnitCost, classNode.Node.StoreId, classNode.Node.ProductNodeId, timePeriodId), normalized.UnitCost, workingCells, metadata);
+                ApplyLeafMeasureEdit(new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SoldQuantity, subclassNode.Node.StoreId, subclassNode.Node.ProductNodeId, timePeriodId), normalized.SoldQty, workingCells, metadata);
+                ApplyLeafMeasureEdit(new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.AverageSellingPrice, subclassNode.Node.StoreId, subclassNode.Node.ProductNodeId, timePeriodId), normalized.Asp, workingCells, metadata);
+                ApplyLeafMeasureEdit(new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.UnitCost, subclassNode.Node.StoreId, subclassNode.Node.ProductNodeId, timePeriodId), normalized.UnitCost, workingCells, metadata);
 
                 foreach (var measureId in PlanningMeasures.SupportedMeasureIds)
                 {
-                    touchedCoordinates.Add(new PlanningCellCoordinate(scenarioVersionId, measureId, classNode.Node.StoreId, classNode.Node.ProductNodeId, timePeriodId).Key);
+                    touchedCoordinates.Add(new PlanningCellCoordinate(scenarioVersionId, measureId, subclassNode.Node.StoreId, subclassNode.Node.ProductNodeId, timePeriodId).Key);
                 }
             }
         }
@@ -409,7 +471,7 @@ public sealed class PlanningService : IPlanningService
             var sheet = workbook.AddWorksheet(storeNode.Label);
             WriteImportHeader(sheet);
             var rowIndex = 2;
-            var classNodes = metadata.ProductNodes.Values
+            var subclassNodes = metadata.ProductNodes.Values
                 .Where(node => node.StoreId == storeNode.StoreId && node.IsLeaf)
                 .OrderBy(node => string.Join(">", node.Path), StringComparer.OrdinalIgnoreCase)
                 .ToList();
@@ -418,31 +480,33 @@ public sealed class PlanningService : IPlanningService
                 .OrderBy(period => period.SortOrder)
                 .ToList();
 
-            foreach (var classNode in classNodes)
+            foreach (var subclassNode in subclassNodes)
             {
+                var classNode = metadata.ProductNodes[subclassNode.ParentProductNodeId!.Value];
                 var departmentNode = metadata.ProductNodes[classNode.ParentProductNodeId!.Value];
                 foreach (var monthPeriod in monthPeriods)
                 {
-                    var revenue = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SalesRevenue, classNode.StoreId, classNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
-                    var quantity = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SoldQuantity, classNode.StoreId, classNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
-                    var asp = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.AverageSellingPrice, classNode.StoreId, classNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
-                    var unitCost = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.UnitCost, classNode.StoreId, classNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
-                    var totalCosts = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.TotalCosts, classNode.StoreId, classNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
-                    var grossProfit = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.GrossProfit, classNode.StoreId, classNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
-                    var grossProfitPercent = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.GrossProfitPercent, classNode.StoreId, classNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
+                    var revenue = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SalesRevenue, subclassNode.StoreId, subclassNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
+                    var quantity = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SoldQuantity, subclassNode.StoreId, subclassNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
+                    var asp = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.AverageSellingPrice, subclassNode.StoreId, subclassNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
+                    var unitCost = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.UnitCost, subclassNode.StoreId, subclassNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
+                    var totalCosts = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.TotalCosts, subclassNode.StoreId, subclassNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
+                    var grossProfit = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.GrossProfit, subclassNode.StoreId, subclassNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
+                    var grossProfitPercent = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.GrossProfitPercent, subclassNode.StoreId, subclassNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
 
                     sheet.Cell(rowIndex, 1).Value = storeNode.Label;
                     sheet.Cell(rowIndex, 2).Value = departmentNode.Label;
                     sheet.Cell(rowIndex, 3).Value = classNode.Label;
-                    sheet.Cell(rowIndex, 4).Value = monthPeriod.TimePeriodId / 100;
-                    sheet.Cell(rowIndex, 5).Value = monthPeriod.Label;
-                    sheet.Cell(rowIndex, 6).Value = revenue;
-                    sheet.Cell(rowIndex, 7).Value = quantity;
-                    sheet.Cell(rowIndex, 8).Value = asp;
-                    sheet.Cell(rowIndex, 9).Value = unitCost;
-                    sheet.Cell(rowIndex, 10).Value = totalCosts;
-                    sheet.Cell(rowIndex, 11).Value = grossProfit;
-                    sheet.Cell(rowIndex, 12).Value = grossProfitPercent;
+                    sheet.Cell(rowIndex, 4).Value = subclassNode.Label;
+                    sheet.Cell(rowIndex, 5).Value = monthPeriod.TimePeriodId / 100;
+                    sheet.Cell(rowIndex, 6).Value = monthPeriod.Label;
+                    sheet.Cell(rowIndex, 7).Value = revenue;
+                    sheet.Cell(rowIndex, 8).Value = quantity;
+                    sheet.Cell(rowIndex, 9).Value = asp;
+                    sheet.Cell(rowIndex, 10).Value = unitCost;
+                    sheet.Cell(rowIndex, 11).Value = totalCosts;
+                    sheet.Cell(rowIndex, 12).Value = grossProfit;
+                    sheet.Cell(rowIndex, 13).Value = grossProfitPercent;
                     rowIndex += 1;
                 }
             }
@@ -980,10 +1044,31 @@ public sealed class PlanningService : IPlanningService
         var mappings = await _repository.GetHierarchyMappingsAsync(cancellationToken);
         return new HierarchyMappingResponse(
             mappings
-                .OrderBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(entry => entry.DepartmentLabel, StringComparer.OrdinalIgnoreCase)
                 .Select(entry => new HierarchyDepartmentDto(
-                    entry.Key,
-                    entry.Value.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToList()))
+                    entry.DepartmentLabel,
+                    entry.LifecycleState,
+                    entry.RampProfileCode,
+                    entry.EffectiveFromTimePeriodId,
+                    entry.EffectiveToTimePeriodId,
+                    entry.Classes
+                        .OrderBy(value => value.ClassLabel, StringComparer.OrdinalIgnoreCase)
+                        .Select(classEntry => new HierarchyClassDto(
+                            classEntry.ClassLabel,
+                            classEntry.LifecycleState,
+                            classEntry.RampProfileCode,
+                            classEntry.EffectiveFromTimePeriodId,
+                            classEntry.EffectiveToTimePeriodId,
+                            classEntry.Subclasses
+                                .OrderBy(value => value.SubclassLabel, StringComparer.OrdinalIgnoreCase)
+                                .Select(subclassEntry => new HierarchySubclassDto(
+                                    subclassEntry.SubclassLabel,
+                                    subclassEntry.LifecycleState,
+                                    subclassEntry.RampProfileCode,
+                                    subclassEntry.EffectiveFromTimePeriodId,
+                                    subclassEntry.EffectiveToTimePeriodId))
+                                .ToList()))
+                        .ToList()))
                 .ToList());
     }
 
@@ -1106,7 +1191,7 @@ public sealed class PlanningService : IPlanningService
     {
         foreach (var requiredHeader in new[]
                  {
-                     "Store", "Department", "Class", "Year", "Month",
+                     "Store", "Department", "Class", "Subclass", "Year", "Month",
                      "Sales Revenue", "Sold Qty", "ASP", "Unit Cost", "Total Costs", "GP", "GP%"
                  })
         {
@@ -1134,6 +1219,7 @@ public sealed class PlanningService : IPlanningService
             row.Cell(headerMap["Store"]).GetString().Trim(),
             row.Cell(headerMap["Department"]).GetString().Trim(),
             row.Cell(headerMap["Class"]).GetString().Trim(),
+            row.Cell(headerMap["Subclass"]).GetString().Trim(),
             row.Cell(headerMap["Year"]).GetString().Trim(),
             row.Cell(headerMap["Month"]).GetString().Trim(),
             row.Cell(headerMap["Sales Revenue"]).GetString().Trim(),
@@ -1157,9 +1243,9 @@ public sealed class PlanningService : IPlanningService
             return false;
         }
 
-        if (string.IsNullOrWhiteSpace(row.Department) || string.IsNullOrWhiteSpace(row.Class))
+        if (string.IsNullOrWhiteSpace(row.Department) || string.IsNullOrWhiteSpace(row.Class) || string.IsNullOrWhiteSpace(row.Subclass))
         {
-            exceptionMessage = "Department and Class are required.";
+            exceptionMessage = "Department, Class, and Subclass are required.";
             return false;
         }
 
@@ -1255,6 +1341,7 @@ public sealed class PlanningService : IPlanningService
             store,
             row.Department.Trim(),
             row.Class.Trim(),
+            row.Subclass.Trim(),
             year,
             monthIndex + 1,
             normalizedRevenue,
@@ -1271,7 +1358,7 @@ public sealed class PlanningService : IPlanningService
     {
         var headers = new[]
         {
-            "Store", "Department", "Class", "Year", "Month",
+            "Store", "Department", "Class", "Subclass", "Year", "Month",
             "Sales Revenue", "Sold Qty", "ASP", "Unit Cost", "Total Costs", "GP", "GP%"
         };
         for (var index = 0; index < headers.Length; index += 1)
@@ -1285,15 +1372,16 @@ public sealed class PlanningService : IPlanningService
         sheet.Cell(rowIndex, 1).Value = row.Store;
         sheet.Cell(rowIndex, 2).Value = row.Department;
         sheet.Cell(rowIndex, 3).Value = row.Class;
-        sheet.Cell(rowIndex, 4).Value = row.Year;
-        sheet.Cell(rowIndex, 5).Value = row.Month;
-        sheet.Cell(rowIndex, 6).Value = row.SalesRevenue;
-        sheet.Cell(rowIndex, 7).Value = row.SoldQty;
-        sheet.Cell(rowIndex, 8).Value = row.Asp;
-        sheet.Cell(rowIndex, 9).Value = row.UnitCost;
-        sheet.Cell(rowIndex, 10).Value = row.TotalCosts;
-        sheet.Cell(rowIndex, 11).Value = row.Gp;
-        sheet.Cell(rowIndex, 12).Value = row.GpPercent;
+        sheet.Cell(rowIndex, 4).Value = row.Subclass;
+        sheet.Cell(rowIndex, 5).Value = row.Year;
+        sheet.Cell(rowIndex, 6).Value = row.Month;
+        sheet.Cell(rowIndex, 7).Value = row.SalesRevenue;
+        sheet.Cell(rowIndex, 8).Value = row.SoldQty;
+        sheet.Cell(rowIndex, 9).Value = row.Asp;
+        sheet.Cell(rowIndex, 10).Value = row.UnitCost;
+        sheet.Cell(rowIndex, 11).Value = row.TotalCosts;
+        sheet.Cell(rowIndex, 12).Value = row.Gp;
+        sheet.Cell(rowIndex, 13).Value = row.GpPercent;
         sheet.Row(rowIndex).Style.Fill.BackgroundColor = XLColor.LightPink;
     }
 
@@ -1327,6 +1415,7 @@ public sealed class PlanningService : IPlanningService
         string Store,
         string Department,
         string Class,
+        string Subclass,
         string Year,
         string Month,
         string SalesRevenue,
@@ -1341,6 +1430,7 @@ public sealed class PlanningService : IPlanningService
         string Store,
         string Department,
         string Class,
+        string Subclass,
         int Year,
         int MonthIndex,
         decimal SalesRevenue,

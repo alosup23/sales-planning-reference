@@ -37,7 +37,8 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         await using var connection = await OpenConnectionAsync(cancellationToken);
         var productNodes = await LoadProductNodesAsync(connection, null, cancellationToken);
         var timePeriods = await LoadTimePeriodsAsync(connection, null, cancellationToken);
-        return new PlanningMetadataSnapshot(productNodes, timePeriods);
+        var stores = await LoadStoreMetadataAsync(connection, null, cancellationToken);
+        return new PlanningMetadataSnapshot(productNodes, timePeriods, stores);
     }
 
     public async Task<IReadOnlyList<PlanningCell>> GetCellsAsync(IEnumerable<PlanningCellCoordinate> coordinates, CancellationToken cancellationToken)
@@ -308,6 +309,8 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         await using var connection = await OpenConnectionAsync(cancellationToken);
         var productNodes = await LoadProductNodesAsync(connection, null, cancellationToken);
         var timePeriods = await LoadTimePeriodsAsync(connection, null, cancellationToken);
+        var stores = await LoadStoreMetadataAsync(connection, null, cancellationToken);
+        var hierarchyMappings = await LoadHierarchyMappingsAsync(connection, null, cancellationToken);
         var scenarioCells = (await LoadCellsAsync(connection, null, cancellationToken))
             .Where(cell => cell.Coordinate.ScenarioVersionId == scenarioVersionId)
             .ToList();
@@ -317,6 +320,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             .ThenBy(node => string.Join(">", node.Path), StringComparer.OrdinalIgnoreCase)
             .Select(node =>
             {
+                var resolvedMetadata = ResolveNodeMetadata(node, stores, hierarchyMappings);
                 var cells = scenarioCells
                     .Where(cell => cell.Coordinate.StoreId == node.StoreId && cell.Coordinate.ProductNodeId == node.ProductNodeId)
                     .GroupBy(cell => cell.Coordinate.TimePeriodId)
@@ -341,6 +345,14 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                     node.Level,
                     node.Path,
                     node.IsLeaf,
+                    node.NodeKind,
+                    stores.TryGetValue(node.StoreId, out var storeMetadata) ? storeMetadata.StoreLabel : node.Path.FirstOrDefault() ?? $"Store {node.StoreId}",
+                    stores.TryGetValue(node.StoreId, out storeMetadata) ? storeMetadata.ClusterLabel : "Unassigned Cluster",
+                    stores.TryGetValue(node.StoreId, out storeMetadata) ? storeMetadata.RegionLabel : "Unassigned Region",
+                    resolvedMetadata.LifecycleState,
+                    resolvedMetadata.RampProfileCode,
+                    resolvedMetadata.EffectiveFromTimePeriodId,
+                    resolvedMetadata.EffectiveToTimePeriodId,
                     cells);
             })
             .ToList();
@@ -387,8 +399,17 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 {
                     var storeId = ++nextStoreId;
                     var productNodeId = ++nextProductNodeId;
-                    node = new ProductNode(productNodeId, storeId, null, request.Label.Trim(), 0, new[] { request.Label.Trim() }, false);
+                    node = new ProductNode(productNodeId, storeId, null, request.Label.Trim(), 0, new[] { request.Label.Trim() }, false, "store", "active", request.ClusterLabel is null && request.RegionLabel is null ? "new-store-ramp" : null, null, null);
                     await InsertProductNodeAsync(connection, transaction, node, cancellationToken);
+                    await UpsertStoreMetadataAsync(connection, transaction, new StoreNodeMetadata(
+                        storeId,
+                        request.Label.Trim(),
+                        request.ClusterLabel?.Trim() ?? "Unassigned Cluster",
+                        request.RegionLabel?.Trim() ?? "Unassigned Region",
+                        "active",
+                        "new-store-ramp",
+                        null,
+                        null), cancellationToken);
                     await InitializeCellsForNodeAsync(connection, transaction, request.ScenarioVersionId, node, SupportedMeasureIds, timePeriods.Values, cancellationToken);
                     if (request.CopyFromStoreId is not null)
                     {
@@ -418,7 +439,12 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                         request.Label.Trim(),
                         1,
                         parent.Path.Append(request.Label.Trim()).ToArray(),
-                        false);
+                        false,
+                        "department",
+                        "active",
+                        null,
+                        null,
+                        null);
                     await InsertProductNodeAsync(connection, transaction, node, cancellationToken);
                     await InitializeCellsForNodeAsync(connection, transaction, request.ScenarioVersionId, node, SupportedMeasureIds, timePeriods.Values, cancellationToken);
                     await UpsertHierarchyDepartmentInternalAsync(connection, transaction, node.Label, cancellationToken);
@@ -441,10 +467,44 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                         request.Label.Trim(),
                         2,
                         parent.Path.Append(request.Label.Trim()).ToArray(),
-                        true);
+                        false,
+                        "class",
+                        "active",
+                        null,
+                        null,
+                        null);
                     await InsertProductNodeAsync(connection, transaction, node, cancellationToken);
                     await InitializeCellsForNodeAsync(connection, transaction, request.ScenarioVersionId, node, SupportedMeasureIds, timePeriods.Values, cancellationToken);
                     await UpsertHierarchyClassInternalAsync(connection, transaction, parent.Label, node.Label, cancellationToken);
+                    break;
+                }
+                case "subclass":
+                {
+                    var parent = GetRequiredNode(productNodes, request.ParentProductNodeId, 2, "subclass");
+                    if (parent.IsLeaf)
+                    {
+                        parent = parent with { IsLeaf = false };
+                        await UpdateProductNodeAsync(connection, transaction, parent, cancellationToken);
+                    }
+
+                    node = new ProductNode(
+                        ++nextProductNodeId,
+                        parent.StoreId,
+                        parent.ProductNodeId,
+                        request.Label.Trim(),
+                        3,
+                        parent.Path.Append(request.Label.Trim()).ToArray(),
+                        true,
+                        "subclass",
+                        "active",
+                        null,
+                        null,
+                        null);
+                    await InsertProductNodeAsync(connection, transaction, node, cancellationToken);
+                    await InitializeCellsForNodeAsync(connection, transaction, request.ScenarioVersionId, node, SupportedMeasureIds, timePeriods.Values, cancellationToken);
+                    var classNode = parent;
+                    var departmentNode = productNodes[classNode.ParentProductNodeId!.Value];
+                    await UpsertHierarchySubclassInternal(connection, transaction, departmentNode.Label, classNode.Label, node.Label, cancellationToken);
                     break;
                 }
                 default:
@@ -460,7 +520,16 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         }
     }
 
-    public async Task<IReadOnlyDictionary<string, IReadOnlyList<string>>> GetHierarchyMappingsAsync(CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<StoreNodeMetadata>> GetStoresAsync(CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        return (await LoadStoreMetadataAsync(connection, null, cancellationToken)).Values
+            .OrderBy(store => store.StoreLabel, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    public async Task<IReadOnlyList<HierarchyDepartmentRecord>> GetHierarchyMappingsAsync(CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -493,6 +562,23 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             await using var connection = await OpenConnectionAsync(cancellationToken);
             await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
             await UpsertHierarchyClassInternalAsync(connection, transaction, departmentLabel, classLabel, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task UpsertHierarchySubclassAsync(string departmentLabel, string classLabel, string subclassLabel, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            await UpsertHierarchySubclassInternal(connection, transaction, departmentLabel, classLabel, subclassLabel, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
         finally
@@ -699,6 +785,10 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                          "audit_deltas",
                          "audits",
                          "planning_cells",
+                         "hierarchy_subclasses_v2",
+                         "hierarchy_classes_v2",
+                         "hierarchy_departments_v2",
+                         "store_metadata",
                          "hierarchy_subcategories",
                          "hierarchy_categories",
                          "product_nodes",
@@ -805,6 +895,42 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                         subcategory_label text not null,
                         primary key (category_label, subcategory_label)
                     );
+                    create table if not exists store_metadata (
+                        store_id integer primary key,
+                        store_label text not null,
+                        cluster_label text not null,
+                        region_label text not null,
+                        lifecycle_state text not null default 'active',
+                        ramp_profile_code text null,
+                        effective_from_time_period_id integer null,
+                        effective_to_time_period_id integer null
+                    );
+                    create table if not exists hierarchy_departments_v2 (
+                        department_label text primary key,
+                        lifecycle_state text not null default 'active',
+                        ramp_profile_code text null,
+                        effective_from_time_period_id integer null,
+                        effective_to_time_period_id integer null
+                    );
+                    create table if not exists hierarchy_classes_v2 (
+                        department_label text not null,
+                        class_label text not null,
+                        lifecycle_state text not null default 'active',
+                        ramp_profile_code text null,
+                        effective_from_time_period_id integer null,
+                        effective_to_time_period_id integer null,
+                        primary key (department_label, class_label)
+                    );
+                    create table if not exists hierarchy_subclasses_v2 (
+                        department_label text not null,
+                        class_label text not null,
+                        subclass_label text not null,
+                        lifecycle_state text not null default 'active',
+                        ramp_profile_code text null,
+                        effective_from_time_period_id integer null,
+                        effective_to_time_period_id integer null,
+                        primary key (department_label, class_label, subclass_label)
+                    );
                     create index if not exists idx_planning_cells_scenario_measure on planning_cells (scenario_version_id, measure_id);
                     create index if not exists idx_audit_deltas_lookup on audit_deltas (scenario_version_id, measure_id, store_id, product_node_id);
                     """;
@@ -866,8 +992,47 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 reader.GetString(3),
                 reader.GetInt32(4),
                 JsonSerializer.Deserialize<string[]>(reader.GetString(5)) ?? Array.Empty<string>(),
-                reader.GetInt64(6) == 1);
+                reader.GetInt64(6) == 1,
+                DeriveNodeKind(reader.GetInt32(4), reader.GetInt64(6) == 1),
+                "active",
+                null,
+                null,
+                null);
             result[node.ProductNodeId] = node;
+        }
+
+        return result;
+    }
+
+    private static async Task<Dictionary<long, StoreNodeMetadata>> LoadStoreMetadataAsync(SqliteConnection connection, SqliteTransaction? transaction, CancellationToken cancellationToken)
+    {
+        var result = new Dictionary<long, StoreNodeMetadata>();
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            select store_id,
+                   store_label,
+                   cluster_label,
+                   region_label,
+                   lifecycle_state,
+                   ramp_profile_code,
+                   effective_from_time_period_id,
+                   effective_to_time_period_id
+            from store_metadata;
+            """;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var metadata = new StoreNodeMetadata(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5),
+                reader.IsDBNull(6) ? null : reader.GetInt64(6),
+                reader.IsDBNull(7) ? null : reader.GetInt64(7));
+            result[metadata.StoreId] = metadata;
         }
 
         return result;
@@ -1084,6 +1249,50 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         command.Parameters.AddWithValue("$level", node.Level);
         command.Parameters.AddWithValue("$pathJson", JsonSerializer.Serialize(node.Path));
         command.Parameters.AddWithValue("$isLeaf", node.IsLeaf ? 1 : 0);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task UpsertStoreMetadataAsync(SqliteConnection connection, SqliteTransaction transaction, StoreNodeMetadata metadata, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            insert into store_metadata (
+                store_id,
+                store_label,
+                cluster_label,
+                region_label,
+                lifecycle_state,
+                ramp_profile_code,
+                effective_from_time_period_id,
+                effective_to_time_period_id)
+            values (
+                $storeId,
+                $storeLabel,
+                $clusterLabel,
+                $regionLabel,
+                $lifecycleState,
+                $rampProfileCode,
+                $effectiveFromTimePeriodId,
+                $effectiveToTimePeriodId)
+            on conflict (store_id)
+            do update set
+                store_label = excluded.store_label,
+                cluster_label = excluded.cluster_label,
+                region_label = excluded.region_label,
+                lifecycle_state = excluded.lifecycle_state,
+                ramp_profile_code = excluded.ramp_profile_code,
+                effective_from_time_period_id = excluded.effective_from_time_period_id,
+                effective_to_time_period_id = excluded.effective_to_time_period_id;
+            """;
+        command.Parameters.AddWithValue("$storeId", metadata.StoreId);
+        command.Parameters.AddWithValue("$storeLabel", metadata.StoreLabel);
+        command.Parameters.AddWithValue("$clusterLabel", metadata.ClusterLabel);
+        command.Parameters.AddWithValue("$regionLabel", metadata.RegionLabel);
+        command.Parameters.AddWithValue("$lifecycleState", metadata.LifecycleState);
+        command.Parameters.AddWithValue("$rampProfileCode", (object?)metadata.RampProfileCode ?? DBNull.Value);
+        command.Parameters.AddWithValue("$effectiveFromTimePeriodId", (object?)metadata.EffectiveFromTimePeriodId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$effectiveToTimePeriodId", (object?)metadata.EffectiveToTimePeriodId ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -1466,7 +1675,12 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 sourceNode.Label,
                 sourceNode.Level,
                 parent.Path.Append(sourceNode.Label).ToArray(),
-                sourceNode.IsLeaf);
+                sourceNode.IsLeaf,
+                sourceNode.NodeKind,
+                sourceNode.LifecycleState,
+                sourceNode.RampProfileCode,
+                sourceNode.EffectiveFromTimePeriodId,
+                sourceNode.EffectiveToTimePeriodId);
             await InsertProductNodeAsync(connection, transaction, clonedNode, cancellationToken);
             await InitializeCellsForNodeAsync(connection, transaction, scenarioVersionId, clonedNode, SupportedMeasureIds, timePeriods.Values, cancellationToken);
             nodeMap[sourceNode.ProductNodeId] = clonedNode;
@@ -1499,64 +1713,126 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         return nextProductNodeId;
     }
 
-    private static async Task<IReadOnlyDictionary<string, IReadOnlyList<string>>> LoadHierarchyMappingsAsync(SqliteConnection connection, SqliteTransaction? transaction, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<HierarchyDepartmentRecord>> LoadHierarchyMappingsAsync(SqliteConnection connection, SqliteTransaction? transaction, CancellationToken cancellationToken)
     {
-        var categories = new SortedDictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        var departments = new Dictionary<string, HierarchyDepartmentRecord>(StringComparer.OrdinalIgnoreCase);
+        var classes = new Dictionary<(string DepartmentLabel, string ClassLabel), HierarchyClassRecord>();
+        var subclasses = new Dictionary<(string DepartmentLabel, string ClassLabel), List<HierarchySubclassRecord>>();
 
-        await using (var categoryCommand = connection.CreateCommand())
+        await using (var departmentCommand = connection.CreateCommand())
         {
-            categoryCommand.Transaction = transaction;
-            categoryCommand.CommandText = "select category_label from hierarchy_categories order by category_label;";
-            await using var categoryReader = await categoryCommand.ExecuteReaderAsync(cancellationToken);
-            while (await categoryReader.ReadAsync(cancellationToken))
+            departmentCommand.Transaction = transaction;
+            departmentCommand.CommandText = """
+                select department_label,
+                       lifecycle_state,
+                       ramp_profile_code,
+                       effective_from_time_period_id,
+                       effective_to_time_period_id
+                from hierarchy_departments_v2
+                order by department_label;
+                """;
+            await using var reader = await departmentCommand.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
             {
-                categories[categoryReader.GetString(0)] = new List<string>();
+                var record = new HierarchyDepartmentRecord(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetInt64(3),
+                    reader.IsDBNull(4) ? null : reader.GetInt64(4),
+                    []);
+                departments[record.DepartmentLabel] = record;
             }
         }
 
-        await using (var subcategoryCommand = connection.CreateCommand())
+        await using (var classCommand = connection.CreateCommand())
         {
-            subcategoryCommand.Transaction = transaction;
-            subcategoryCommand.CommandText = """
-                select category_label, subcategory_label
-                from hierarchy_subcategories
-                order by category_label, subcategory_label;
+            classCommand.Transaction = transaction;
+            classCommand.CommandText = """
+                select department_label,
+                       class_label,
+                       lifecycle_state,
+                       ramp_profile_code,
+                       effective_from_time_period_id,
+                       effective_to_time_period_id
+                from hierarchy_classes_v2
+                order by department_label, class_label;
                 """;
-            await using var subcategoryReader = await subcategoryCommand.ExecuteReaderAsync(cancellationToken);
-            while (await subcategoryReader.ReadAsync(cancellationToken))
+            await using var reader = await classCommand.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
             {
-                var categoryLabel = subcategoryReader.GetString(0);
-                var subcategoryLabel = subcategoryReader.GetString(1);
-                if (!categories.TryGetValue(categoryLabel, out var subcategories))
+                var departmentLabel = reader.GetString(0);
+                var record = new HierarchyClassRecord(
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetInt64(4),
+                    reader.IsDBNull(5) ? null : reader.GetInt64(5),
+                    []);
+                classes[(departmentLabel, record.ClassLabel)] = record;
+            }
+        }
+
+        await using (var subclassCommand = connection.CreateCommand())
+        {
+            subclassCommand.Transaction = transaction;
+            subclassCommand.CommandText = """
+                select department_label,
+                       class_label,
+                       subclass_label,
+                       lifecycle_state,
+                       ramp_profile_code,
+                       effective_from_time_period_id,
+                       effective_to_time_period_id
+                from hierarchy_subclasses_v2
+                order by department_label, class_label, subclass_label;
+                """;
+            await using var reader = await subclassCommand.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var key = (reader.GetString(0), reader.GetString(1));
+                var list = subclasses.GetValueOrDefault(key);
+                if (list is null)
                 {
-                    subcategories = new List<string>();
-                    categories[categoryLabel] = subcategories;
+                    list = [];
+                    subclasses[key] = list;
                 }
 
-                subcategories.Add(subcategoryLabel);
+                list.Add(new HierarchySubclassRecord(
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetInt64(5),
+                    reader.IsDBNull(6) ? null : reader.GetInt64(6)));
             }
         }
 
-        return categories.ToDictionary(
-            entry => entry.Key,
-            entry => (IReadOnlyList<string>)entry.Value,
-            StringComparer.OrdinalIgnoreCase);
+        return departments.Values
+            .OrderBy(record => record.DepartmentLabel, StringComparer.OrdinalIgnoreCase)
+            .Select(department => department with
+            {
+                Classes = classes
+                    .Where(entry => string.Equals(entry.Key.DepartmentLabel, department.DepartmentLabel, StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(entry => entry.Key.ClassLabel, StringComparer.OrdinalIgnoreCase)
+                    .Select(entry => entry.Value with
+                    {
+                        Subclasses = (subclasses.GetValueOrDefault((department.DepartmentLabel, entry.Value.ClassLabel)) ?? [])
+                            .OrderBy(value => value.SubclassLabel, StringComparer.OrdinalIgnoreCase)
+                            .ToList()
+                    })
+                    .ToList()
+            })
+            .ToList();
     }
 
     private static async Task RebuildHierarchyMappingsAsync(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
     {
-        await using (var deleteClassesCommand = connection.CreateCommand())
+        foreach (var tableName in new[] { "hierarchy_subclasses_v2", "hierarchy_classes_v2", "hierarchy_departments_v2", "hierarchy_subcategories", "hierarchy_categories" })
         {
-            deleteClassesCommand.Transaction = transaction;
-            deleteClassesCommand.CommandText = "delete from hierarchy_subcategories;";
-            await deleteClassesCommand.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await using (var deleteDepartmentsCommand = connection.CreateCommand())
-        {
-            deleteDepartmentsCommand.Transaction = transaction;
-            deleteDepartmentsCommand.CommandText = "delete from hierarchy_categories;";
-            await deleteDepartmentsCommand.ExecuteNonQueryAsync(cancellationToken);
+            await using var deleteCommand = connection.CreateCommand();
+            deleteCommand.Transaction = transaction;
+            deleteCommand.CommandText = $"delete from {tableName};";
+            await deleteCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
         var productNodes = await LoadProductNodesAsync(connection, transaction, cancellationToken);
@@ -1569,6 +1845,13 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         {
             var department = productNodes[classNode.ParentProductNodeId!.Value];
             await UpsertHierarchyClassInternalAsync(connection, transaction, department.Label, classNode.Label, cancellationToken);
+        }
+
+        foreach (var subclassNode in productNodes.Values.Where(node => node.Level == 3))
+        {
+            var classNode = productNodes[subclassNode.ParentProductNodeId!.Value];
+            var departmentNode = productNodes[classNode.ParentProductNodeId!.Value];
+            await UpsertHierarchySubclassInternal(connection, transaction, departmentNode.Label, classNode.Label, subclassNode.Label, cancellationToken);
         }
     }
 
@@ -1589,6 +1872,21 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             """;
         command.Parameters.AddWithValue("$categoryLabel", normalizedLabel);
         await command.ExecuteNonQueryAsync(cancellationToken);
+
+        await using var modernCommand = connection.CreateCommand();
+        modernCommand.Transaction = transaction;
+        modernCommand.CommandText = """
+            insert into hierarchy_departments_v2 (
+                department_label,
+                lifecycle_state,
+                ramp_profile_code,
+                effective_from_time_period_id,
+                effective_to_time_period_id)
+            values ($departmentLabel, 'active', null, null, null)
+            on conflict (department_label) do nothing;
+            """;
+        modernCommand.Parameters.AddWithValue("$departmentLabel", normalizedLabel);
+        await modernCommand.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task UpsertHierarchyClassInternalAsync(
@@ -1614,6 +1912,58 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             """;
         command.Parameters.AddWithValue("$categoryLabel", departmentLabel.Trim());
         command.Parameters.AddWithValue("$subcategoryLabel", normalizedClass);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+
+        await using var modernCommand = connection.CreateCommand();
+        modernCommand.Transaction = transaction;
+        modernCommand.CommandText = """
+            insert into hierarchy_classes_v2 (
+                department_label,
+                class_label,
+                lifecycle_state,
+                ramp_profile_code,
+                effective_from_time_period_id,
+                effective_to_time_period_id)
+            values ($departmentLabel, $classLabel, 'active', null, null, null)
+            on conflict (department_label, class_label) do nothing;
+            """;
+        modernCommand.Parameters.AddWithValue("$departmentLabel", departmentLabel.Trim());
+        modernCommand.Parameters.AddWithValue("$classLabel", normalizedClass);
+        await modernCommand.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task UpsertHierarchySubclassInternal(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string departmentLabel,
+        string classLabel,
+        string subclassLabel,
+        CancellationToken cancellationToken)
+    {
+        var normalizedSubclass = subclassLabel.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedSubclass))
+        {
+            throw new InvalidOperationException("Subclass labels cannot be empty.");
+        }
+
+        await UpsertHierarchyClassInternalAsync(connection, transaction, departmentLabel, classLabel, cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            insert into hierarchy_subclasses_v2 (
+                department_label,
+                class_label,
+                subclass_label,
+                lifecycle_state,
+                ramp_profile_code,
+                effective_from_time_period_id,
+                effective_to_time_period_id)
+            values ($departmentLabel, $classLabel, $subclassLabel, 'active', null, null, null)
+            on conflict (department_label, class_label, subclass_label) do nothing;
+            """;
+        command.Parameters.AddWithValue("$departmentLabel", departmentLabel.Trim());
+        command.Parameters.AddWithValue("$classLabel", classLabel.Trim());
+        command.Parameters.AddWithValue("$subclassLabel", normalizedSubclass);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -1696,6 +2046,11 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             await InitializeCellsForNodeAsync(connection, transaction, 1, productNode, SupportedMeasureIds, timePeriods.Values, cancellationToken);
         }
 
+        foreach (var store in BuildStoreMetadata())
+        {
+            await UpsertStoreMetadataAsync(connection, transaction, store, cancellationToken);
+        }
+
         var cells = new Dictionary<string, PlanningCell>();
         foreach (var measureId in SupportedMeasureIds)
         {
@@ -1718,52 +2073,136 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
 
         var revenueLeafValues = new Dictionary<(long StoreId, long ProductNodeId), Dictionary<long, decimal>>
         {
-            [(101, 2110)] = new()
+            [(101, 2111)] = new()
             {
                 [202601] = 600m, [202602] = 750m, [202603] = 700m, [202604] = 710m,
                 [202605] = 720m, [202606] = 735m, [202607] = 760m, [202608] = 770m,
                 [202609] = 730m, [202610] = 690m, [202611] = 720m, [202612] = 780m
             },
-            [(101, 2120)] = new()
+            [(101, 2112)] = new()
             {
                 [202601] = 250m, [202602] = 260m, [202603] = 255m, [202604] = 265m,
                 [202605] = 270m, [202606] = 280m, [202607] = 290m, [202608] = 285m,
                 [202609] = 275m, [202610] = 268m, [202611] = 272m, [202612] = 295m
             },
-            [(101, 2210)] = new()
+            [(101, 2121)] = new()
             {
                 [202601] = 420m, [202602] = 430m, [202603] = 410m, [202604] = 425m,
                 [202605] = 440m, [202606] = 450m, [202607] = 460m, [202608] = 470m,
                 [202609] = 455m, [202610] = 440m, [202611] = 448m, [202612] = 475m
+            },
+            [(101, 2122)] = new()
+            {
+                [202601] = 390m, [202602] = 405m, [202603] = 398m, [202604] = 410m,
+                [202605] = 420m, [202606] = 430m, [202607] = 438m, [202608] = 442m,
+                [202609] = 435m, [202610] = 425m, [202611] = 430m, [202612] = 445m
+            },
+            [(101, 2211)] = new()
+            {
+                [202601] = 510m, [202602] = 525m, [202603] = 505m, [202604] = 515m,
+                [202605] = 530m, [202606] = 540m, [202607] = 550m, [202608] = 565m,
+                [202609] = 555m, [202610] = 542m, [202611] = 548m, [202612] = 572m
+            },
+            [(101, 2212)] = new()
+            {
+                [202601] = 300m, [202602] = 315m, [202603] = 308m, [202604] = 318m,
+                [202605] = 324m, [202606] = 336m, [202607] = 344m, [202608] = 352m,
+                [202609] = 348m, [202610] = 339m, [202611] = 342m, [202612] = 356m
+            },
+            [(102, 3111)] = new()
+            {
+                [202601] = 560m, [202602] = 610m, [202603] = 590m, [202604] = 602m,
+                [202605] = 612m, [202606] = 625m, [202607] = 645m, [202608] = 652m,
+                [202609] = 630m, [202610] = 608m, [202611] = 620m, [202612] = 660m
+            },
+            [(102, 3112)] = new()
+            {
+                [202601] = 240m, [202602] = 255m, [202603] = 248m, [202604] = 258m,
+                [202605] = 262m, [202606] = 272m, [202607] = 280m, [202608] = 286m,
+                [202609] = 278m, [202610] = 270m, [202611] = 275m, [202612] = 290m
+            },
+            [(102, 3211)] = new()
+            {
+                [202601] = 480m, [202602] = 495m, [202603] = 488m, [202604] = 500m,
+                [202605] = 514m, [202606] = 522m, [202607] = 534m, [202608] = 548m,
+                [202609] = 540m, [202610] = 528m, [202611] = 533m, [202612] = 552m
+            },
+            [(102, 3212)] = new()
+            {
+                [202601] = 285m, [202602] = 295m, [202603] = 292m, [202604] = 298m,
+                [202605] = 306m, [202606] = 312m, [202607] = 320m, [202608] = 327m,
+                [202609] = 322m, [202610] = 315m, [202611] = 318m, [202612] = 330m
             }
         };
 
         var quantityLeafValues = new Dictionary<(long StoreId, long ProductNodeId), Dictionary<long, decimal>>
         {
-            [(101, 2110)] = new()
+            [(101, 2111)] = new()
             {
                 [202601] = 120m, [202602] = 150m, [202603] = 142m, [202604] = 144m,
                 [202605] = 146m, [202606] = 149m, [202607] = 153m, [202608] = 155m,
                 [202609] = 148m, [202610] = 140m, [202611] = 146m, [202612] = 158m
             },
-            [(101, 2120)] = new()
+            [(101, 2112)] = new()
             {
                 [202601] = 55m, [202602] = 58m, [202603] = 57m, [202604] = 59m,
                 [202605] = 60m, [202606] = 62m, [202607] = 64m, [202608] = 63m,
                 [202609] = 61m, [202610] = 60m, [202611] = 61m, [202612] = 66m
             },
-            [(101, 2210)] = new()
+            [(101, 2121)] = new()
             {
                 [202601] = 80m, [202602] = 84m, [202603] = 82m, [202604] = 85m,
                 [202605] = 88m, [202606] = 90m, [202607] = 92m, [202608] = 94m,
                 [202609] = 91m, [202610] = 88m, [202611] = 89m, [202612] = 96m
+            },
+            [(101, 2122)] = new()
+            {
+                [202601] = 76m, [202602] = 79m, [202603] = 78m, [202604] = 80m,
+                [202605] = 82m, [202606] = 84m, [202607] = 85m, [202608] = 87m,
+                [202609] = 86m, [202610] = 83m, [202611] = 84m, [202612] = 88m
+            },
+            [(101, 2211)] = new()
+            {
+                [202601] = 95m, [202602] = 98m, [202603] = 96m, [202604] = 98m,
+                [202605] = 101m, [202606] = 103m, [202607] = 105m, [202608] = 108m,
+                [202609] = 106m, [202610] = 104m, [202611] = 105m, [202612] = 109m
+            },
+            [(101, 2212)] = new()
+            {
+                [202601] = 61m, [202602] = 63m, [202603] = 62m, [202604] = 63m,
+                [202605] = 64m, [202606] = 66m, [202607] = 67m, [202608] = 69m,
+                [202609] = 68m, [202610] = 66m, [202611] = 67m, [202612] = 70m
+            },
+            [(102, 3111)] = new()
+            {
+                [202601] = 111m, [202602] = 121m, [202603] = 117m, [202604] = 119m,
+                [202605] = 121m, [202606] = 123m, [202607] = 127m, [202608] = 128m,
+                [202609] = 125m, [202610] = 121m, [202611] = 123m, [202612] = 131m
+            },
+            [(102, 3112)] = new()
+            {
+                [202601] = 52m, [202602] = 55m, [202603] = 53m, [202604] = 55m,
+                [202605] = 56m, [202606] = 58m, [202607] = 60m, [202608] = 61m,
+                [202609] = 59m, [202610] = 58m, [202611] = 58m, [202612] = 62m
+            },
+            [(102, 3211)] = new()
+            {
+                [202601] = 89m, [202602] = 91m, [202603] = 90m, [202604] = 92m,
+                [202605] = 94m, [202606] = 95m, [202607] = 98m, [202608] = 100m,
+                [202609] = 99m, [202610] = 97m, [202611] = 98m, [202612] = 102m
+            },
+            [(102, 3212)] = new()
+            {
+                [202601] = 58m, [202602] = 60m, [202603] = 59m, [202604] = 60m,
+                [202605] = 62m, [202606] = 63m, [202607] = 65m, [202608] = 66m,
+                [202609] = 65m, [202610] = 64m, [202611] = 64m, [202612] = 67m
             }
         };
 
         ApplyLeafSeedValues(cells, 1, revenueLeafValues);
         ApplyLeafSeedValues(cells, 2, quantityLeafValues);
 
-        var lockedCoordinate = new PlanningCellCoordinate(1, 1, 101, 2110, 202602);
+        var lockedCoordinate = new PlanningCellCoordinate(1, 1, 101, 2111, 202602);
         cells[lockedCoordinate.Key].IsLocked = true;
         cells[lockedCoordinate.Key].LockReason = "Manager-held sample lock";
         cells[lockedCoordinate.Key].LockedBy = "demo.manager";
@@ -1781,16 +2220,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             productNodes,
             timePeriods);
 
-        foreach (var category in productNodes.Values.Where(node => node.Level == 1))
-        {
-            await UpsertHierarchyDepartmentInternalAsync(connection, transaction, category.Label, cancellationToken);
-        }
-
-        foreach (var subcategory in productNodes.Values.Where(node => node.Level == 2))
-        {
-            var category = productNodes[subcategory.ParentProductNodeId!.Value];
-            await UpsertHierarchyClassInternalAsync(connection, transaction, category.Label, subcategory.Label, cancellationToken);
-        }
+        await RebuildHierarchyMappingsAsync(connection, transaction, cancellationToken);
 
         foreach (var cell in cells.Values)
         {
@@ -1933,17 +2363,104 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         }
     }
 
+    private static (string LifecycleState, string? RampProfileCode, long? EffectiveFromTimePeriodId, long? EffectiveToTimePeriodId) ResolveNodeMetadata(
+        ProductNode node,
+        IReadOnlyDictionary<long, StoreNodeMetadata> stores,
+        IReadOnlyList<HierarchyDepartmentRecord> hierarchyMappings)
+    {
+        if (node.NodeKind == "store" && stores.TryGetValue(node.StoreId, out var storeMetadata))
+        {
+            return (storeMetadata.LifecycleState, storeMetadata.RampProfileCode, storeMetadata.EffectiveFromTimePeriodId, storeMetadata.EffectiveToTimePeriodId);
+        }
+
+        var departmentLabel = node.Path.Length > 1 ? node.Path[1] : null;
+        if (departmentLabel is null)
+        {
+            return (node.LifecycleState, node.RampProfileCode, node.EffectiveFromTimePeriodId, node.EffectiveToTimePeriodId);
+        }
+
+        var department = hierarchyMappings.FirstOrDefault(entry => string.Equals(entry.DepartmentLabel, departmentLabel, StringComparison.OrdinalIgnoreCase));
+        if (department is null)
+        {
+            return (node.LifecycleState, node.RampProfileCode, node.EffectiveFromTimePeriodId, node.EffectiveToTimePeriodId);
+        }
+
+        if (node.NodeKind == "department")
+        {
+            return (department.LifecycleState, department.RampProfileCode, department.EffectiveFromTimePeriodId, department.EffectiveToTimePeriodId);
+        }
+
+        var classLabel = node.Path.Length > 2 ? node.Path[2] : null;
+        var classRecord = department.Classes.FirstOrDefault(entry => string.Equals(entry.ClassLabel, classLabel, StringComparison.OrdinalIgnoreCase));
+        if (classRecord is null)
+        {
+            return (node.LifecycleState, node.RampProfileCode, node.EffectiveFromTimePeriodId, node.EffectiveToTimePeriodId);
+        }
+
+        if (node.NodeKind == "class")
+        {
+            return (classRecord.LifecycleState, classRecord.RampProfileCode, classRecord.EffectiveFromTimePeriodId, classRecord.EffectiveToTimePeriodId);
+        }
+
+        var subclassLabel = node.Path.Length > 3 ? node.Path[3] : null;
+        var subclassRecord = classRecord.Subclasses.FirstOrDefault(entry => string.Equals(entry.SubclassLabel, subclassLabel, StringComparison.OrdinalIgnoreCase));
+        return subclassRecord is null
+            ? (node.LifecycleState, node.RampProfileCode, node.EffectiveFromTimePeriodId, node.EffectiveToTimePeriodId)
+            : (subclassRecord.LifecycleState, subclassRecord.RampProfileCode, subclassRecord.EffectiveFromTimePeriodId, subclassRecord.EffectiveToTimePeriodId);
+    }
+
+    private static string DeriveNodeKind(int level, bool isLeaf)
+    {
+        if (level <= 0)
+        {
+            return "store";
+        }
+
+        return level switch
+        {
+            1 => "department",
+            2 when isLeaf => "subclass",
+            2 => "class",
+            3 => "subclass",
+            _ => isLeaf ? "subclass" : "class"
+        };
+    }
+
     private static Dictionary<long, ProductNode> BuildProductNodes()
     {
         return new List<ProductNode>
         {
-            new(2000, 101, null, "Store A", 0, new[] { "Store A" }, false),
-            new(2100, 101, 2000, "Beverages", 1, new[] { "Store A", "Beverages" }, false),
-            new(2110, 101, 2100, "Soft Drinks", 2, new[] { "Store A", "Beverages", "Soft Drinks" }, true),
-            new(2120, 101, 2100, "Tea", 2, new[] { "Store A", "Beverages", "Tea" }, true),
-            new(2200, 101, 2000, "Snacks", 1, new[] { "Store A", "Snacks" }, false),
-            new(2210, 101, 2200, "Chips", 2, new[] { "Store A", "Snacks", "Chips" }, true)
+            new(2000, 101, null, "Store A", 0, new[] { "Store A" }, false, "store", "active", null, null, null),
+            new(2100, 101, 2000, "Beverages", 1, new[] { "Store A", "Beverages" }, false, "department", "active", "new-line-ramp", null, null),
+            new(2110, 101, 2100, "Soft Drinks", 2, new[] { "Store A", "Beverages", "Soft Drinks" }, false, "class", "active", null, null, null),
+            new(2111, 101, 2110, "Cola", 3, new[] { "Store A", "Beverages", "Soft Drinks", "Cola" }, true, "subclass", "active", "standard-ramp", null, null),
+            new(2112, 101, 2110, "Sparkling Fruit", 3, new[] { "Store A", "Beverages", "Soft Drinks", "Sparkling Fruit" }, true, "subclass", "active", "standard-ramp", null, null),
+            new(2120, 101, 2100, "Tea", 2, new[] { "Store A", "Beverages", "Tea" }, false, "class", "active", null, null, null),
+            new(2121, 101, 2120, "Green Tea", 3, new[] { "Store A", "Beverages", "Tea", "Green Tea" }, true, "subclass", "active", null, null, null),
+            new(2122, 101, 2120, "Milk Tea", 3, new[] { "Store A", "Beverages", "Tea", "Milk Tea" }, true, "subclass", "active", null, null, null),
+            new(2200, 101, 2000, "Snacks", 1, new[] { "Store A", "Snacks" }, false, "department", "active", null, null, null),
+            new(2210, 101, 2200, "Chips", 2, new[] { "Store A", "Snacks", "Chips" }, false, "class", "active", null, null, null),
+            new(2211, 101, 2210, "Potato Chips", 3, new[] { "Store A", "Snacks", "Chips", "Potato Chips" }, true, "subclass", "active", null, null, null),
+            new(2212, 101, 2210, "Corn Chips", 3, new[] { "Store A", "Snacks", "Chips", "Corn Chips" }, true, "subclass", "active", null, null, null),
+            new(3000, 102, null, "Store B", 0, new[] { "Store B" }, false, "store", "active", null, null, null),
+            new(3100, 102, 3000, "Beverages", 1, new[] { "Store B", "Beverages" }, false, "department", "active", null, null, null),
+            new(3110, 102, 3100, "Soft Drinks", 2, new[] { "Store B", "Beverages", "Soft Drinks" }, false, "class", "active", null, null, null),
+            new(3111, 102, 3110, "Cola", 3, new[] { "Store B", "Beverages", "Soft Drinks", "Cola" }, true, "subclass", "active", null, null, null),
+            new(3112, 102, 3110, "Sparkling Fruit", 3, new[] { "Store B", "Beverages", "Soft Drinks", "Sparkling Fruit" }, true, "subclass", "active", null, null, null),
+            new(3200, 102, 3000, "Snacks", 1, new[] { "Store B", "Snacks" }, false, "department", "active", null, null, null),
+            new(3210, 102, 3200, "Chips", 2, new[] { "Store B", "Snacks", "Chips" }, false, "class", "active", null, null, null),
+            new(3211, 102, 3210, "Potato Chips", 3, new[] { "Store B", "Snacks", "Chips", "Potato Chips" }, true, "subclass", "active", null, null, null),
+            new(3212, 102, 3210, "Corn Chips", 3, new[] { "Store B", "Snacks", "Chips", "Corn Chips" }, true, "subclass", "active", null, null, null)
         }.ToDictionary(node => node.ProductNodeId);
+    }
+
+    private static IReadOnlyList<StoreNodeMetadata> BuildStoreMetadata()
+    {
+        return
+        [
+            new StoreNodeMetadata(101, "Store A", "Baby Mart", "Central", "active", "new-store-ramp", null, null),
+            new StoreNodeMetadata(102, "Store B", "Baby Mall", "South", "active", "new-store-ramp", null, null)
+        ];
     }
 
     private static Dictionary<long, TimePeriodNode> BuildTimePeriods()

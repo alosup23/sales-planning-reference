@@ -5,6 +5,7 @@ import {
   downloadWorkbookExport,
   getGridSlice,
   getHierarchyMappings,
+  getPlanningInsights,
   postAddRow,
   postDeleteRow,
   postDeleteYear,
@@ -13,13 +14,14 @@ import {
   postGrowthFactor,
   postHierarchyClass,
   postHierarchyDepartment,
+  postHierarchySubclass,
   postLock,
   postSave,
   postSplash,
   postWorkbookImport,
 } from "./lib/api";
 import { HierarchyMaintenanceSheet } from "./components/HierarchyMaintenanceSheet";
-import type { GridCell, GridMeasure, GridRow, GridSliceResponse } from "./lib/types";
+import type { GridCell, GridMeasure, GridRow, GridSliceResponse, PlanningInsightResponse } from "./lib/types";
 
 const preloadPlanningGrid = () => import("./components/PlanningGrid");
 
@@ -39,6 +41,7 @@ export default function App() {
   const [selectedYearId, setSelectedYearId] = useState<number | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const [insightScope, setInsightScope] = useState<{ storeId: number; productNodeId: number; yearTimePeriodId: number } | null>(null);
 
   useEffect(() => {
     void preloadPlanningGrid();
@@ -51,6 +54,11 @@ export default function App() {
   const hierarchyQuery = useQuery({
     queryKey: ["hierarchy-mappings"],
     queryFn: getHierarchyMappings,
+  });
+  const insightQuery = useQuery({
+    queryKey: ["planning-insights", insightScope?.storeId, insightScope?.productNodeId, insightScope?.yearTimePeriodId],
+    queryFn: () => getPlanningInsights(insightScope!.storeId, insightScope!.productNodeId, insightScope!.yearTimePeriodId),
+    enabled: Boolean(insightScope),
   });
 
   useEffect(() => {
@@ -200,6 +208,17 @@ export default function App() {
     onError: (error: Error) => setLastError(error.message),
   });
 
+  const addHierarchySubclassMutation = useMutation({
+    mutationFn: ({ departmentLabel, classLabel, subclassLabel }: { departmentLabel: string; classLabel: string; subclassLabel: string }) =>
+      postHierarchySubclass(departmentLabel, classLabel, subclassLabel),
+    onSuccess: async () => {
+      setLastError(null);
+      setHasUnsavedChanges(true);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
   useEffect(() => {
     const interval = window.setInterval(() => {
       if (!hasUnsavedChanges || saveMutation.isPending) {
@@ -225,7 +244,8 @@ export default function App() {
     growthFactorMutation.isPending ||
     saveMutation.isPending ||
     addHierarchyDepartmentMutation.isPending ||
-    addHierarchyClassMutation.isPending;
+    addHierarchyClassMutation.isPending ||
+    addHierarchySubclassMutation.isPending;
 
   const statusText = useMemo(() => {
     if (gridQuery.isLoading || hierarchyQuery.isLoading) {
@@ -284,7 +304,7 @@ export default function App() {
   const handleCellEdit = async (row: GridRow, timePeriodId: number, measureId: number, newValue: number) => {
     const measureCell = row.cells[timePeriodId]?.measures[measureId];
     const period = gridQuery.data.periods.find((item) => item.timePeriodId === timePeriodId);
-    const isLeafMonth = row.structureRole === "class" && period?.grain === "month";
+    const isLeafMonth = row.isLeaf && period?.grain === "month";
     const scopeRoots = row.splashRoots ?? [];
 
     if (isLeafMonth && row.bindingProductNodeId) {
@@ -373,13 +393,15 @@ export default function App() {
     });
   };
 
-  const handleAddRow = async (level: "store" | "department" | "class", parentRow: GridRow | null) => {
+  const handleAddRow = async (level: "store" | "department" | "class" | "subclass", parentRow: GridRow | null) => {
     const label = window.prompt(`New ${level} name`);
     if (!label) {
       return;
     }
 
     let copyFromStoreId: number | null = null;
+    let clusterLabel: string | null = null;
+    let regionLabel: string | null = null;
     if (level === "store") {
       const stores = storeViewData.rows.filter((row) => row.structureRole === "store");
       const defaultStore = stores[0]?.label ?? "";
@@ -395,6 +417,8 @@ export default function App() {
       }
 
       copyFromStoreId = sourceStore.storeId;
+      clusterLabel = window.prompt("Cluster label", sourceStore.clusterLabel) ?? sourceStore.clusterLabel;
+      regionLabel = window.prompt("Region label", sourceStore.regionLabel) ?? sourceStore.regionLabel;
     }
 
     await addRowMutation.mutateAsync({
@@ -403,6 +427,8 @@ export default function App() {
       parentProductNodeId: level === "store" ? null : parentRow?.bindingProductNodeId ?? null,
       label,
       copyFromStoreId,
+      clusterLabel,
+      regionLabel,
     });
   };
 
@@ -465,7 +491,7 @@ export default function App() {
 
   const handleApplyGrowthFactor = async (row: GridRow, timePeriodId: number, measureId: number, growthFactor: number, currentValue: number) => {
     const scopeRoots = row.splashRoots ?? [];
-    const isLeafMonth = row.structureRole === "class" && gridQuery.data.periods.some((period) => period.timePeriodId === timePeriodId && period.grain === "month");
+    const isLeafMonth = row.isLeaf && gridQuery.data.periods.some((period) => period.timePeriodId === timePeriodId && period.grain === "month");
     const sourceStoreId = isLeafMonth ? (row.bindingStoreId ?? row.storeId) : (scopeRoots[0]?.storeId ?? row.storeId);
     const sourceProductNodeId = isLeafMonth ? (row.bindingProductNodeId ?? row.productNodeId) : (scopeRoots[0]?.productNodeId ?? row.productNodeId);
 
@@ -505,6 +531,15 @@ export default function App() {
     }
 
     await addHierarchyClassMutation.mutateAsync({ departmentLabel, classLabel });
+  };
+
+  const handleAddHierarchySubclass = async (departmentLabel: string, classLabel: string) => {
+    const subclassLabel = window.prompt(`New subclass name for ${classLabel}`);
+    if (!subclassLabel) {
+      return;
+    }
+
+    await addHierarchySubclassMutation.mutateAsync({ departmentLabel, classLabel, subclassLabel });
   };
 
   return (
@@ -553,14 +588,14 @@ export default function App() {
             className={`secondary-button${departmentLayout === "department-store-class" ? " secondary-button-active" : ""}`}
             onClick={() => setDepartmentLayout("department-store-class")}
           >
-            Department - Store - Class
+            Department - Store - Class - Subclass
           </button>
           <button
             type="button"
             className={`secondary-button${departmentLayout === "department-class-store" ? " secondary-button-active" : ""}`}
             onClick={() => setDepartmentLayout("department-class-store")}
           >
-            Department - Class - Store
+            Department - Class - Store - Subclass
           </button>
         </div>
       ) : null}
@@ -600,31 +635,91 @@ export default function App() {
           departments={hierarchyQuery.data.departments}
           onAddDepartment={handleAddHierarchyDepartment}
           onAddClass={handleAddHierarchyClass}
+          onAddSubclass={handleAddHierarchySubclass}
         />
       ) : (
-        <Suspense
-          fallback={
-            <section className="planning-shell planning-shell-loading" aria-live="polite">
-              Preparing planning grid...
-            </section>
-          }
-        >
-          <PlanningGrid
-            data={activeGridData}
-            selectedYearId={selectedYearId}
-            onSelectedYearChange={setSelectedYearId}
-            onCellEdit={handleCellEdit}
-            onApplyGrowthFactor={handleApplyGrowthFactor}
-            onToggleLock={handleToggleLock}
-            onSplashYear={handleSplashYear}
-            onAddRow={handleAddRow}
-            onDeleteRow={handleDeleteRow}
-            onImportWorkbook={handleImportWorkbook}
-            sheetLabel={activeView === "planning-store" ? "Planning - by Store" : "Planning - by Department"}
-          />
-        </Suspense>
+        <div className="planning-workspace">
+          <Suspense
+            fallback={
+              <section className="planning-shell planning-shell-loading" aria-live="polite">
+                Preparing planning grid...
+              </section>
+            }
+          >
+            <PlanningGrid
+              data={activeGridData}
+              selectedYearId={selectedYearId}
+              onSelectedYearChange={setSelectedYearId}
+              onSelectionContextChange={setInsightScope}
+              onCellEdit={handleCellEdit}
+              onApplyGrowthFactor={handleApplyGrowthFactor}
+              onToggleLock={handleToggleLock}
+              onSplashYear={handleSplashYear}
+              onAddRow={handleAddRow}
+              onDeleteRow={handleDeleteRow}
+              onImportWorkbook={handleImportWorkbook}
+              sheetLabel={activeView === "planning-store" ? "Planning - by Store" : "Planning - by Department"}
+            />
+          </Suspense>
+          <aside className="insight-panel" aria-live="polite">
+            <div className="eyebrow">Planning intelligence</div>
+            <h2>Forecast & pricing insight</h2>
+            {insightScope ? (
+              insightQuery.isLoading ? (
+                <p>Refreshing demand and GP recommendations...</p>
+              ) : insightQuery.data ? (
+                <InsightPanelContent insight={insightQuery.data} />
+              ) : (
+                <p>Select a bound Store, Department, Class, or Subclass branch to load targeted recommendations.</p>
+              )
+            ) : (
+              <p>Select a single planning branch to review forecast model, seasonality, price bands, and GP opportunity.</p>
+            )}
+          </aside>
+        </div>
       )}
     </main>
+  );
+}
+
+function InsightPanelContent({ insight }: { insight: PlanningInsightResponse }) {
+  return (
+    <>
+      <p className="insight-scope">{insight.scopeLabel}</p>
+      <div className="insight-stat-grid">
+        <div className="insight-stat">
+          <span className="eyebrow">Forecast model</span>
+          <strong>{insight.recommendedForecastModel}</strong>
+        </div>
+        <div className="insight-stat">
+          <span className="eyebrow">Seasonality</span>
+          <strong>{insight.seasonalityStrength.toFixed(1)}</strong>
+        </div>
+        <div className="insight-stat">
+          <span className="eyebrow">Price band</span>
+          <strong>
+            {insight.recommendedPriceFloor.toFixed(2)} / {insight.recommendedPriceTarget.toFixed(2)} / {insight.recommendedPriceCeiling.toFixed(2)}
+          </strong>
+        </div>
+        <div className="insight-stat">
+          <span className="eyebrow">GP opportunity</span>
+          <strong>{Math.round(insight.grossProfitOpportunity).toLocaleString()}</strong>
+        </div>
+        <div className="insight-stat">
+          <span className="eyebrow">Qty opportunity</span>
+          <strong>{Math.round(insight.quantityOpportunity).toLocaleString()}</strong>
+        </div>
+        <div className="insight-stat">
+          <span className="eyebrow">Provider</span>
+          <strong>{insight.providerStatus}</strong>
+        </div>
+      </div>
+      <ul className="insight-list">
+        {insight.insightBullets.map((bullet) => (
+          <li key={bullet}>{bullet}</li>
+        ))}
+      </ul>
+    </>
   );
 }
 
@@ -635,7 +730,9 @@ function buildStoreView(data: GridSliceResponse): GridSliceResponse {
     viewRowId: `store-view:${row.storeId}:${row.productNodeId}`,
     level: row.level + 1,
     path: [rootLabel, ...row.path],
-    structureRole: (row.level === 0 ? "store" : row.level === 1 ? "department" : "class") as GridRow["structureRole"],
+    structureRole: row.nodeKind === "store" || row.nodeKind === "department" || row.nodeKind === "class" || row.nodeKind === "subclass"
+      ? row.nodeKind
+      : "virtual",
     bindingStoreId: row.storeId,
     bindingProductNodeId: row.productNodeId,
     splashRoots: [{ storeId: row.storeId, productNodeId: row.productNodeId }],
@@ -664,21 +761,29 @@ function buildDepartmentView(data: GridSliceResponse, layout: DepartmentLayout):
   const storeRows = data.rows.filter((row) => row.structureRole === "store" && Boolean(row.bindingProductNodeId));
   const departmentRows = data.rows.filter((row) => row.structureRole === "department" && Boolean(row.bindingProductNodeId));
   const classRows = data.rows.filter((row) => row.structureRole === "class" && Boolean(row.bindingProductNodeId));
-  const storeLabels = new Map(storeRows.map((row) => [row.storeId, row.label]));
+  const subclassRows = data.rows.filter((row) => row.structureRole === "subclass" && Boolean(row.bindingProductNodeId));
+  const storeLabels = new Map(storeRows.map((row) => [row.storeId, row.storeLabel]));
   let syntheticRowSeed = -1;
 
-  const departmentGroups = new Map<string, { departmentRows: GridRow[]; classRows: GridRow[] }>();
+  const departmentGroups = new Map<string, { departmentRows: GridRow[]; classRows: GridRow[]; subclassRows: GridRow[] }>();
   for (const departmentRow of departmentRows) {
     const departmentLabel = departmentRow.path[2];
-    const group = departmentGroups.get(departmentLabel) ?? { departmentRows: [], classRows: [] };
+    const group = departmentGroups.get(departmentLabel) ?? { departmentRows: [], classRows: [], subclassRows: [] };
     group.departmentRows.push(departmentRow);
     departmentGroups.set(departmentLabel, group);
   }
 
   for (const classRow of classRows) {
     const departmentLabel = classRow.path[2];
-    const group = departmentGroups.get(departmentLabel) ?? { departmentRows: [], classRows: [] };
+    const group = departmentGroups.get(departmentLabel) ?? { departmentRows: [], classRows: [], subclassRows: [] };
     group.classRows.push(classRow);
+    departmentGroups.set(departmentLabel, group);
+  }
+
+  for (const subclassRow of subclassRows) {
+    const departmentLabel = subclassRow.path[2];
+    const group = departmentGroups.get(departmentLabel) ?? { departmentRows: [], classRows: [], subclassRows: [] };
+    group.subclassRows.push(subclassRow);
     departmentGroups.set(departmentLabel, group);
   }
 
@@ -722,15 +827,28 @@ function buildDepartmentView(data: GridSliceResponse, layout: DepartmentLayout):
         });
 
         const matchingClasses = group.classRows
-          .filter((classRow) => classRow.storeId === departmentRow.storeId)
+          .filter((classRow) => classRow.storeId === departmentRow.storeId && classRow.path[2] === departmentLabel)
           .sort((left, right) => left.label.localeCompare(right.label));
 
-        rows.push(...matchingClasses.map((classRow) => ({
-          ...classRow,
-          viewRowId: `department-view:${layout}:${departmentLabel}:${storeLabel}:${classRow.label}`,
-          level: 3,
-          path: ["Department Total", departmentLabel, storeLabel, classRow.label],
-        })));
+        for (const classRow of matchingClasses) {
+          rows.push({
+            ...classRow,
+            viewRowId: `department-view:${layout}:${departmentLabel}:${storeLabel}:${classRow.label}`,
+            level: 3,
+            path: ["Department Total", departmentLabel, storeLabel, classRow.label],
+          });
+
+          const matchingSubclasses = group.subclassRows
+            .filter((subclassRow) => subclassRow.storeId === departmentRow.storeId && subclassRow.path[2] === departmentLabel && subclassRow.path[3] === classRow.label)
+            .sort((left, right) => left.label.localeCompare(right.label));
+
+          rows.push(...matchingSubclasses.map((subclassRow) => ({
+            ...subclassRow,
+            viewRowId: `department-view:${layout}:${departmentLabel}:${storeLabel}:${classRow.label}:${subclassRow.label}`,
+            level: 4,
+            path: ["Department Total", departmentLabel, storeLabel, classRow.label, subclassRow.label],
+          })));
+        }
       }
 
       continue;
@@ -769,6 +887,17 @@ function buildDepartmentView(data: GridSliceResponse, layout: DepartmentLayout):
           level: 3,
           path: ["Department Total", departmentLabel, classLabel, storeLabel],
         });
+
+        const matchingSubclasses = group.subclassRows
+          .filter((subclassRow) => subclassRow.storeId === classRow.storeId && subclassRow.path[2] === departmentLabel && subclassRow.path[3] === classLabel)
+          .sort((left, right) => left.label.localeCompare(right.label));
+
+        rows.push(...matchingSubclasses.map((subclassRow) => ({
+          ...subclassRow,
+          viewRowId: `department-view:${layout}:${departmentLabel}:${classLabel}:${storeLabel}:${subclassRow.label}`,
+          level: 4,
+          path: ["Department Total", departmentLabel, classLabel, storeLabel, subclassRow.label],
+        })));
       }
     }
   }
@@ -806,6 +935,14 @@ function createSyntheticRow({
     level: path.length - 1,
     path,
     isLeaf: false,
+    nodeKind: "virtual",
+    storeLabel: "All Stores",
+    clusterLabel: rows[0]?.clusterLabel ?? "Mixed Cluster",
+    regionLabel: rows[0]?.regionLabel ?? "Mixed Region",
+    lifecycleState: "synthetic",
+    rampProfileCode: null,
+    effectiveFromTimePeriodId: null,
+    effectiveToTimePeriodId: null,
     structureRole,
     bindingStoreId: null,
     bindingProductNodeId: null,

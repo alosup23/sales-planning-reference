@@ -28,9 +28,11 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository, IDisposabl
     public Task<int> DeleteRowAsync(long scenarioVersionId, long productNodeId, CancellationToken cancellationToken) => _inner.DeleteRowAsync(scenarioVersionId, productNodeId, cancellationToken);
     public Task<int> DeleteYearAsync(long scenarioVersionId, long yearTimePeriodId, CancellationToken cancellationToken) => _inner.DeleteYearAsync(scenarioVersionId, yearTimePeriodId, cancellationToken);
     public Task EnsureYearAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken) => _inner.EnsureYearAsync(scenarioVersionId, fiscalYear, cancellationToken);
-    public Task<IReadOnlyDictionary<string, IReadOnlyList<string>>> GetHierarchyMappingsAsync(CancellationToken cancellationToken) => _inner.GetHierarchyMappingsAsync(cancellationToken);
+    public Task<IReadOnlyList<StoreNodeMetadata>> GetStoresAsync(CancellationToken cancellationToken) => _inner.GetStoresAsync(cancellationToken);
+    public Task<IReadOnlyList<HierarchyDepartmentRecord>> GetHierarchyMappingsAsync(CancellationToken cancellationToken) => _inner.GetHierarchyMappingsAsync(cancellationToken);
     public Task UpsertHierarchyDepartmentAsync(string departmentLabel, CancellationToken cancellationToken) => _inner.UpsertHierarchyDepartmentAsync(departmentLabel, cancellationToken);
     public Task UpsertHierarchyClassAsync(string departmentLabel, string classLabel, CancellationToken cancellationToken) => _inner.UpsertHierarchyClassAsync(departmentLabel, classLabel, cancellationToken);
+    public Task UpsertHierarchySubclassAsync(string departmentLabel, string classLabel, string subclassLabel, CancellationToken cancellationToken) => _inner.UpsertHierarchySubclassAsync(departmentLabel, classLabel, subclassLabel, cancellationToken);
     public Task<ProductNode?> FindProductNodeByPathAsync(string[] path, CancellationToken cancellationToken) => _inner.FindProductNodeByPathAsync(path, cancellationToken);
     public Task ResetAsync(CancellationToken cancellationToken) => _inner.ResetAsync(cancellationToken);
 

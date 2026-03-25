@@ -39,6 +39,13 @@ button {
   margin-bottom: 10px;
 }
 
+.planning-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 12px;
+  align-items: start;
+}
+
 .hero {
   display: flex;
   justify-content: space-between;
@@ -185,6 +192,49 @@ button {
   width: 100%;
 }
 
+.insight-panel {
+  border-radius: 14px;
+  border: 1px solid rgba(16, 33, 47, 0.08);
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 18px 36px rgba(16, 33, 47, 0.08);
+  padding: 12px;
+}
+
+.insight-panel h2 {
+  margin: 2px 0 10px;
+  font-size: 1.1rem;
+  font-family: "IBM Plex Serif", Georgia, serif;
+}
+
+.insight-scope {
+  margin: 0 0 10px;
+  color: #33424e;
+  font-size: 0.9rem;
+}
+
+.insight-stat-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.insight-stat {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(14, 95, 118, 0.06);
+}
+
+.insight-stat strong {
+  display: block;
+}
+
+.insight-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #33424e;
+}
+
 .measure-cell {
   display: flex;
   align-items: center;
@@ -329,5 +379,9 @@ button {
 
   .planning-grid {
     height: 65vh;
+  }
+
+  .planning-workspace {
+    grid-template-columns: 1fr;
   }
 }

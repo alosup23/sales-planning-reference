@@ -1,0 +1,19 @@
+{
+  "Information": [
+    "Default values for deploying the Sales Planning demo API into AWS Lambda in ap-southeast-5.",
+    "Update template parameters if the bucket names or CORS origins change."
+  ],
+  "profile": "",
+  "region": "ap-southeast-5",
+  "configuration": "Release",
+  "framework": "net8.0",
+  "template": "serverless.template",
+  "template-parameters": "PlanningStorageS3Bucket=sales-planning-demo-files-427304877733-ap-southeast-5-an;PlanningStorageS3ObjectKey=planning/demo-planning.db;CorsAllowedOrigins=*",
+  "s3-bucket": "sales-planning-demo-files-427304877733-ap-southeast-5-an",
+  "s3-prefix": "lambda-artifacts",
+  "stack-name": "sales-planning-demo-api",
+  "function-runtime": "dotnet8",
+  "function-memory-size": 1024,
+  "function-timeout": 30,
+  "function-handler": "SalesPlanning.Api"
+}

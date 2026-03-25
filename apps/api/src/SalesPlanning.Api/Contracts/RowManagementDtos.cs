@@ -5,7 +5,9 @@ public sealed record AddRowRequest(
     string Level,
     long? ParentProductNodeId,
     string Label,
-    long? CopyFromStoreId);
+    long? CopyFromStoreId,
+    string? ClusterLabel = null,
+    string? RegionLabel = null);
 
 public sealed record AddRowResponse(
     long StoreId,

@@ -30,11 +30,12 @@ type PlanningGridProps = {
   data: GridSliceResponse;
   selectedYearId: number | null;
   onSelectedYearChange: (yearTimePeriodId: number | null) => void;
+  onSelectionContextChange?: (context: { storeId: number; productNodeId: number; yearTimePeriodId: number; label: string } | null) => void;
   onCellEdit: (row: GridRow, timePeriodId: number, measureId: number, newValue: number) => Promise<void>;
   onApplyGrowthFactor: (row: GridRow, timePeriodId: number, measureId: number, growthFactor: number, currentValue: number) => Promise<void>;
   onToggleLock: (row: GridRow, timePeriodId: number, measureId: number, locked: boolean) => Promise<void>;
   onSplashYear: (row: GridRow, yearTimePeriodId: number, measureId: number) => Promise<void>;
-  onAddRow: (level: "store" | "department" | "class", parentRow: GridRow | null) => Promise<void>;
+  onAddRow: (level: "store" | "department" | "class" | "subclass", parentRow: GridRow | null) => Promise<void>;
   onDeleteRow: (row: GridRow | null) => Promise<void>;
   onImportWorkbook: (file: File) => Promise<void>;
   sheetLabel: string;
@@ -75,6 +76,7 @@ export function PlanningGrid({
   data,
   selectedYearId,
   onSelectedYearChange,
+  onSelectionContextChange,
   onCellEdit,
   onApplyGrowthFactor,
   onToggleLock,
@@ -117,6 +119,7 @@ export function PlanningGrid({
   const selectedCellRow = selectedCell ? rowLookup.get(selectedCell.rowKey) ?? null : null;
   const canAddDepartment = selectedRow?.structureRole === "store" && Boolean(selectedRow?.bindingProductNodeId);
   const canAddClass = selectedRow?.structureRole === "department" && Boolean(selectedRow?.bindingProductNodeId);
+  const canAddSubclass = selectedRow?.structureRole === "class" && Boolean(selectedRow?.bindingProductNodeId);
   const canDeleteSelectedRow = Boolean(selectedRow?.bindingProductNodeId);
 
   const syncSelectedRow = (row: GridRowView | null | undefined) => {
@@ -129,7 +132,7 @@ export function PlanningGrid({
           Boolean(
             measure.editableAtLeaf &&
             row?.bindingProductNodeId &&
-            row.structureRole === "class" &&
+            row.isLeaf &&
             period.grain === "month" &&
             !row.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked,
           );
@@ -383,7 +386,7 @@ export function PlanningGrid({
 
     const measure = data.measures.find((item) => item.measureId === selectedCell.measureId);
     const period = data.periods.find((item) => item.timePeriodId === selectedCell.timePeriodId);
-    const isLeaf = selectedCellRow.structureRole === "class" && period?.grain === "month";
+    const isLeaf = selectedCellRow.isLeaf && period?.grain === "month";
     const dependencyText = measure?.measureId === 1
       ? "Sales Revenue edit derives Sold Qty from ASP, then recalculates Total Costs, GP, and GP%."
       : measure?.measureId === 2
@@ -401,6 +404,49 @@ export function PlanningGrid({
 
     return `${selectedCellRow.path.join(" > ")} | ${period?.label ?? ""} | ${measure?.label ?? ""}. ${dependencyText} ${scopeText}`;
   }, [data.measures, data.periods, selectedCell, selectedCellRow]);
+
+  useEffect(() => {
+    if (!onSelectionContextChange) {
+      return;
+    }
+
+    if (!selectedCell || !selectedCellRow) {
+      onSelectionContextChange(null);
+      return;
+    }
+
+    const period = data.periods.find((item) => item.timePeriodId === selectedCell.timePeriodId);
+    const yearTimePeriodId = period?.grain === "year" ? period.timePeriodId : period?.parentTimePeriodId;
+    const boundStoreId = selectedCellRow.bindingStoreId ?? selectedCellRow.storeId;
+    const boundProductNodeId = selectedCellRow.bindingProductNodeId;
+
+    if (!yearTimePeriodId) {
+      onSelectionContextChange(null);
+      return;
+    }
+
+    if (boundProductNodeId) {
+      onSelectionContextChange({
+        storeId: boundStoreId,
+        productNodeId: boundProductNodeId,
+        yearTimePeriodId,
+        label: selectedCellRow.path.join(" > "),
+      });
+      return;
+    }
+
+    if (selectedCellRow.splashRoots?.length === 1) {
+      onSelectionContextChange({
+        storeId: selectedCellRow.splashRoots[0].storeId,
+        productNodeId: selectedCellRow.splashRoots[0].productNodeId,
+        yearTimePeriodId,
+        label: selectedCellRow.path.join(" > "),
+      });
+      return;
+    }
+
+    onSelectionContextChange(null);
+  }, [data.periods, onSelectionContextChange, selectedCell, selectedCellRow]);
 
   return (
     <div className={`planning-shell${compactMode ? " planning-shell-compact" : ""}`}>
@@ -422,6 +468,9 @@ export function PlanningGrid({
           </button>
           <button type="button" className="secondary-button" disabled={!canAddClass} onClick={() => void onAddRow("class", selectedRow)}>
             Add Class
+          </button>
+          <button type="button" className="secondary-button" disabled={!canAddSubclass} onClick={() => void onAddRow("subclass", selectedRow)}>
+            Add Subclass
           </button>
           <button type="button" className="secondary-button danger-button" disabled={!canDeleteSelectedRow} onClick={() => void onDeleteRow(selectedRow)}>
             Delete Selected Row
@@ -468,7 +517,7 @@ export function PlanningGrid({
       </div>
 
       <div className="formula-bar" aria-live="polite">
-        {formulaBarText}
+        {formulaBarText} {selectedCellRow ? `Cluster ${selectedCellRow.clusterLabel} | Region ${selectedCellRow.regionLabel} | Ramp ${selectedCellRow.rampProfileCode ?? "none"} | Lifecycle ${selectedCellRow.lifecycleState}.` : ""}
       </div>
 
       <div className="ag-theme-quartz planning-grid">
@@ -501,7 +550,7 @@ export function PlanningGrid({
           onCellEditRequest={handleCellEditRequest}
           onRowGroupOpened={handleRowGroupOpened}
           autoGroupColumnDef={{
-            headerName: "Store / Department / Class",
+            headerName: "Store / Department / Class / Subclass",
             pinned: "left",
             minWidth: 260,
             cellRendererParams: {
@@ -625,7 +674,7 @@ function GrowthCellRenderer(props: GrowthCellRendererProps) {
   const isLeafMonthEditable = Boolean(
     measure.editableAtLeaf &&
     data?.bindingProductNodeId &&
-    data.structureRole === "class" &&
+    data.isLeaf &&
     period.grain === "month" &&
     !cell?.isLocked,
   );

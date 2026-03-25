@@ -18,9 +18,11 @@ public interface IPlanningRepository
     Task<int> DeleteRowAsync(long scenarioVersionId, long productNodeId, CancellationToken cancellationToken);
     Task<int> DeleteYearAsync(long scenarioVersionId, long yearTimePeriodId, CancellationToken cancellationToken);
     Task EnsureYearAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken);
-    Task<IReadOnlyDictionary<string, IReadOnlyList<string>>> GetHierarchyMappingsAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyList<StoreNodeMetadata>> GetStoresAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyList<HierarchyDepartmentRecord>> GetHierarchyMappingsAsync(CancellationToken cancellationToken);
     Task UpsertHierarchyDepartmentAsync(string departmentLabel, CancellationToken cancellationToken);
     Task UpsertHierarchyClassAsync(string departmentLabel, string classLabel, CancellationToken cancellationToken);
+    Task UpsertHierarchySubclassAsync(string departmentLabel, string classLabel, string subclassLabel, CancellationToken cancellationToken);
     Task<ProductNode?> FindProductNodeByPathAsync(string[] path, CancellationToken cancellationToken);
     Task ResetAsync(CancellationToken cancellationToken);
 }

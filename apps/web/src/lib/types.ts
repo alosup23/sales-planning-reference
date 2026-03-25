@@ -38,8 +38,16 @@ export type GridRow = {
   level: number;
   path: string[];
   isLeaf: boolean;
+  nodeKind: "store" | "department" | "class" | "subclass" | "virtual";
+  storeLabel: string;
+  clusterLabel: string;
+  regionLabel: string;
+  lifecycleState: string;
+  rampProfileCode?: string | null;
+  effectiveFromTimePeriodId?: number | null;
+  effectiveToTimePeriodId?: number | null;
   cells: Record<number, GridPeriodCell>;
-  structureRole?: "store" | "department" | "class" | "virtual";
+  structureRole?: "store" | "department" | "class" | "subclass" | "virtual";
   bindingStoreId?: number | null;
   bindingProductNodeId?: number | null;
   splashRoots?: Array<{
@@ -124,10 +132,12 @@ export type LockCellsRequest = {
 
 export type AddRowRequest = {
   scenarioVersionId: number;
-  level: "store" | "department" | "class";
+  level: "store" | "department" | "class" | "subclass";
   parentProductNodeId: number | null;
   label: string;
   copyFromStoreId: number | null;
+  clusterLabel?: string | null;
+  regionLabel?: string | null;
 };
 
 export type DeleteRowRequest = {
@@ -162,9 +172,43 @@ export type SaveScenarioResponse = {
 
 export type HierarchyDepartment = {
   departmentLabel: string;
-  classLabels: string[];
+  lifecycleState: string;
+  rampProfileCode?: string | null;
+  effectiveFromTimePeriodId?: number | null;
+  effectiveToTimePeriodId?: number | null;
+  classes: HierarchyClass[];
+};
+
+export type HierarchyClass = {
+  classLabel: string;
+  lifecycleState: string;
+  rampProfileCode?: string | null;
+  effectiveFromTimePeriodId?: number | null;
+  effectiveToTimePeriodId?: number | null;
+  subclasses: HierarchySubclass[];
+};
+
+export type HierarchySubclass = {
+  subclassLabel: string;
+  lifecycleState: string;
+  rampProfileCode?: string | null;
+  effectiveFromTimePeriodId?: number | null;
+  effectiveToTimePeriodId?: number | null;
 };
 
 export type HierarchyMappingResponse = {
   departments: HierarchyDepartment[];
+};
+
+export type PlanningInsightResponse = {
+  providerStatus: string;
+  scopeLabel: string;
+  recommendedForecastModel: string;
+  seasonalityStrength: number;
+  recommendedPriceFloor: number;
+  recommendedPriceTarget: number;
+  recommendedPriceCeiling: number;
+  grossProfitOpportunity: number;
+  quantityOpportunity: number;
+  insightBullets: string[];
 };

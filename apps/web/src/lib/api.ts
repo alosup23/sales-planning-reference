@@ -9,6 +9,7 @@ import type {
   HierarchyMappingResponse,
   ImportWorkbookResponse,
   LockCellsRequest,
+  PlanningInsightResponse,
   SaveScenarioRequest,
   SaveScenarioResponse,
   SplashRequest,
@@ -119,6 +120,19 @@ export async function postHierarchyClass(departmentLabel: string, classLabel: st
     method: "POST",
     body: JSON.stringify({ departmentLabel, classLabel }),
   });
+}
+
+export async function postHierarchySubclass(departmentLabel: string, classLabel: string, subclassLabel: string): Promise<HierarchyMappingResponse> {
+  return await fetchJson<HierarchyMappingResponse>(`${API_BASE_URL}/hierarchy-mappings/subclasses`, {
+    method: "POST",
+    body: JSON.stringify({ departmentLabel, classLabel, subclassLabel }),
+  });
+}
+
+export async function getPlanningInsights(storeId: number, productNodeId: number, yearTimePeriodId: number): Promise<PlanningInsightResponse> {
+  return await fetchJson<PlanningInsightResponse>(
+    `${API_BASE_URL}/insights?scenarioVersionId=1&storeId=${storeId}&productNodeId=${productNodeId}&yearTimePeriodId=${yearTimePeriodId}`,
+  );
 }
 
 export async function postWorkbookImport(scenarioVersionId: number, file: File): Promise<ImportWorkbookResponse> {

@@ -98,7 +98,7 @@ function createWorkbookBuffer(rows: Array<Record<string, string | number>>, shee
     .replaceAll("\"", "&quot;")
     .replaceAll("'", "&apos;");
 
-  const headers = ["Store", "Department", "Class", "Year", "Month", "Sales Revenue", "Sold Qty", "ASP", "Unit Cost", "Total Costs", "GP", "GP%"];
+  const headers = ["Store", "Department", "Class", "Subclass", "Year", "Month", "Sales Revenue", "Sold Qty", "ASP", "Unit Cost", "Total Costs", "GP", "GP%"];
   const allRows = [headers, ...rows.map((row) => headers.map((header) => row[header] ?? ""))];
 
   const cellRef = (columnIndex: number, rowIndex: number) => `${String.fromCharCode(65 + columnIndex)}${rowIndex}`;
@@ -276,7 +276,7 @@ test("adds Department and Class rows and shows them in hierarchy maintenance", a
   await expectReady(page);
 
   await page.getByRole("button", { name: "Hierarchy Maintenance" }).click();
-  await expect(page.getByText("Department / Class Mapping")).toBeVisible();
+  await expect(page.getByText("Department / Class / Subclass Mapping")).toBeVisible();
   await expect(page.getByRole("button", { name: /Frozen E2E/ })).toBeVisible();
   await expect(page.getByText("Ice Cream E2E")).toBeVisible();
 });
@@ -287,6 +287,7 @@ test("imports a workbook in the new store-sheet format", async ({ page }) => {
       Store: "Store B",
       Department: "Frozen",
       Class: "Ice Cream",
+      Subclass: "Vanilla",
       Year: 2026,
       Month: "Jan",
       "Sales Revenue": 100,
@@ -309,7 +310,7 @@ test("imports a workbook in the new store-sheet format", async ({ page }) => {
   await page.getByRole("button", { name: "Expand All" }).click();
   await page.getByRole("button", { name: "Expand Years" }).click();
 
-  const importedRow = page.getByText("Ice Cream", { exact: true }).last();
+  const importedRow = page.getByText("Vanilla", { exact: true }).last();
   await expect(importedRow).toBeVisible();
 });
 
@@ -325,7 +326,6 @@ test("commits growth factors only on Enter and preserves row expansion state", a
   await page.getByRole("button", { name: "Growth Factors" }).click();
   await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
   await page.getByRole("button", { name: "Expand All" }).click();
-  await toggleRowCaret(page, storeRowId(101, 2100));
 
   const aggregateRowId = storeRowId(101, 2100);
   const classRow = page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2110)}"]`);

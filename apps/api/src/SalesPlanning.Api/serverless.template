@@ -1,0 +1,84 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Transform": "AWS::Serverless-2016-10-31",
+  "Description": "Sales Planning demo API for test and UAT in ap-southeast-5.",
+  "Parameters": {
+    "PlanningStorageS3Bucket": {
+      "Type": "String",
+      "Default": "sales-planning-demo-files-427304877733-ap-southeast-5-an"
+    },
+    "PlanningStorageS3ObjectKey": {
+      "Type": "String",
+      "Default": "planning/demo-planning.db"
+    },
+    "CorsAllowedOrigins": {
+      "Type": "String",
+      "Default": "*"
+    }
+  },
+  "Resources": {
+    "SalesPlanningDemoApi": {
+      "Type": "AWS::Serverless::Function",
+      "Properties": {
+        "FunctionName": "sales-planning-demo-api",
+        "Handler": "SalesPlanning.Api",
+        "Runtime": "dotnet8",
+        "CodeUri": "",
+        "MemorySize": 1024,
+        "Timeout": 30,
+        "ReservedConcurrentExecutions": 1,
+        "Role": {
+          "Fn::Sub": "arn:aws:iam::${AWS::AccountId}:role/sales-planning-demo-lambda-exec"
+        },
+        "Environment": {
+          "Variables": {
+            "RunAwsLambda": "true",
+            "PlanningStorageMode": "s3-sqlite",
+            "PlanningStorageS3Bucket": {
+              "Ref": "PlanningStorageS3Bucket"
+            },
+            "PlanningStorageS3ObjectKey": {
+              "Ref": "PlanningStorageS3ObjectKey"
+            },
+            "PlanningStorageS3Region": {
+              "Ref": "AWS::Region"
+            },
+            "CorsAllowedOrigins": {
+              "Ref": "CorsAllowedOrigins"
+            }
+          }
+        },
+        "Events": {
+          "Root": {
+            "Type": "HttpApi",
+            "Properties": {
+              "Path": "/",
+              "Method": "ANY"
+            }
+          },
+          "Proxy": {
+            "Type": "HttpApi",
+            "Properties": {
+              "Path": "/{proxy+}",
+              "Method": "ANY"
+            }
+          }
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "SalesPlanningApiUrl": {
+      "Description": "HTTP API endpoint for the demo planning API.",
+      "Value": {
+        "Fn::Sub": "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+      }
+    },
+    "PlanningStorageObject": {
+      "Description": "S3 object used for persisted SQLite demo storage.",
+      "Value": {
+        "Fn::Sub": "s3://${PlanningStorageS3Bucket}/${PlanningStorageS3ObjectKey}"
+      }
+    }
+  }
+}
