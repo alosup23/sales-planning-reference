@@ -118,6 +118,36 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
+    public async Task ExportWorkbookAsync_ReturnsWorkbookMatchingImportContract()
+    {
+        var result = await _service.ExportWorkbookAsync(1, CancellationToken.None);
+
+        Assert.NotEmpty(result.Content);
+        Assert.EndsWith(".xlsx", result.FileName, StringComparison.OrdinalIgnoreCase);
+
+        using var stream = new MemoryStream(result.Content);
+        using var workbook = new XLWorkbook(stream);
+
+        Assert.Contains("Store A", workbook.Worksheets.Select(sheet => sheet.Name));
+        var worksheet = workbook.Worksheet("Store A");
+        var headers = Enumerable.Range(1, 13)
+            .Select(index => worksheet.Cell(1, index).GetString())
+            .ToArray();
+
+        Assert.Equal(
+            new[]
+            {
+                "Store", "Department", "Class", "Subclass", "Year", "Month",
+                "Sales Revenue", "Sold Qty", "ASP", "Unit Cost", "Total Costs", "GP", "GP%"
+            },
+            headers);
+
+        Assert.True(worksheet.RowsUsed().Count() > 1);
+        Assert.Equal("Store A", worksheet.Cell(2, 1).GetString());
+        Assert.Equal("Jan", worksheet.Cell(2, 6).GetString());
+    }
+
+    [Fact]
     public async Task SaveScenarioAsync_ReturnsCheckpointTimestamp()
     {
         var result = await _service.SaveScenarioAsync(new SaveScenarioRequest(1, "manual"), "planner.one", CancellationToken.None);

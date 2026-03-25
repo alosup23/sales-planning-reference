@@ -1,4 +1,5 @@
 using Amazon;
+using Amazon.Lambda.AspNetCoreServer;
 using Amazon.Lambda.AspNetCoreServer.Hosting;
 using Amazon.S3;
 using SalesPlanning.Api.Application;
@@ -19,7 +20,12 @@ builder.Services.AddSwaggerGen();
 
 if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("AWS_LAMBDA_FUNCTION_NAME")))
 {
-    builder.Services.AddAWSLambdaHosting(LambdaEventSource.HttpApi);
+    builder.Services.AddAWSLambdaHosting(LambdaEventSource.HttpApi, options =>
+    {
+        options.RegisterResponseContentEncodingForContentType(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ResponseContentEncoding.Base64);
+    });
 }
 
 builder.Services.AddSingleton<IPlanningRepository>(serviceProvider =>
