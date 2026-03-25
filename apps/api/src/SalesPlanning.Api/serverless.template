@@ -32,7 +32,6 @@
         },
         "Environment": {
           "Variables": {
-            "RunAwsLambda": "true",
             "PlanningStorageMode": "s3-sqlite",
             "PlanningStorageS3Bucket": {
               "Ref": "PlanningStorageS3Bucket"

@@ -17,8 +17,7 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-if (string.Equals(builder.Configuration["RunAwsLambda"], "true", StringComparison.OrdinalIgnoreCase) ||
-    !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("AWS_LAMBDA_FUNCTION_NAME")))
+if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("AWS_LAMBDA_FUNCTION_NAME")))
 {
     builder.Services.AddAWSLambdaHosting(LambdaEventSource.HttpApi);
 }
