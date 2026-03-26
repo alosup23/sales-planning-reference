@@ -338,6 +338,48 @@ public sealed class PlanningServiceTests
         Assert.DoesNotContain(grid.Periods, period => period.TimePeriodId == 202700 || period.ParentTimePeriodId == 202700);
     }
 
+    [Fact]
+    public async Task StoreProfileImportExport_RoundTripsBranchProfileShape()
+    {
+        using var workbook = new XLWorkbook();
+        var sheet = workbook.AddWorksheet("Store Profile");
+        WriteStoreProfileHeader(sheet);
+        WriteStoreProfileRow(sheet, 2, "MKDW", "KL Downtown", "Kuala Lumpur", "Baby Centre", 3.121m, 101.612m, "Central 1", "2024-01-15", "Organic", "Store", "Active", "2", "Mall", 14850m, 7619m, "Alice", "Ben", 120000m, "active", "new-store-ramp", true);
+
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        stream.Position = 0;
+
+        var importResult = await _service.ImportStoreProfilesAsync(stream, "branch-profile.xlsx", CancellationToken.None);
+        var response = await _service.GetStoreProfilesAsync(CancellationToken.None);
+        var imported = response.Stores.Single(store => store.StoreCode == "MKDW");
+
+        Assert.Equal("applied", importResult.Status);
+        Assert.Equal(1, importResult.RowsProcessed);
+        Assert.Equal("KL Downtown", imported.BranchName);
+        Assert.Equal("Baby Centre", imported.ClusterLabel);
+        Assert.Equal("Central 1", imported.RegionLabel);
+
+        var export = await _service.ExportStoreProfilesAsync(CancellationToken.None);
+        using var exportStream = new MemoryStream(export.Content);
+        using var exportedWorkbook = new XLWorkbook(exportStream);
+        var exportSheet = exportedWorkbook.Worksheet("Store Profile");
+        Assert.Equal("CompCode", exportSheet.Cell(1, 1).GetString());
+        Assert.Equal("Branch Type", exportSheet.Cell(1, 4).GetString());
+        Assert.Equal("Region", exportSheet.Cell(1, 7).GetString());
+        Assert.Equal("MKDW", exportSheet.Cell(2, 1).GetString());
+    }
+
+    [Fact]
+    public async Task UpsertStoreProfileOptionAsync_MaintainsEnumeratedValues()
+    {
+        var result = await _service.UpsertStoreProfileOptionAsync(
+            new UpsertStoreProfileOptionRequest("clusterLabel", "Baby Mall", true),
+            CancellationToken.None);
+
+        Assert.Contains(result.Options, option => option.FieldName == "clusterLabel" && option.Value == "Baby Mall" && option.IsActive);
+    }
+
     private static void WriteImportHeader(IXLWorksheet sheet, bool includeRemark = false)
     {
         sheet.Cell(1, 1).Value = "Store";
@@ -400,6 +442,58 @@ public sealed class PlanningServiceTests
         if (expectedValue is not null)
         {
             sheet.Cell(rowIndex, 15).Value = expectedValue;
+        }
+    }
+
+    private static void WriteStoreProfileHeader(IXLWorksheet sheet)
+    {
+        var headers = new[]
+        {
+            "CompCode", "BranchName", "State", "Branch Type", "Latitude", "Longitude", "Region", "Opening Date",
+            "SSSG", "Sales Type", "Status", "Storey", "Building Status", "GTA", "NTA", "RSOM", "DM", "Rental",
+            "Lifecycle State", "Ramp Profile", "Active"
+        };
+
+        for (var index = 0; index < headers.Length; index += 1)
+        {
+            sheet.Cell(1, index + 1).Value = headers[index];
+        }
+    }
+
+    private static void WriteStoreProfileRow(
+        IXLWorksheet sheet,
+        int rowIndex,
+        string compCode,
+        string branchName,
+        string state,
+        string branchType,
+        decimal latitude,
+        decimal longitude,
+        string region,
+        string openingDate,
+        string sssg,
+        string salesType,
+        string status,
+        string storey,
+        string buildingStatus,
+        decimal gta,
+        decimal nta,
+        string rsom,
+        string dm,
+        decimal rental,
+        string lifecycleState,
+        string rampProfile,
+        bool active)
+    {
+        var values = new object[]
+        {
+            compCode, branchName, state, branchType, latitude, longitude, region, openingDate, sssg, salesType, status, storey,
+            buildingStatus, gta, nta, rsom, dm, rental, lifecycleState, rampProfile, active ? "true" : "false"
+        };
+
+        for (var index = 0; index < values.Length; index += 1)
+        {
+            sheet.Cell(rowIndex, index + 1).Value = values[index].ToString();
         }
     }
 }

@@ -20,6 +20,15 @@ public interface IPlanningService
     Task<PlanningInsightResponse> GetPlanningInsightsAsync(long scenarioVersionId, long storeId, long productNodeId, long yearTimePeriodId, CancellationToken cancellationToken);
     Task<ApplyGrowthFactorResponse> ApplyGrowthFactorAsync(ApplyGrowthFactorRequest request, string userId, CancellationToken cancellationToken);
     Task<SaveScenarioResponse> SaveScenarioAsync(SaveScenarioRequest request, string userId, CancellationToken cancellationToken);
+    Task<StoreProfileResponse> GetStoreProfilesAsync(CancellationToken cancellationToken);
+    Task<StoreProfileDto> UpsertStoreProfileAsync(UpsertStoreProfileRequest request, CancellationToken cancellationToken);
+    Task DeleteStoreProfileAsync(DeleteStoreProfileRequest request, CancellationToken cancellationToken);
+    Task<StoreProfileDto> InactivateStoreProfileAsync(InactivateStoreProfileRequest request, CancellationToken cancellationToken);
+    Task<StoreProfileOptionsResponse> GetStoreProfileOptionsAsync(CancellationToken cancellationToken);
+    Task<StoreProfileOptionsResponse> UpsertStoreProfileOptionAsync(UpsertStoreProfileOptionRequest request, CancellationToken cancellationToken);
+    Task<StoreProfileOptionsResponse> DeleteStoreProfileOptionAsync(DeleteStoreProfileOptionRequest request, CancellationToken cancellationToken);
+    Task<StoreProfileImportResponse> ImportStoreProfilesAsync(Stream workbookStream, string fileName, CancellationToken cancellationToken);
+    Task<(byte[] Content, string FileName)> ExportStoreProfilesAsync(CancellationToken cancellationToken);
     Task<ImportWorkbookResponse> ImportWorkbookAsync(long scenarioVersionId, Stream workbookStream, string fileName, string userId, CancellationToken cancellationToken);
     Task<(byte[] Content, string FileName)> ExportWorkbookAsync(long scenarioVersionId, CancellationToken cancellationToken);
     Task ResetAsync(CancellationToken cancellationToken);

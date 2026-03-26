@@ -13,6 +13,12 @@ public sealed class PlanningService : IPlanningService
         "Store", "Department", "Class", "Subclass", "Year", "Month",
         "Sales Revenue", "Sold Qty", "ASP", "Unit Cost", "Total Costs", "GP", "GP%"
     ];
+    private static readonly string[] StoreProfileImportHeaders =
+    [
+        "CompCode", "BranchName", "State", "Branch Type", "Latitude", "Longitude", "Region", "Opening Date",
+        "SSSG", "Sales Type", "Status", "Storey", "Building Status", "GTA", "NTA", "RSOM", "DM", "Rental",
+        "Lifecycle State", "Ramp Profile", "Active"
+    ];
     private const string RemarkHeader = "Remark";
     private const string ExpectedValueHeader = "Expected Value";
     private readonly IPlanningRepository _repository;
@@ -369,6 +375,155 @@ public sealed class PlanningService : IPlanningService
     {
         await AppendAuditAsync("save", request.Mode, userId, $"Scenario {request.ScenarioVersionId} save checkpoint", [], cancellationToken);
         return new SaveScenarioResponse("saved", request.Mode, DateTimeOffset.UtcNow);
+    }
+
+    public async Task<StoreProfileResponse> GetStoreProfilesAsync(CancellationToken cancellationToken)
+    {
+        var stores = await _repository.GetStoresAsync(cancellationToken);
+        return new StoreProfileResponse(
+            stores
+                .OrderBy(store => store.StoreLabel, StringComparer.OrdinalIgnoreCase)
+                .Select(ToStoreProfileDto)
+                .ToList());
+    }
+
+    public async Task<StoreProfileDto> UpsertStoreProfileAsync(UpsertStoreProfileRequest request, CancellationToken cancellationToken)
+    {
+        var upserted = await _repository.UpsertStoreProfileAsync(
+            request.ScenarioVersionId,
+            NormalizeStoreProfile(request),
+            cancellationToken);
+
+        return ToStoreProfileDto(upserted);
+    }
+
+    public Task DeleteStoreProfileAsync(DeleteStoreProfileRequest request, CancellationToken cancellationToken)
+    {
+        return _repository.DeleteStoreProfileAsync(request.ScenarioVersionId, request.StoreId, cancellationToken);
+    }
+
+    public async Task<StoreProfileDto> InactivateStoreProfileAsync(InactivateStoreProfileRequest request, CancellationToken cancellationToken)
+    {
+        await _repository.InactivateStoreProfileAsync(request.StoreId, cancellationToken);
+        var stores = await _repository.GetStoresAsync(cancellationToken);
+        var store = stores.Single(metadata => metadata.StoreId == request.StoreId);
+        return ToStoreProfileDto(store);
+    }
+
+    public async Task<StoreProfileOptionsResponse> GetStoreProfileOptionsAsync(CancellationToken cancellationToken)
+    {
+        return new StoreProfileOptionsResponse((await _repository.GetStoreProfileOptionsAsync(cancellationToken))
+            .OrderBy(option => option.FieldName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.Value, StringComparer.OrdinalIgnoreCase)
+            .Select(option => new StoreProfileOptionDto(option.FieldName, option.Value, option.IsActive))
+            .ToList());
+    }
+
+    public async Task<StoreProfileOptionsResponse> UpsertStoreProfileOptionAsync(UpsertStoreProfileOptionRequest request, CancellationToken cancellationToken)
+    {
+        await _repository.UpsertStoreProfileOptionAsync(request.FieldName, request.Value, request.IsActive, cancellationToken);
+        return await GetStoreProfileOptionsAsync(cancellationToken);
+    }
+
+    public async Task<StoreProfileOptionsResponse> DeleteStoreProfileOptionAsync(DeleteStoreProfileOptionRequest request, CancellationToken cancellationToken)
+    {
+        await _repository.DeleteStoreProfileOptionAsync(request.FieldName, request.Value, cancellationToken);
+        return await GetStoreProfileOptionsAsync(cancellationToken);
+    }
+
+    public async Task<StoreProfileImportResponse> ImportStoreProfilesAsync(Stream workbookStream, string fileName, CancellationToken cancellationToken)
+    {
+        return await _repository.ExecuteAtomicAsync(async ct =>
+        {
+            if (!fileName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Only .xlsx workbook uploads are supported for Store Profile maintenance.");
+            }
+
+            using var workbook = new XLWorkbook(workbookStream);
+            if (!workbook.Worksheets.Any())
+            {
+                throw new InvalidOperationException("The uploaded store profile workbook does not contain any worksheets.");
+            }
+
+            var sheet = workbook.Worksheets.First();
+            var headerMap = GetHeaderMap(sheet);
+            ValidateStoreProfileHeaders(headerMap);
+
+            using var exceptionWorkbook = new XLWorkbook();
+            var exceptionSheet = exceptionWorkbook.AddWorksheet(sheet.Name);
+            WriteStoreProfileImportHeader(exceptionSheet, includeRemark: true);
+            var exceptionRowIndex = 2;
+            var rowsProcessed = 0;
+            var storesAdded = 0;
+            var storesUpdated = 0;
+            var existingStores = (await _repository.GetStoresAsync(ct)).ToDictionary(
+                store => (store.StoreCode ?? store.StoreLabel).Trim().ToUpperInvariant(),
+                store => store);
+
+            foreach (var row in sheet.RowsUsed().Skip(1))
+            {
+                if (row.CellsUsed().All(cell => cell.IsEmpty()))
+                {
+                    continue;
+                }
+
+                rowsProcessed += 1;
+                var importRow = ReadStoreProfileImportRow(row, headerMap);
+                if (!TryNormalizeStoreProfileImportRow(importRow, out var normalized, out var error))
+                {
+                    WriteStoreProfileExceptionRow(exceptionSheet, exceptionRowIndex++, importRow, error);
+                    continue;
+                }
+
+                var normalizedStoreCode = (normalized.StoreCode ?? normalized.StoreLabel).Trim().ToUpperInvariant();
+                var existing = existingStores.GetValueOrDefault(normalizedStoreCode);
+                var upserted = await _repository.UpsertStoreProfileAsync(
+                    1,
+                    existing is null ? normalized : normalized with { StoreId = existing.StoreId },
+                    ct);
+                existingStores[normalizedStoreCode] = upserted;
+                if (existing is null)
+                {
+                    storesAdded += 1;
+                }
+                else
+                {
+                    storesUpdated += 1;
+                }
+            }
+
+            string? exceptionWorkbookBase64 = null;
+            string? exceptionFileName = null;
+            if (exceptionRowIndex > 2)
+            {
+                using var exceptionStream = new MemoryStream();
+                exceptionWorkbook.SaveAs(exceptionStream);
+                exceptionWorkbookBase64 = Convert.ToBase64String(exceptionStream.ToArray());
+                exceptionFileName = $"{Path.GetFileNameWithoutExtension(fileName)}-exceptions.xlsx";
+            }
+
+            return new StoreProfileImportResponse(rowsProcessed, storesAdded, storesUpdated, "applied", exceptionFileName, exceptionWorkbookBase64);
+        }, cancellationToken);
+    }
+
+    public async Task<(byte[] Content, string FileName)> ExportStoreProfilesAsync(CancellationToken cancellationToken)
+    {
+        var stores = await _repository.GetStoresAsync(cancellationToken);
+        using var workbook = new XLWorkbook();
+        var sheet = workbook.AddWorksheet("Store Profile");
+        WriteStoreProfileImportHeader(sheet);
+
+        var rowIndex = 2;
+        foreach (var store in stores.OrderBy(item => item.StoreLabel, StringComparer.OrdinalIgnoreCase))
+        {
+            WriteStoreProfileRow(sheet, rowIndex++, ToStoreProfileDto(store));
+        }
+
+        sheet.Columns().AdjustToContents();
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        return (stream.ToArray(), "store-profile-export.xlsx");
     }
 
     public async Task<ImportWorkbookResponse> ImportWorkbookAsync(long scenarioVersionId, Stream workbookStream, string fileName, string userId, CancellationToken cancellationToken)
@@ -1449,6 +1604,325 @@ public sealed class PlanningService : IPlanningService
         return decimal.TryParse(rawValue, NumberStyles.Number, CultureInfo.InvariantCulture, out value);
     }
 
+    private static StoreProfileDto ToStoreProfileDto(StoreNodeMetadata store) => new(
+        store.StoreId,
+        store.StoreCode ?? $"STORE-{store.StoreId}",
+        store.StoreLabel,
+        store.State,
+        store.ClusterLabel,
+        store.Latitude,
+        store.Longitude,
+        store.RegionLabel,
+        store.OpeningDate,
+        store.Sssg,
+        store.SalesType,
+        store.Status,
+        store.Storey,
+        store.BuildingStatus,
+        store.Gta,
+        store.Nta,
+        store.Rsom,
+        store.Dm,
+        store.Rental,
+        store.LifecycleState,
+        store.RampProfileCode,
+        store.IsActive);
+
+    private static StoreNodeMetadata NormalizeStoreProfile(UpsertStoreProfileRequest request) => new(
+        request.StoreId ?? 0,
+        NormalizeRequiredText(request.BranchName, request.StoreCode, "BranchName"),
+        NormalizeRequiredText(request.ClusterLabel, null, "Branch Type"),
+        NormalizeRequiredText(request.RegionLabel, null, "Region"),
+        NormalizeOptionalText(request.LifecycleState) ?? "active",
+        NormalizeOptionalText(request.RampProfileCode),
+        null,
+        null,
+        NormalizeRequiredText(request.StoreCode, request.BranchName, "CompCode"),
+        NormalizeOptionalText(request.State),
+        request.Latitude,
+        request.Longitude,
+        NormalizeOptionalDate(request.OpeningDate),
+        NormalizeOptionalText(request.Sssg),
+        NormalizeOptionalText(request.SalesType),
+        NormalizeOptionalText(request.Status),
+        NormalizeOptionalText(request.Storey),
+        NormalizeOptionalText(request.BuildingStatus),
+        request.Gta,
+        request.Nta,
+        NormalizeOptionalText(request.Rsom),
+        NormalizeOptionalText(request.Dm),
+        request.Rental,
+        request.IsActive);
+
+    private static string NormalizeRequiredText(string? preferred, string? fallback, string label)
+    {
+        var resolved = NormalizeOptionalText(preferred) ?? NormalizeOptionalText(fallback);
+        if (resolved is null)
+        {
+            throw new InvalidOperationException($"{label} is required.");
+        }
+
+        return resolved;
+    }
+
+    private static string? NormalizeOptionalText(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static string? NormalizeOptionalDate(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var parsed))
+        {
+            return parsed.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        }
+
+        return value.Trim();
+    }
+
+    private static void ValidateStoreProfileHeaders(IReadOnlyDictionary<string, int> headerMap)
+    {
+        foreach (var header in StoreProfileImportHeaders.Take(18))
+        {
+            if (!headerMap.ContainsKey(header))
+            {
+                throw new InvalidOperationException($"The store profile workbook is missing the required '{header}' column.");
+            }
+        }
+    }
+
+    private static ImportedStoreProfileRow ReadStoreProfileImportRow(IXLRow row, IReadOnlyDictionary<string, int> headerMap)
+    {
+        string GetValue(string header) => headerMap.TryGetValue(header, out var index) ? row.Cell(index).GetFormattedString().Trim() : string.Empty;
+
+        return new ImportedStoreProfileRow(
+            GetValue("CompCode"),
+            GetValue("BranchName"),
+            GetValue("State"),
+            GetValue("Branch Type"),
+            GetValue("Latitude"),
+            GetValue("Longitude"),
+            GetValue("Region"),
+            GetValue("Opening Date"),
+            GetValue("SSSG"),
+            GetValue("Sales Type"),
+            GetValue("Status"),
+            GetValue("Storey"),
+            GetValue("Building Status"),
+            GetValue("GTA"),
+            GetValue("NTA"),
+            GetValue("RSOM"),
+            GetValue("DM"),
+            GetValue("Rental"),
+            GetValue("Lifecycle State"),
+            GetValue("Ramp Profile"),
+            GetValue("Active"),
+            GetValue(RemarkHeader),
+            GetValue(ExpectedValueHeader));
+    }
+
+    private static bool TryNormalizeStoreProfileImportRow(ImportedStoreProfileRow row, out StoreNodeMetadata normalized, out string error)
+    {
+        normalized = default!;
+        error = string.Empty;
+
+        var storeCode = NormalizeOptionalText(row.CompCode);
+        var branchName = NormalizeOptionalText(row.BranchName) ?? storeCode;
+        var clusterLabel = NormalizeOptionalText(row.BranchType);
+        var regionLabel = NormalizeOptionalText(row.Region);
+        if (storeCode is null)
+        {
+            error = "CompCode is required.";
+            return false;
+        }
+
+        if (branchName is null)
+        {
+            error = "BranchName is required.";
+            return false;
+        }
+
+        if (clusterLabel is null)
+        {
+            error = "Branch Type is required.";
+            return false;
+        }
+
+        if (regionLabel is null)
+        {
+            error = "Region is required.";
+            return false;
+        }
+
+        if (!TryParseOptionalDecimal(row.Latitude, out var latitude))
+        {
+            error = "Latitude must be numeric when provided.";
+            return false;
+        }
+
+        if (!TryParseOptionalDecimal(row.Longitude, out var longitude))
+        {
+            error = "Longitude must be numeric when provided.";
+            return false;
+        }
+
+        if (!TryParseOptionalDecimal(row.Gta, out var gta))
+        {
+            error = "GTA must be numeric when provided.";
+            return false;
+        }
+
+        if (!TryParseOptionalDecimal(row.Nta, out var nta))
+        {
+            error = "NTA must be numeric when provided.";
+            return false;
+        }
+
+        if (!TryParseOptionalDecimal(row.Rental, out var rental))
+        {
+            error = "Rental must be numeric when provided.";
+            return false;
+        }
+
+        var openingDate = NormalizeWorkbookDate(row.OpeningDate);
+        if (openingDate == "__INVALID__")
+        {
+            error = "Opening Date must be a valid Excel or calendar date.";
+            return false;
+        }
+
+        var isActive = string.IsNullOrWhiteSpace(row.Active) || row.Active.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+            row.Active.Equals("yes", StringComparison.OrdinalIgnoreCase) || row.Active.Equals("active", StringComparison.OrdinalIgnoreCase) ||
+            row.Active == "1";
+
+        normalized = new StoreNodeMetadata(
+            0,
+            branchName,
+            clusterLabel,
+            regionLabel,
+            NormalizeOptionalText(row.LifecycleState) ?? (isActive ? "active" : "inactive"),
+            NormalizeOptionalText(row.RampProfile),
+            null,
+            null,
+            storeCode,
+            NormalizeOptionalText(row.State),
+            latitude,
+            longitude,
+            openingDate is null or "__INVALID__" ? null : openingDate,
+            NormalizeOptionalText(row.Sssg),
+            NormalizeOptionalText(row.SalesType),
+            NormalizeOptionalText(row.Status),
+            NormalizeOptionalText(row.Storey),
+            NormalizeOptionalText(row.BuildingStatus),
+            gta,
+            nta,
+            NormalizeOptionalText(row.Rsom),
+            NormalizeOptionalText(row.Dm),
+            rental,
+            isActive);
+        return true;
+    }
+
+    private static bool TryParseOptionalDecimal(string rawValue, out decimal? value)
+    {
+        value = null;
+        if (string.IsNullOrWhiteSpace(rawValue))
+        {
+            return true;
+        }
+
+        if (decimal.TryParse(rawValue, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed))
+        {
+            value = parsed;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string? NormalizeWorkbookDate(string rawValue)
+    {
+        if (string.IsNullOrWhiteSpace(rawValue))
+        {
+            return null;
+        }
+
+        if (double.TryParse(rawValue, NumberStyles.Number, CultureInfo.InvariantCulture, out var oaDate))
+        {
+            try
+            {
+                return DateTime.FromOADate(oaDate).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            }
+            catch
+            {
+                return "__INVALID__";
+            }
+        }
+
+        if (DateTime.TryParse(rawValue, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var parsed))
+        {
+            return parsed.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        }
+
+        return "__INVALID__";
+    }
+
+    private static void WriteStoreProfileImportHeader(IXLWorksheet sheet, bool includeRemark = false)
+    {
+        var headers = includeRemark ? [..StoreProfileImportHeaders, RemarkHeader] : StoreProfileImportHeaders;
+        for (var index = 0; index < headers.Length; index += 1)
+        {
+            sheet.Cell(1, index + 1).Value = headers[index];
+        }
+    }
+
+    private static void WriteStoreProfileRow(IXLWorksheet sheet, int rowIndex, StoreProfileDto store)
+    {
+        sheet.Cell(rowIndex, 1).Value = store.StoreCode;
+        sheet.Cell(rowIndex, 2).Value = store.BranchName;
+        sheet.Cell(rowIndex, 3).Value = store.State;
+        sheet.Cell(rowIndex, 4).Value = store.ClusterLabel;
+        sheet.Cell(rowIndex, 5).Value = store.Latitude;
+        sheet.Cell(rowIndex, 6).Value = store.Longitude;
+        sheet.Cell(rowIndex, 7).Value = store.RegionLabel;
+        sheet.Cell(rowIndex, 8).Value = store.OpeningDate;
+        sheet.Cell(rowIndex, 9).Value = store.Sssg;
+        sheet.Cell(rowIndex, 10).Value = store.SalesType;
+        sheet.Cell(rowIndex, 11).Value = store.Status;
+        sheet.Cell(rowIndex, 12).Value = store.Storey;
+        sheet.Cell(rowIndex, 13).Value = store.BuildingStatus;
+        sheet.Cell(rowIndex, 14).Value = store.Gta;
+        sheet.Cell(rowIndex, 15).Value = store.Nta;
+        sheet.Cell(rowIndex, 16).Value = store.Rsom;
+        sheet.Cell(rowIndex, 17).Value = store.Dm;
+        sheet.Cell(rowIndex, 18).Value = store.Rental;
+        sheet.Cell(rowIndex, 19).Value = store.LifecycleState;
+        sheet.Cell(rowIndex, 20).Value = store.RampProfileCode;
+        sheet.Cell(rowIndex, 21).Value = store.IsActive ? "true" : "false";
+    }
+
+    private static void WriteStoreProfileExceptionRow(IXLWorksheet sheet, int rowIndex, ImportedStoreProfileRow row, string error)
+    {
+        var values = new[]
+        {
+            row.CompCode, row.BranchName, row.State, row.BranchType, row.Latitude, row.Longitude, row.Region, row.OpeningDate,
+            row.Sssg, row.SalesType, row.Status, row.Storey, row.BuildingStatus, row.Gta, row.Nta, row.Rsom, row.Dm, row.Rental,
+            row.LifecycleState, row.RampProfile, row.Active, error
+        };
+
+        for (var index = 0; index < values.Length; index += 1)
+        {
+            sheet.Cell(rowIndex, index + 1).Value = values[index];
+        }
+
+        sheet.Row(rowIndex).Style.Fill.BackgroundColor = XLColor.LightPink;
+    }
+
     private readonly record struct ImportedPlanRow(
         string SheetName,
         string Store,
@@ -1464,6 +1938,31 @@ public sealed class PlanningService : IPlanningService
         string TotalCosts,
         string Gp,
         string GpPercent,
+        string Remark,
+        string ExpectedValue);
+
+    private readonly record struct ImportedStoreProfileRow(
+        string CompCode,
+        string BranchName,
+        string State,
+        string BranchType,
+        string Latitude,
+        string Longitude,
+        string Region,
+        string OpeningDate,
+        string Sssg,
+        string SalesType,
+        string Status,
+        string Storey,
+        string BuildingStatus,
+        string Gta,
+        string Nta,
+        string Rsom,
+        string Dm,
+        string Rental,
+        string LifecycleState,
+        string RampProfile,
+        string Active,
         string Remark,
         string ExpectedValue);
 

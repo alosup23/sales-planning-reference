@@ -30,6 +30,12 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository, IDisposabl
     public Task<int> DeleteYearAsync(long scenarioVersionId, long yearTimePeriodId, CancellationToken cancellationToken) => _inner.DeleteYearAsync(scenarioVersionId, yearTimePeriodId, cancellationToken);
     public Task EnsureYearAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken) => _inner.EnsureYearAsync(scenarioVersionId, fiscalYear, cancellationToken);
     public Task<IReadOnlyList<StoreNodeMetadata>> GetStoresAsync(CancellationToken cancellationToken) => _inner.GetStoresAsync(cancellationToken);
+    public Task<StoreNodeMetadata> UpsertStoreProfileAsync(long scenarioVersionId, StoreNodeMetadata storeProfile, CancellationToken cancellationToken) => _inner.UpsertStoreProfileAsync(scenarioVersionId, storeProfile, cancellationToken);
+    public Task DeleteStoreProfileAsync(long scenarioVersionId, long storeId, CancellationToken cancellationToken) => _inner.DeleteStoreProfileAsync(scenarioVersionId, storeId, cancellationToken);
+    public Task InactivateStoreProfileAsync(long storeId, CancellationToken cancellationToken) => _inner.InactivateStoreProfileAsync(storeId, cancellationToken);
+    public Task<IReadOnlyList<StoreProfileOptionValue>> GetStoreProfileOptionsAsync(CancellationToken cancellationToken) => _inner.GetStoreProfileOptionsAsync(cancellationToken);
+    public Task UpsertStoreProfileOptionAsync(string fieldName, string value, bool isActive, CancellationToken cancellationToken) => _inner.UpsertStoreProfileOptionAsync(fieldName, value, isActive, cancellationToken);
+    public Task DeleteStoreProfileOptionAsync(string fieldName, string value, CancellationToken cancellationToken) => _inner.DeleteStoreProfileOptionAsync(fieldName, value, cancellationToken);
     public Task<IReadOnlyList<HierarchyDepartmentRecord>> GetHierarchyMappingsAsync(CancellationToken cancellationToken) => _inner.GetHierarchyMappingsAsync(cancellationToken);
     public Task UpsertHierarchyDepartmentAsync(string departmentLabel, CancellationToken cancellationToken) => _inner.UpsertHierarchyDepartmentAsync(departmentLabel, cancellationToken);
     public Task UpsertHierarchyClassAsync(string departmentLabel, string classLabel, CancellationToken cancellationToken) => _inner.UpsertHierarchyClassAsync(departmentLabel, classLabel, cancellationToken);

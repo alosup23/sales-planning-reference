@@ -8,7 +8,7 @@
   "configuration": "Release",
   "framework": "net8.0",
   "template": "serverless.template",
-  "template-parameters": "PlanningStorageS3Bucket=sales-planning-demo-files-427304877733-ap-southeast-5-an;PlanningStorageS3ObjectKey=planning/demo-planning.db;CorsAllowedOrigins=*",
+  "template-parameters": "PlanningStorageS3Bucket=sales-planning-demo-files-427304877733-ap-southeast-5-an;PlanningStorageS3ObjectKey=planning/demo-planning.db;CorsAllowedOrigins=https://d22xc0mfhkv9bk.cloudfront.net;EntraTenantId=76ad236c-6db1-4d3d-9901-996450816c3c;EntraClientId=557f0c81-0531-4616-b62e-0b69eb7cb86f",
   "s3-bucket": "sales-planning-demo-files-427304877733-ap-southeast-5-an",
   "s3-prefix": "lambda-artifacts",
   "stack-name": "sales-planning-demo-api",

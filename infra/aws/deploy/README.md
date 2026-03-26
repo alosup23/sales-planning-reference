@@ -7,12 +7,13 @@ This deployment path is designed for a low-cost AWS test environment in `ap-sout
 - Frontend: static Vite build uploaded to `sales-planning-demo-web-427304877733-ap-southeast-5-an`
 - API: `.NET 8` ASP.NET Core API hosted on AWS Lambda behind HTTP API
 - Persistence: SQLite database synchronized to `s3://sales-planning-demo-files-427304877733-ap-southeast-5-an/planning/demo-planning.db`
+- Identity: Microsoft Entra single-tenant sign-in on the web app with API JWT validation
 
 ## Why this path
 
 - Keeps the current planning rules and tests intact
 - Uses cloud storage for persistence without immediately rewriting the repository to DynamoDB or PostgreSQL
-- Constrains Lambda concurrency to `1` so the single-writer SQLite demo remains safe for test/UAT
+- Keeps costs low for test/UAT while still demonstrating persisted planning, store profile maintenance, and protected API access
 
 ## Deployment prerequisites
 
@@ -35,6 +36,8 @@ This deployment path is designed for a low-cost AWS test environment in `ap-sout
    - stack name: `sales-planning-demo-api`
    - region: `ap-southeast-5`
    - storage bucket: `sales-planning-demo-files-427304877733-ap-southeast-5-an`
+   - allowed origin: `https://d22xc0mfhkv9bk.cloudfront.net`
+   - Entra tenant/client IDs matching the SPA registration
 
 ## Frontend build and publish
 
@@ -48,4 +51,5 @@ This deployment path is designed for a low-cost AWS test environment in `ap-sout
 
 - This is a production-ready demo/UAT pattern, not the final production persistence architecture.
 - The recommended production target remains managed PostgreSQL plus S3 object storage.
-- Because the runtime persists a single SQLite database object, do not raise Lambda concurrency above `1` for this demo deployment.
+- The API is now protected by Entra token validation and is intended to be called only from the CloudFront frontend origin.
+- The SQLite-over-S3 persistence model is still single-writer oriented, so this deployment should remain low-concurrency UAT/demo only.

@@ -22,7 +22,28 @@ public sealed record StoreNodeMetadata(
     string LifecycleState,
     string? RampProfileCode,
     long? EffectiveFromTimePeriodId,
-    long? EffectiveToTimePeriodId);
+    long? EffectiveToTimePeriodId,
+    string? StoreCode = null,
+    string? State = null,
+    decimal? Latitude = null,
+    decimal? Longitude = null,
+    string? OpeningDate = null,
+    string? Sssg = null,
+    string? SalesType = null,
+    string? Status = null,
+    string? Storey = null,
+    string? BuildingStatus = null,
+    decimal? Gta = null,
+    decimal? Nta = null,
+    string? Rsom = null,
+    string? Dm = null,
+    decimal? Rental = null,
+    bool IsActive = true);
+
+public sealed record StoreProfileOptionValue(
+    string FieldName,
+    string Value,
+    bool IsActive);
 
 public sealed record TimePeriodNode(long TimePeriodId, long? ParentTimePeriodId, string Label, string Grain, int SortOrder);
 

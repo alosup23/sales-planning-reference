@@ -5,6 +5,7 @@ This repository contains a greenfield reference implementation skeleton for an e
 - `React + TypeScript + AG Grid Enterprise` on the web front end
 - `.NET 8 Web API` for planning actions, locking, import/export, and the splash engine
 - SQLite-backed sample persistence locally plus an AWS Lambda demo path with S3-backed persistence
+- Microsoft Entra single-tenant sign-in on the frontend plus JWT validation on the API
 
 ## Workspace Layout
 
@@ -24,13 +25,15 @@ This repository contains a greenfield reference implementation skeleton for an e
 - Distinct aggregate color bands for second- and third-level subtotal rows
 - Copied-store creation, workbook upload, and hierarchy maintenance sheet for department/class/subclass mapping
 - Workbook import and export support in the store-sheet format with round-trip validation and exception workbooks
+- Store Profile maintenance with CRUD, inactivation, controlled option values, and Branch Profile import/export
 - Playwright browser smoke and interaction coverage for planning and hierarchy maintenance flows
+- API authorization hardening, narrowed CORS, and test-reset disablement outside local/test mode
 
 ## What Is Not Included Yet
 
-- Authentication wiring
 - Real-time collaboration notifications
 - Approval workflows
+- Final production persistence architecture, WAF, and private-origin CDN controls
 
 ## Local Setup
 
@@ -53,6 +56,7 @@ npm run dev
 The frontend expects the API at `https://localhost:7080` by default and can be updated in [`api.ts`](/Users/aloysius/Documents/New project/apps/web/src/lib/api.ts).
 
 For normal local development, the Vite dev server proxies `/api` requests to the API so edits work without any certificate setup.
+For local browser tests, auth is intentionally disabled and the API is started with `PlanningSecurityMode=disabled`.
 
 ### Browser Interaction Tests
 
@@ -65,8 +69,8 @@ npm run test:e2e
 
 The Playwright harness starts an isolated local stack automatically:
 
-- API on `http://127.0.0.1:5080`
-- Vite dev server on `http://localhost:5173`
+- API on `http://127.0.0.1:5081`
+- Vite dev server on `http://127.0.0.1:5173`
 
 ## Continuous Integration
 

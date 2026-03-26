@@ -1,12 +1,16 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  downloadStoreProfileExport,
   downloadBase64Workbook,
   downloadWorkbookExport,
   getGridSlice,
   getHierarchyMappings,
   getPlanningInsights,
+  getStoreProfileOptions,
+  getStoreProfiles,
   postAddRow,
+  postDeleteStoreProfile,
   postDeleteRow,
   postDeleteYear,
   postEdit,
@@ -18,12 +22,27 @@ import {
   postLock,
   postSave,
   postSplash,
+  postStoreProfile,
+  postStoreProfileImport,
+  postStoreProfileOption,
+  postDeleteStoreProfileOption,
+  postInactivateStoreProfile,
   postWorkbookImport,
 } from "./lib/api";
 import { SignedInUserMenu } from "./components/AuthShell";
 import { HierarchyMaintenanceSheet } from "./components/HierarchyMaintenanceSheet";
+import { StoreProfileMaintenanceSheet } from "./components/StoreProfileMaintenanceSheet";
 import { authEnabled } from "./lib/auth";
-import type { AddRowResponse, GridCell, GridMeasure, GridRow, GridSliceResponse, PlanningInsightResponse } from "./lib/types";
+import type {
+  AddRowResponse,
+  GridCell,
+  GridMeasure,
+  GridRow,
+  GridSliceResponse,
+  PlanningInsightResponse,
+  StoreProfile,
+  UpsertStoreProfileRequest,
+} from "./lib/types";
 
 const preloadPlanningGrid = () => import("./components/PlanningGrid");
 
@@ -32,7 +51,7 @@ const PlanningGrid = lazy(async () => {
   return { default: module.PlanningGrid };
 });
 
-type ActiveView = "planning-store" | "planning-department" | "hierarchy";
+type ActiveView = "planning-store" | "planning-department" | "hierarchy" | "store-profile";
 type DepartmentLayout = "department-store-class" | "department-class-store";
 
 export default function App() {
@@ -58,6 +77,14 @@ export default function App() {
     queryKey: ["hierarchy-mappings"],
     queryFn: getHierarchyMappings,
   });
+  const storeProfileQuery = useQuery({
+    queryKey: ["store-profiles"],
+    queryFn: getStoreProfiles,
+  });
+  const storeProfileOptionsQuery = useQuery({
+    queryKey: ["store-profile-options"],
+    queryFn: getStoreProfileOptions,
+  });
   const insightQuery = useQuery({
     queryKey: ["planning-insights", insightScope?.storeId, insightScope?.productNodeId, insightScope?.yearTimePeriodId],
     queryFn: () => getPlanningInsights(insightScope!.storeId, insightScope!.productNodeId, insightScope!.yearTimePeriodId),
@@ -77,6 +104,8 @@ export default function App() {
     await Promise.all([
       queryClient.refetchQueries({ queryKey: ["grid-slice", 1], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["hierarchy-mappings"], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["store-profiles"], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["store-profile-options"], type: "active" }),
     ]);
   };
 
@@ -222,6 +251,76 @@ export default function App() {
     onError: (error: Error) => setLastError(error.message),
   });
 
+  const upsertStoreProfileMutation = useMutation({
+    mutationFn: postStoreProfile,
+    onSuccess: async () => {
+      setLastError(null);
+      setHasUnsavedChanges(true);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const deleteStoreProfileMutation = useMutation({
+    mutationFn: postDeleteStoreProfile,
+    onSuccess: async () => {
+      setLastError(null);
+      setHasUnsavedChanges(true);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const inactivateStoreProfileMutation = useMutation({
+    mutationFn: postInactivateStoreProfile,
+    onSuccess: async () => {
+      setLastError(null);
+      setHasUnsavedChanges(true);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const storeProfileImportMutation = useMutation({
+    mutationFn: postStoreProfileImport,
+    onSuccess: async (result) => {
+      setLastError(null);
+      setHasUnsavedChanges(true);
+      if (result.exceptionWorkbookBase64 && result.exceptionFileName) {
+        downloadBase64Workbook(result.exceptionWorkbookBase64, result.exceptionFileName);
+      }
+
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const storeProfileExportMutation = useMutation({
+    mutationFn: downloadStoreProfileExport,
+    onSuccess: () => setLastError(null),
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const storeProfileOptionMutation = useMutation({
+    mutationFn: ({ fieldName, value, isActive }: { fieldName: string; value: string; isActive: boolean }) =>
+      postStoreProfileOption({ fieldName, value, isActive }),
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const deleteStoreProfileOptionMutation = useMutation({
+    mutationFn: ({ fieldName, value }: { fieldName: string; value: string }) =>
+      postDeleteStoreProfileOption(fieldName, value),
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
   useEffect(() => {
     const interval = window.setInterval(() => {
       if (!hasUnsavedChanges || saveMutation.isPending) {
@@ -248,10 +347,17 @@ export default function App() {
     saveMutation.isPending ||
     addHierarchyDepartmentMutation.isPending ||
     addHierarchyClassMutation.isPending ||
-    addHierarchySubclassMutation.isPending;
+    addHierarchySubclassMutation.isPending ||
+    upsertStoreProfileMutation.isPending ||
+    deleteStoreProfileMutation.isPending ||
+    inactivateStoreProfileMutation.isPending ||
+    storeProfileImportMutation.isPending ||
+    storeProfileExportMutation.isPending ||
+    storeProfileOptionMutation.isPending ||
+    deleteStoreProfileOptionMutation.isPending;
 
   const statusText = useMemo(() => {
-    if (gridQuery.isLoading || hierarchyQuery.isLoading) {
+    if (gridQuery.isLoading || hierarchyQuery.isLoading || storeProfileQuery.isLoading || storeProfileOptionsQuery.isLoading) {
       return "Loading planning slice...";
     }
 
@@ -259,7 +365,7 @@ export default function App() {
       return "Applying changes...";
     }
 
-    if (gridQuery.isError || hierarchyQuery.isError) {
+    if (gridQuery.isError || hierarchyQuery.isError || storeProfileQuery.isError || storeProfileOptionsQuery.isError) {
       return "API unavailable.";
     }
 
@@ -277,8 +383,10 @@ export default function App() {
 
     return activeView === "hierarchy"
       ? "Department / Class maintenance sheet ready."
+      : activeView === "store-profile"
+        ? "Store profile maintenance ready."
       : "Multi-year planning grid ready.";
-  }, [activeView, gridQuery.isError, gridQuery.isLoading, hasUnsavedChanges, hierarchyQuery.isError, hierarchyQuery.isLoading, isMutating, lastError, lastSavedAt]);
+  }, [activeView, gridQuery.isError, gridQuery.isLoading, hasUnsavedChanges, hierarchyQuery.isError, hierarchyQuery.isLoading, isMutating, lastError, lastSavedAt, storeProfileOptionsQuery.isError, storeProfileOptionsQuery.isLoading, storeProfileQuery.isError, storeProfileQuery.isLoading]);
 
   const storeViewData = useMemo(
     () => (gridQuery.data ? buildStoreView(gridQuery.data) : null),
@@ -289,7 +397,7 @@ export default function App() {
     [departmentLayout, gridQuery.data],
   );
 
-  if (!gridQuery.data || !hierarchyQuery.data || !storeViewData || !departmentViewData) {
+  if (!gridQuery.data || !hierarchyQuery.data || !storeProfileQuery.data || !storeProfileOptionsQuery.data || !storeViewData || !departmentViewData) {
     return (
       <main className="app-shell">
         <section className="hero">
@@ -551,6 +659,59 @@ export default function App() {
     await addHierarchySubclassMutation.mutateAsync({ departmentLabel, classLabel, subclassLabel });
   };
 
+  const handleSaveStoreProfile = async (store: StoreProfile) => {
+    const request: UpsertStoreProfileRequest = {
+      scenarioVersionId: 1,
+      storeId: store.storeId || null,
+      storeCode: store.storeCode,
+      branchName: store.branchName,
+      state: store.state ?? null,
+      clusterLabel: store.clusterLabel,
+      latitude: store.latitude ?? null,
+      longitude: store.longitude ?? null,
+      regionLabel: store.regionLabel,
+      openingDate: store.openingDate ?? null,
+      sssg: store.sssg ?? null,
+      salesType: store.salesType ?? null,
+      status: store.status ?? null,
+      storey: store.storey ?? null,
+      buildingStatus: store.buildingStatus ?? null,
+      gta: store.gta ?? null,
+      nta: store.nta ?? null,
+      rsom: store.rsom ?? null,
+      dm: store.dm ?? null,
+      rental: store.rental ?? null,
+      lifecycleState: store.lifecycleState,
+      rampProfileCode: store.rampProfileCode ?? null,
+      isActive: store.isActive,
+    };
+    await upsertStoreProfileMutation.mutateAsync(request);
+  };
+
+  const handleDeleteStoreProfile = async (store: StoreProfile) => {
+    if (!window.confirm(`Delete '${store.branchName}' and all related planning data? Deletes cannot be undone.`)) {
+      return;
+    }
+
+    await deleteStoreProfileMutation.mutateAsync({ scenarioVersionId: 1, storeId: store.storeId });
+  };
+
+  const handleInactivateStoreProfile = async (store: StoreProfile) => {
+    if (!window.confirm(`Inactivate '${store.branchName}'?`)) {
+      return;
+    }
+
+    await inactivateStoreProfileMutation.mutateAsync(store.storeId);
+  };
+
+  const handleImportStoreProfiles = async (file: File) => {
+    await storeProfileImportMutation.mutateAsync(file);
+  };
+
+  const handleExportStoreProfiles = async () => {
+    await storeProfileExportMutation.mutateAsync();
+  };
+
   return (
     <main className="app-shell">
       <section className="hero">
@@ -569,50 +730,29 @@ export default function App() {
         </div>
       </section>
 
-      <div className="view-switcher" role="tablist" aria-label="Sheet navigation">
-        <button
-          type="button"
-          className={`secondary-button${activeView === "planning-store" ? " secondary-button-active" : ""}`}
-          onClick={() => setActiveView("planning-store")}
-        >
-          Planning - by Store
-        </button>
-        <button
-          type="button"
-          className={`secondary-button${activeView === "planning-department" ? " secondary-button-active" : ""}`}
-          onClick={() => setActiveView("planning-department")}
-        >
-          Planning - by Department
-        </button>
-        <button
-          type="button"
-          className={`secondary-button${activeView === "hierarchy" ? " secondary-button-active" : ""}`}
-          onClick={() => setActiveView("hierarchy")}
-        >
-          Hierarchy Maintenance
-        </button>
+      <div className="view-menu-bar">
+        <label className="year-picker">
+          <span>Workspace</span>
+          <select value={activeView} onChange={(event) => setActiveView(event.target.value as ActiveView)}>
+            <option value="planning-store">Planning - by Store</option>
+            <option value="planning-department">Planning - by Department</option>
+            <option value="hierarchy">Hierarchy Maintenance</option>
+            <option value="store-profile">Store Profile Maintenance</option>
+          </select>
+        </label>
+        {activeView === "planning-department" ? (
+          <label className="year-picker">
+            <span>Layout</span>
+            <select value={departmentLayout} onChange={(event) => setDepartmentLayout(event.target.value as DepartmentLayout)}>
+              <option value="department-store-class">Department - Store - Class - Subclass</option>
+              <option value="department-class-store">Department - Class - Store - Subclass</option>
+            </select>
+          </label>
+        ) : null}
       </div>
 
-      {activeView === "planning-department" ? (
-        <div className="layout-switcher" role="group" aria-label="Department planning layout">
-          <button
-            type="button"
-            className={`secondary-button${departmentLayout === "department-store-class" ? " secondary-button-active" : ""}`}
-            onClick={() => setDepartmentLayout("department-store-class")}
-          >
-            Department - Store - Class - Subclass
-          </button>
-          <button
-            type="button"
-            className={`secondary-button${departmentLayout === "department-class-store" ? " secondary-button-active" : ""}`}
-            onClick={() => setDepartmentLayout("department-class-store")}
-          >
-            Department - Class - Store - Subclass
-          </button>
-        </div>
-      ) : null}
-
-      <div className="layout-switcher" role="group" aria-label="Year actions">
+      {activeView === "planning-store" || activeView === "planning-department" ? (
+      <div className="layout-switcher" role="group" aria-label="Sheet actions">
         <label className="year-picker">
           <span>Active Year</span>
           <select value={selectedYearId ?? ""} onChange={(event) => setSelectedYearId(Number(event.target.value) || null)}>
@@ -641,6 +781,7 @@ export default function App() {
           Delete Year
         </button>
       </div>
+      ) : null}
 
       {activeView === "hierarchy" ? (
         <HierarchyMaintenanceSheet
@@ -648,6 +789,22 @@ export default function App() {
           onAddDepartment={handleAddHierarchyDepartment}
           onAddClass={handleAddHierarchyClass}
           onAddSubclass={handleAddHierarchySubclass}
+        />
+      ) : activeView === "store-profile" ? (
+        <StoreProfileMaintenanceSheet
+          stores={storeProfileQuery.data.stores}
+          options={storeProfileOptionsQuery.data.options}
+          onSave={handleSaveStoreProfile}
+          onDelete={handleDeleteStoreProfile}
+          onInactivate={handleInactivateStoreProfile}
+          onImport={handleImportStoreProfiles}
+          onExport={handleExportStoreProfiles}
+          onUpsertOption={async (fieldName, value, isActive) => {
+            await storeProfileOptionMutation.mutateAsync({ fieldName, value, isActive });
+          }}
+          onDeleteOption={async (fieldName, value) => {
+            await deleteStoreProfileOptionMutation.mutateAsync({ fieldName, value });
+          }}
         />
       ) : (
         <div className="planning-workspace">

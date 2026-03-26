@@ -221,3 +221,88 @@ export type PlanningInsightResponse = {
   quantityOpportunity: number;
   insightBullets: string[];
 };
+
+export type StoreProfile = {
+  storeId: number;
+  storeCode: string;
+  branchName: string;
+  state?: string | null;
+  clusterLabel: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  regionLabel: string;
+  openingDate?: string | null;
+  sssg?: string | null;
+  salesType?: string | null;
+  status?: string | null;
+  storey?: string | null;
+  buildingStatus?: string | null;
+  gta?: number | null;
+  nta?: number | null;
+  rsom?: string | null;
+  dm?: string | null;
+  rental?: number | null;
+  lifecycleState: string;
+  rampProfileCode?: string | null;
+  isActive: boolean;
+};
+
+export type StoreProfileResponse = {
+  stores: StoreProfile[];
+};
+
+export type UpsertStoreProfileRequest = {
+  scenarioVersionId: number;
+  storeId?: number | null;
+  storeCode: string;
+  branchName: string;
+  state?: string | null;
+  clusterLabel: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  regionLabel: string;
+  openingDate?: string | null;
+  sssg?: string | null;
+  salesType?: string | null;
+  status?: string | null;
+  storey?: string | null;
+  buildingStatus?: string | null;
+  gta?: number | null;
+  nta?: number | null;
+  rsom?: string | null;
+  dm?: string | null;
+  rental?: number | null;
+  lifecycleState: string;
+  rampProfileCode?: string | null;
+  isActive: boolean;
+};
+
+export type DeleteStoreProfileRequest = {
+  scenarioVersionId: number;
+  storeId: number;
+};
+
+export type StoreProfileImportResponse = {
+  rowsProcessed: number;
+  storesAdded: number;
+  storesUpdated: number;
+  status: string;
+  exceptionFileName?: string | null;
+  exceptionWorkbookBase64?: string | null;
+};
+
+export type StoreProfileOption = {
+  fieldName: string;
+  value: string;
+  isActive: boolean;
+};
+
+export type StoreProfileOptionsResponse = {
+  options: StoreProfileOption[];
+};
+
+export type UpsertStoreProfileOptionRequest = {
+  fieldName: string;
+  value: string;
+  isActive: boolean;
+};

@@ -2,17 +2,23 @@ using Amazon;
 using Amazon.Lambda.AspNetCoreServer;
 using Amazon.Lambda.AspNetCoreServer.Hosting;
 using Amazon.S3;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
 using SalesPlanning.Api.Application;
 using SalesPlanning.Api.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 var storageMode = builder.Configuration["PlanningStorageMode"] ?? "local-sqlite";
+var securityMode = builder.Configuration["PlanningSecurityMode"] ?? "entra";
+var authEnabled = !string.Equals(securityMode, "disabled", StringComparison.OrdinalIgnoreCase);
 var planningDbPath = builder.Configuration["PlanningDbPath"]
     ?? (storageMode.Equals("s3-sqlite", StringComparison.OrdinalIgnoreCase)
         ? Path.Combine(Path.GetTempPath(), "sales-planning-demo", "planning.db")
         : Path.Combine(builder.Environment.ContentRootPath, "App_Data", "planning.db"));
-var corsAllowedOrigins = (builder.Configuration["CorsAllowedOrigins"] ?? "http://localhost:5173,https://localhost:5173")
+var corsAllowedOrigins = (builder.Configuration["CorsAllowedOrigins"] ?? "http://localhost:5173,https://localhost:5173,https://d22xc0mfhkv9bk.cloudfront.net")
     .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+var entraTenantId = builder.Configuration["EntraTenantId"] ?? "76ad236c-6db1-4d3d-9901-996450816c3c";
+var entraClientId = builder.Configuration["EntraClientId"] ?? "557f0c81-0531-4616-b62e-0b69eb7cb86f";
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -47,11 +53,53 @@ builder.Services.AddSingleton<IPlanningRepository>(serviceProvider =>
 builder.Services.AddSingleton<ISplashAllocator, SplashAllocator>();
 builder.Services.AddSingleton<IPlanningService, PlanningService>();
 
+if (authEnabled)
+{
+    builder.Services
+        .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddJwtBearer(options =>
+        {
+            options.Authority = $"https://login.microsoftonline.com/{entraTenantId}/v2.0";
+            options.TokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidIssuers =
+                [
+                    $"https://login.microsoftonline.com/{entraTenantId}/v2.0",
+                    $"https://sts.windows.net/{entraTenantId}/"
+                ],
+                ValidateAudience = false,
+                ValidateLifetime = true,
+                NameClaimType = "name"
+            };
+            options.Events = new JwtBearerEvents
+            {
+                OnTokenValidated = context =>
+                {
+                    var principal = context.Principal;
+                    var tenantClaim = principal?.FindFirst("tid")?.Value;
+                    var appClaim = principal?.FindFirst("azp")?.Value
+                        ?? principal?.FindFirst("appid")?.Value
+                        ?? principal?.FindFirst("aud")?.Value;
+
+                    if (!string.Equals(tenantClaim, entraTenantId, StringComparison.OrdinalIgnoreCase) ||
+                        !string.Equals(appClaim, entraClientId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        context.Fail("Token was not issued for the configured Microsoft 365 application.");
+                    }
+
+                    return Task.CompletedTask;
+                }
+            };
+        });
+    builder.Services.AddAuthorization();
+}
+
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        if (corsAllowedOrigins.Length == 1 && corsAllowedOrigins[0] == "*")
+        if (builder.Environment.IsDevelopment() && corsAllowedOrigins.Length == 1 && corsAllowedOrigins[0] == "*")
         {
             policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod();
             return;
@@ -64,14 +112,27 @@ builder.Services.AddCors(options =>
 var app = builder.Build();
 
 app.UseMiddleware<ApiExceptionHandlingMiddleware>();
-app.UseSwagger();
-app.UseSwaggerUI();
+if (builder.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
 app.UseCors();
-app.MapControllers();
+if (authEnabled)
+{
+    app.UseAuthentication();
+    app.UseAuthorization();
+}
+var controllers = app.MapControllers();
+if (authEnabled)
+{
+    controllers.RequireAuthorization();
+}
 app.MapGet("/health", () => Results.Ok(new
 {
     status = "ok",
-    storageMode
+    storageMode,
+    authEnabled
 }));
 
 app.Run();

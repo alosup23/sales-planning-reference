@@ -113,6 +113,24 @@ public sealed class S3BackedSqlitePlanningRepository : IPlanningRepository
     public Task<IReadOnlyList<StoreNodeMetadata>> GetStoresAsync(CancellationToken cancellationToken) =>
         WithReadAsync(_innerRepository.GetStoresAsync, cancellationToken);
 
+    public Task<StoreNodeMetadata> UpsertStoreProfileAsync(long scenarioVersionId, StoreNodeMetadata storeProfile, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.UpsertStoreProfileAsync(scenarioVersionId, storeProfile, ct), cancellationToken);
+
+    public Task DeleteStoreProfileAsync(long scenarioVersionId, long storeId, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.DeleteStoreProfileAsync(scenarioVersionId, storeId, ct), cancellationToken);
+
+    public Task InactivateStoreProfileAsync(long storeId, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.InactivateStoreProfileAsync(storeId, ct), cancellationToken);
+
+    public Task<IReadOnlyList<StoreProfileOptionValue>> GetStoreProfileOptionsAsync(CancellationToken cancellationToken) =>
+        WithReadAsync(_innerRepository.GetStoreProfileOptionsAsync, cancellationToken);
+
+    public Task UpsertStoreProfileOptionAsync(string fieldName, string value, bool isActive, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.UpsertStoreProfileOptionAsync(fieldName, value, isActive, ct), cancellationToken);
+
+    public Task DeleteStoreProfileOptionAsync(string fieldName, string value, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.DeleteStoreProfileOptionAsync(fieldName, value, ct), cancellationToken);
+
     public Task<IReadOnlyList<HierarchyDepartmentRecord>> GetHierarchyMappingsAsync(CancellationToken cancellationToken) =>
         WithReadAsync(_innerRepository.GetHierarchyMappingsAsync, cancellationToken);
 

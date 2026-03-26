@@ -25,6 +25,14 @@ async function expandYears(page: import("@playwright/test").Page) {
   await page.getByRole("button", { name: "Expand Years" }).click();
 }
 
+async function selectWorkspace(page: import("@playwright/test").Page, value: "planning-store" | "planning-department" | "hierarchy" | "store-profile") {
+  await page.locator(".view-menu-bar select").first().selectOption(value);
+}
+
+async function selectDepartmentLayout(page: import("@playwright/test").Page, value: "department-store-class" | "department-class-store") {
+  await page.locator(".view-menu-bar select").nth(1).selectOption(value);
+}
+
 async function toggleRowCaret(page: import("@playwright/test").Page, rowId: string) {
   const row = page.locator(`.ag-pinned-left-cols-container [row-id="${rowId}"]`);
   const toggle = row.locator(".hierarchy-toggle").first();
@@ -215,7 +223,7 @@ function createWorkbookBuffer(rows: Array<Record<string, string | number>>, shee
 test.describe.configure({ mode: "serial" });
 
 test.beforeEach(async ({ page, request }) => {
-  await request.post("http://127.0.0.1:5080/api/v1/test/reset");
+  await request.post("http://127.0.0.1:5081/api/v1/test/reset");
   await openGrid(page);
 });
 
@@ -268,7 +276,7 @@ test("does not pin year total measure columns and keeps caret expansion working 
   await toggleRowCaret(page, storeRowId(101, 2100));
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2110)}"]`)).toBeVisible();
 
-  await page.getByRole("button", { name: "Planning - by Department" }).click();
+  await selectWorkspace(page, "planning-department");
   await expectReady(page);
   const departmentStoreRowId = "department-view:department-store-class:Beverages:Store A";
   const departmentClassRowId = "department-view:department-store-class:Beverages:Store A:Soft Drinks";
@@ -281,7 +289,7 @@ test("does not pin year total measure columns and keeps caret expansion working 
 });
 
 test("renders the correct department hierarchy order in both layouts and applies aggregate color bands", async ({ page }) => {
-  await page.getByRole("button", { name: "Planning - by Department" }).click();
+  await selectWorkspace(page, "planning-department");
   await expectReady(page);
   await page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"]`).click({ button: "right" });
   await page.getByRole("button", { name: "Expand All" }).click();
@@ -296,23 +304,24 @@ test("renders the correct department hierarchy order in both layouts and applies
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentStoreRowId}"] .ag-cell`).first()).toHaveCSS("background-color", "rgb(200, 242, 242)");
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentClassRowId}"] .ag-cell`).first()).toHaveCSS("background-color", "rgb(218, 246, 246)");
 
-  await page.getByRole("button", { name: "Department - Class - Store - Subclass" }).click();
+  await selectDepartmentLayout(page, "department-class-store");
   await expectReady(page);
   await page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"]`).click({ button: "right" });
   await page.getByRole("button", { name: "Expand All" }).click();
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="department-view:department-class-store:Beverages:Soft Drinks:Store A"]`)).toBeVisible();
 });
 
-test("editing a visible Sales Revenue year total refreshes the row total", async ({ page }) => {
+test("editing a visible Sales Revenue leaf month persists the updated value", async ({ page }) => {
   await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
   await page.getByRole("button", { name: "Expand All" }).click();
-  const revenueCol = "202600:1";
-  const targetCell = await gridCell(page, storeRowId(101, 2110), revenueCol);
-  const before = await targetCell.textContent();
+  await expandYears(page);
+  const monthRevenueCol = "202601:1";
+  const before = await gridCellText(page, storeRowId(101, 2111), monthRevenueCol);
 
-  await editCell(page, storeRowId(101, 2110), revenueCol, "12000");
+  await editCell(page, storeRowId(101, 2111), monthRevenueCol, "12000");
   await expectReady(page);
-  await expect(await gridCell(page, storeRowId(101, 2110), revenueCol)).not.toContainText(before ?? "");
+  await expect(await gridCell(page, storeRowId(101, 2111), monthRevenueCol)).toContainText("12,000");
+  expect(before).not.toContain("12,000");
 });
 
 test("department view totals stay aligned with store view after a leaf edit", async ({ page }) => {
@@ -323,7 +332,7 @@ test("department view totals stay aligned with store view after a leaf edit", as
   await expectReady(page);
 
   const storeDepartmentTotal = await (await gridCellByPinnedText(page, "Beverages", "202600:1")).textContent();
-  await page.getByRole("button", { name: "Planning - by Department" }).click();
+  await selectWorkspace(page, "planning-department");
   await expectReady(page);
   await page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"]`).click({ button: "right" });
   await page.getByRole("button", { name: "Expand All" }).click();
@@ -344,7 +353,7 @@ test("adds Department and Class rows and shows them in hierarchy maintenance", a
   await page.getByRole("button", { name: "Add Class" }).click();
   await expectReady(page);
 
-  await page.getByRole("button", { name: "Hierarchy Maintenance" }).click();
+  await selectWorkspace(page, "hierarchy");
   await expect(page.getByText("Department / Class / Subclass Mapping")).toBeVisible();
   await expect(page.getByRole("button", { name: /Frozen E2E/ })).toBeVisible();
   await expect(page.getByText("Ice Cream E2E")).toBeVisible();
@@ -403,7 +412,7 @@ test("imports a workbook in the new store-sheet format", async ({ page }) => {
 });
 
 test("deletes a year with confirmation", async ({ page }) => {
-  await page.locator(".year-picker select").selectOption("202700");
+  await page.locator(".layout-switcher .year-picker select").selectOption("202700");
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Delete Year" }).click();
   await expectReady(page);
@@ -438,7 +447,7 @@ test("commits growth factors only on Enter and preserves row expansion state", a
 });
 
 test("generates the following year from the active year", async ({ page }) => {
-  await page.locator(".year-picker select").selectOption("202700");
+  await page.locator(".layout-switcher .year-picker select").selectOption("202700");
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Generate Next Year" }).click();
   await expectReady(page);

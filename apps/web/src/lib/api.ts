@@ -1,6 +1,7 @@
 import type {
   AddRowRequest,
   AddRowResponse,
+  DeleteStoreProfileRequest,
   DeleteRowRequest,
   DeleteYearRequest,
   EditCellsRequest,
@@ -13,18 +14,36 @@ import type {
   PlanningInsightResponse,
   SaveScenarioRequest,
   SaveScenarioResponse,
+  StoreProfile,
+  StoreProfileImportResponse,
+  StoreProfileOptionsResponse,
+  StoreProfileResponse,
   SplashRequest,
+  UpsertStoreProfileOptionRequest,
+  UpsertStoreProfileRequest,
 } from "./types";
 import { sampleGridData } from "./sampleGridData";
+import { authEnabled, getAccessToken } from "./auth";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 const ENABLE_SAMPLE_FALLBACK = import.meta.env.VITE_ENABLE_SAMPLE_FALLBACK === "true";
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers ?? {});
+  const expectsFormData = init?.body instanceof FormData;
+  if (!expectsFormData && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  if (authEnabled) {
+    const token = await getAccessToken();
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+  }
+
   const response = await fetch(url, {
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers,
     ...init,
   });
 
@@ -141,18 +160,10 @@ export async function postWorkbookImport(scenarioVersionId: number, file: File):
   form.append("scenarioVersionId", String(scenarioVersionId));
   form.append("file", file);
 
-  const response = await fetch(`${API_BASE_URL}/imports/workbook`, {
+  return await fetchJson<ImportWorkbookResponse>(`${API_BASE_URL}/imports/workbook`, {
     method: "POST",
     body: form,
   });
-
-  if (!response.ok) {
-    const problem = await response.json().catch(() => null);
-    const detail = typeof problem?.detail === "string" ? problem.detail : `${response.status} ${response.statusText}`;
-    throw new Error(detail);
-  }
-
-  return (await response.json()) as ImportWorkbookResponse;
 }
 
 export async function postSave(request: SaveScenarioRequest): Promise<SaveScenarioResponse> {
@@ -163,7 +174,15 @@ export async function postSave(request: SaveScenarioRequest): Promise<SaveScenar
 }
 
 export async function downloadWorkbookExport(): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/exports/workbook?scenarioVersionId=1`);
+  const headers = new Headers();
+  if (authEnabled) {
+    const token = await getAccessToken();
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+  }
+
+  const response = await fetch(`${API_BASE_URL}/exports/workbook?scenarioVersionId=1`, { headers });
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}`);
   }
@@ -197,4 +216,74 @@ function extractFileName(contentDisposition: string | null): string | null {
 
   const match = /filename=\"?([^\";]+)\"?/i.exec(contentDisposition);
   return match?.[1] ?? null;
+}
+
+export async function getStoreProfiles(): Promise<StoreProfileResponse> {
+  return await fetchJson<StoreProfileResponse>(`${API_BASE_URL}/store-profiles`);
+}
+
+export async function postStoreProfile(request: UpsertStoreProfileRequest): Promise<StoreProfile> {
+  return await fetchJson<StoreProfile>(`${API_BASE_URL}/store-profiles`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function postDeleteStoreProfile(request: DeleteStoreProfileRequest): Promise<void> {
+  await fetchJson(`${API_BASE_URL}/store-profiles/delete`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function postInactivateStoreProfile(storeId: number): Promise<StoreProfile> {
+  return await fetchJson<StoreProfile>(`${API_BASE_URL}/store-profiles/inactivate`, {
+    method: "POST",
+    body: JSON.stringify({ storeId }),
+  });
+}
+
+export async function getStoreProfileOptions(): Promise<StoreProfileOptionsResponse> {
+  return await fetchJson<StoreProfileOptionsResponse>(`${API_BASE_URL}/store-profile-options`);
+}
+
+export async function postStoreProfileOption(request: UpsertStoreProfileOptionRequest): Promise<StoreProfileOptionsResponse> {
+  return await fetchJson<StoreProfileOptionsResponse>(`${API_BASE_URL}/store-profile-options`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function postDeleteStoreProfileOption(fieldName: string, value: string): Promise<StoreProfileOptionsResponse> {
+  return await fetchJson<StoreProfileOptionsResponse>(`${API_BASE_URL}/store-profile-options/delete`, {
+    method: "POST",
+    body: JSON.stringify({ fieldName, value }),
+  });
+}
+
+export async function postStoreProfileImport(file: File): Promise<StoreProfileImportResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  return await fetchJson<StoreProfileImportResponse>(`${API_BASE_URL}/imports/store-profiles`, {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function downloadStoreProfileExport(): Promise<void> {
+  const headers = new Headers();
+  if (authEnabled) {
+    const token = await getAccessToken();
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+  }
+
+  const response = await fetch(`${API_BASE_URL}/exports/store-profiles`, { headers });
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+
+  const blob = await response.blob();
+  triggerDownload(blob, extractFileName(response.headers.get("content-disposition")) ?? "store-profile-export.xlsx");
 }

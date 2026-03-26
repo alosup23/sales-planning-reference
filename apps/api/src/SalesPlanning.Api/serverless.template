@@ -13,7 +13,15 @@
     },
     "CorsAllowedOrigins": {
       "Type": "String",
-      "Default": "*"
+      "Default": "https://d22xc0mfhkv9bk.cloudfront.net"
+    },
+    "EntraTenantId": {
+      "Type": "String",
+      "Default": "76ad236c-6db1-4d3d-9901-996450816c3c"
+    },
+    "EntraClientId": {
+      "Type": "String",
+      "Default": "557f0c81-0531-4616-b62e-0b69eb7cb86f"
     }
   },
   "Resources": {
@@ -43,6 +51,14 @@
             },
             "CorsAllowedOrigins": {
               "Ref": "CorsAllowedOrigins"
+            },
+            "PlanningSecurityMode": "entra",
+            "EnableTestReset": "false",
+            "EntraTenantId": {
+              "Ref": "EntraTenantId"
+            },
+            "EntraClientId": {
+              "Ref": "EntraClientId"
             }
           }
         },

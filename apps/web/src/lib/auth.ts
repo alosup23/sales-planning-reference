@@ -6,6 +6,9 @@ export const authEnabled = authMode !== "disabled";
 export const loginRequest = {
   scopes: ["User.Read"],
 };
+export const apiRequest = {
+  scopes: ["User.Read"],
+};
 
 const redirectUri =
   import.meta.env.VITE_ENTRA_REDIRECT_URI ??
@@ -23,7 +26,7 @@ const msalConfig: Configuration = {
     postLogoutRedirectUri,
   },
   cache: {
-    cacheLocation: "localStorage",
+    cacheLocation: "sessionStorage",
   },
 };
 
@@ -54,4 +57,22 @@ export async function initializeAuth(): Promise<void> {
   if (activeAccount) {
     msalInstance.setActiveAccount(activeAccount);
   }
+}
+
+export async function getAccessToken(): Promise<string | null> {
+  if (!msalInstance) {
+    return null;
+  }
+
+  const account = msalInstance.getActiveAccount() ?? msalInstance.getAllAccounts()[0] ?? null;
+  if (!account) {
+    return null;
+  }
+
+  const result = await msalInstance.acquireTokenSilent({
+    ...apiRequest,
+    account,
+  });
+
+  return result.accessToken || null;
 }

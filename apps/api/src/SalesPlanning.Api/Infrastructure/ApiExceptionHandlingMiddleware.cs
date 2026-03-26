@@ -5,10 +5,12 @@ namespace SalesPlanning.Api.Infrastructure;
 public sealed class ApiExceptionHandlingMiddleware
 {
     private readonly RequestDelegate _next;
+    private readonly ILogger<ApiExceptionHandlingMiddleware> _logger;
 
-    public ApiExceptionHandlingMiddleware(RequestDelegate next)
+    public ApiExceptionHandlingMiddleware(RequestDelegate next, ILogger<ApiExceptionHandlingMiddleware> logger)
     {
         _next = next;
+        _logger = logger;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -19,6 +21,7 @@ public sealed class ApiExceptionHandlingMiddleware
         }
         catch (Exception exception)
         {
+            _logger.LogError(exception, "Unhandled planning API exception for {Path}", context.Request.Path);
             await WriteProblemDetailsAsync(context, exception);
         }
     }
@@ -41,11 +44,12 @@ public sealed class ApiExceptionHandlingMiddleware
         {
             Status = statusCode,
             Title = title,
-            Detail = exception.Message,
+            Detail = statusCode >= 500
+                ? "An unexpected server error occurred. Contact support if the issue persists."
+                : exception.Message,
             Instance = context.Request.Path
         };
 
         await context.Response.WriteAsJsonAsync(problem);
     }
 }
-

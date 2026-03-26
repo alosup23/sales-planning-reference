@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using SalesPlanning.Api.Application;
@@ -414,7 +415,23 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                         "active",
                         "new-store-ramp",
                         null,
-                        null), cancellationToken);
+                        null,
+                        new string(request.Label.Trim().Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant(),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        "Active",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        true), cancellationToken);
                     await InitializeCellsForNodeAsync(connection, transaction, request.ScenarioVersionId, node, SupportedMeasureIds, timePeriods.Values, cancellationToken);
                     if (request.CopyFromStoreId is not null)
                     {
@@ -532,6 +549,159 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         return (await LoadStoreMetadataAsync(connection, null, cancellationToken)).Values
             .OrderBy(store => store.StoreLabel, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    public async Task<StoreNodeMetadata> UpsertStoreProfileAsync(long scenarioVersionId, StoreNodeMetadata storeProfile, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            var productNodes = await LoadProductNodesAsync(connection, transaction, cancellationToken);
+            var timePeriods = await LoadTimePeriodsAsync(connection, transaction, cancellationToken);
+            var stores = await LoadStoreMetadataAsync(connection, transaction, cancellationToken);
+            var normalizedProfile = NormalizePersistedStoreProfile(storeProfile, stores);
+            var existingStore = ResolveExistingStore(normalizedProfile, stores);
+
+            StoreNodeMetadata persistedStore;
+            if (existingStore is null)
+            {
+                var nextStoreId = productNodes.Values.Select(node => node.StoreId).DefaultIfEmpty(200L).Max() + 1;
+                var nextProductNodeId = productNodes.Keys.DefaultIfEmpty(3000L).Max() + 1;
+                var rootNode = new ProductNode(
+                    nextProductNodeId,
+                    nextStoreId,
+                    null,
+                    normalizedProfile.StoreLabel,
+                    0,
+                    [normalizedProfile.StoreLabel],
+                    false,
+                    "store",
+                    normalizedProfile.LifecycleState,
+                    normalizedProfile.RampProfileCode,
+                    normalizedProfile.EffectiveFromTimePeriodId,
+                    normalizedProfile.EffectiveToTimePeriodId);
+                await InsertProductNodeAsync(connection, transaction, rootNode, cancellationToken);
+                await InitializeCellsForNodeAsync(connection, transaction, scenarioVersionId, rootNode, SupportedMeasureIds, timePeriods.Values, cancellationToken);
+                persistedStore = normalizedProfile with { StoreId = nextStoreId };
+            }
+            else
+            {
+                persistedStore = normalizedProfile with { StoreId = existingStore.StoreId };
+                if (!string.Equals(existingStore.StoreLabel, persistedStore.StoreLabel, StringComparison.Ordinal))
+                {
+                    await RenameStoreHierarchyAsync(connection, transaction, productNodes.Values.Where(node => node.StoreId == existingStore.StoreId).ToList(), persistedStore.StoreLabel, cancellationToken);
+                }
+            }
+
+            await UpsertStoreMetadataAsync(connection, transaction, persistedStore, cancellationToken);
+            await UpsertStoreProfileOptionsForMetadataAsync(connection, transaction, persistedStore, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return persistedStore;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task DeleteStoreProfileAsync(long scenarioVersionId, long storeId, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            var productNodes = await LoadProductNodesAsync(connection, transaction, cancellationToken);
+            var rootNode = productNodes.Values.SingleOrDefault(node => node.StoreId == storeId && node.Level == 0)
+                ?? throw new InvalidOperationException($"Store {storeId} was not found.");
+
+            var nodeIdsToDelete = productNodes.Values
+                .Where(node => node.StoreId == storeId)
+                .Select(node => node.ProductNodeId)
+                .ToList();
+
+            await DeletePlanningCellsForNodesAsync(connection, transaction, scenarioVersionId, nodeIdsToDelete, cancellationToken);
+            await DeleteProductNodesAsync(connection, transaction, nodeIdsToDelete, cancellationToken);
+            await DeleteStoreMetadataAsync(connection, transaction, storeId, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task InactivateStoreProfileAsync(long storeId, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            var stores = await LoadStoreMetadataAsync(connection, transaction, cancellationToken);
+            if (!stores.TryGetValue(storeId, out var store))
+            {
+                throw new InvalidOperationException($"Store {storeId} was not found.");
+            }
+
+            await UpsertStoreMetadataAsync(connection, transaction, store with
+            {
+                IsActive = false,
+                LifecycleState = "inactive",
+                Status = string.IsNullOrWhiteSpace(store.Status) ? "Inactive" : store.Status
+            }, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<IReadOnlyList<StoreProfileOptionValue>> GetStoreProfileOptionsAsync(CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        return await LoadStoreProfileOptionsAsync(connection, null, cancellationToken);
+    }
+
+    public async Task UpsertStoreProfileOptionAsync(string fieldName, string value, bool isActive, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            await UpsertStoreProfileOptionInternalAsync(connection, transaction, fieldName, value, isActive, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task DeleteStoreProfileOptionAsync(string fieldName, string value, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            await DeleteStoreProfileOptionInternalAsync(connection, transaction, fieldName, value, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     public async Task<IReadOnlyList<HierarchyDepartmentRecord>> GetHierarchyMappingsAsync(CancellationToken cancellationToken)
@@ -908,7 +1078,29 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                         lifecycle_state text not null default 'active',
                         ramp_profile_code text null,
                         effective_from_time_period_id integer null,
-                        effective_to_time_period_id integer null
+                        effective_to_time_period_id integer null,
+                        store_code text null,
+                        state text null,
+                        latitude real null,
+                        longitude real null,
+                        opening_date text null,
+                        sssg text null,
+                        sales_type text null,
+                        status text null,
+                        storey text null,
+                        building_status text null,
+                        gta real null,
+                        nta real null,
+                        rsom text null,
+                        dm text null,
+                        rental real null,
+                        is_active integer not null default 1
+                    );
+                    create table if not exists store_profile_options (
+                        field_name text not null,
+                        option_value text not null,
+                        is_active integer not null default 1,
+                        primary key (field_name, option_value)
                     );
                     create table if not exists hierarchy_departments_v2 (
                         department_label text primary key,
@@ -955,12 +1147,14 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
 
             await EnsureSupportedTimePeriodsAsync(connection, transaction, cancellationToken);
             await EnsureGrowthFactorColumnAsync(connection, transaction, cancellationToken);
+            await EnsureStoreProfileColumnsAsync(connection, transaction, cancellationToken);
             var productNodes = await LoadProductNodesAsync(connection, transaction, cancellationToken);
             var timePeriods = await LoadTimePeriodsAsync(connection, transaction, cancellationToken);
             await EnsureSupportedMeasureCellsAsync(connection, transaction, productNodes.Values, timePeriods.Values, cancellationToken);
             await EnsureQuantitySeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
             await EnsureAspSeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
             await EnsureExtendedMeasureSeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
+            await EnsureStoreProfileOptionSeedAsync(connection, transaction, cancellationToken);
 
             await transaction.CommitAsync(cancellationToken);
             _initialized = true;
@@ -1022,7 +1216,23 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                    lifecycle_state,
                    ramp_profile_code,
                    effective_from_time_period_id,
-                   effective_to_time_period_id
+                   effective_to_time_period_id,
+                   store_code,
+                   state,
+                   latitude,
+                   longitude,
+                   opening_date,
+                   sssg,
+                   sales_type,
+                   status,
+                   storey,
+                   building_status,
+                   gta,
+                   nta,
+                   rsom,
+                   dm,
+                   rental,
+                   is_active
             from store_metadata;
             """;
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -1036,7 +1246,23 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 reader.GetString(4),
                 reader.IsDBNull(5) ? null : reader.GetString(5),
                 reader.IsDBNull(6) ? null : reader.GetInt64(6),
-                reader.IsDBNull(7) ? null : reader.GetInt64(7));
+                reader.IsDBNull(7) ? null : reader.GetInt64(7),
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                reader.IsDBNull(9) ? null : reader.GetString(9),
+                reader.IsDBNull(10) ? null : Convert.ToDecimal(reader.GetDouble(10), CultureInfo.InvariantCulture),
+                reader.IsDBNull(11) ? null : Convert.ToDecimal(reader.GetDouble(11), CultureInfo.InvariantCulture),
+                reader.IsDBNull(12) ? null : reader.GetString(12),
+                reader.IsDBNull(13) ? null : reader.GetString(13),
+                reader.IsDBNull(14) ? null : reader.GetString(14),
+                reader.IsDBNull(15) ? null : reader.GetString(15),
+                reader.IsDBNull(16) ? null : reader.GetString(16),
+                reader.IsDBNull(17) ? null : reader.GetString(17),
+                reader.IsDBNull(18) ? null : Convert.ToDecimal(reader.GetDouble(18), CultureInfo.InvariantCulture),
+                reader.IsDBNull(19) ? null : Convert.ToDecimal(reader.GetDouble(19), CultureInfo.InvariantCulture),
+                reader.IsDBNull(20) ? null : reader.GetString(20),
+                reader.IsDBNull(21) ? null : reader.GetString(21),
+                reader.IsDBNull(22) ? null : Convert.ToDecimal(reader.GetDouble(22), CultureInfo.InvariantCulture),
+                !reader.IsDBNull(23) && reader.GetInt64(23) == 1);
             result[metadata.StoreId] = metadata;
         }
 
@@ -1270,7 +1496,23 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 lifecycle_state,
                 ramp_profile_code,
                 effective_from_time_period_id,
-                effective_to_time_period_id)
+                effective_to_time_period_id,
+                store_code,
+                state,
+                latitude,
+                longitude,
+                opening_date,
+                sssg,
+                sales_type,
+                status,
+                storey,
+                building_status,
+                gta,
+                nta,
+                rsom,
+                dm,
+                rental,
+                is_active)
             values (
                 $storeId,
                 $storeLabel,
@@ -1279,7 +1521,23 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 $lifecycleState,
                 $rampProfileCode,
                 $effectiveFromTimePeriodId,
-                $effectiveToTimePeriodId)
+                $effectiveToTimePeriodId,
+                $storeCode,
+                $state,
+                $latitude,
+                $longitude,
+                $openingDate,
+                $sssg,
+                $salesType,
+                $status,
+                $storey,
+                $buildingStatus,
+                $gta,
+                $nta,
+                $rsom,
+                $dm,
+                $rental,
+                $isActive)
             on conflict (store_id)
             do update set
                 store_label = excluded.store_label,
@@ -1288,7 +1546,23 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 lifecycle_state = excluded.lifecycle_state,
                 ramp_profile_code = excluded.ramp_profile_code,
                 effective_from_time_period_id = excluded.effective_from_time_period_id,
-                effective_to_time_period_id = excluded.effective_to_time_period_id;
+                effective_to_time_period_id = excluded.effective_to_time_period_id,
+                store_code = excluded.store_code,
+                state = excluded.state,
+                latitude = excluded.latitude,
+                longitude = excluded.longitude,
+                opening_date = excluded.opening_date,
+                sssg = excluded.sssg,
+                sales_type = excluded.sales_type,
+                status = excluded.status,
+                storey = excluded.storey,
+                building_status = excluded.building_status,
+                gta = excluded.gta,
+                nta = excluded.nta,
+                rsom = excluded.rsom,
+                dm = excluded.dm,
+                rental = excluded.rental,
+                is_active = excluded.is_active;
             """;
         command.Parameters.AddWithValue("$storeId", metadata.StoreId);
         command.Parameters.AddWithValue("$storeLabel", metadata.StoreLabel);
@@ -1298,6 +1572,185 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         command.Parameters.AddWithValue("$rampProfileCode", (object?)metadata.RampProfileCode ?? DBNull.Value);
         command.Parameters.AddWithValue("$effectiveFromTimePeriodId", (object?)metadata.EffectiveFromTimePeriodId ?? DBNull.Value);
         command.Parameters.AddWithValue("$effectiveToTimePeriodId", (object?)metadata.EffectiveToTimePeriodId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$storeCode", (object?)metadata.StoreCode ?? DBNull.Value);
+        command.Parameters.AddWithValue("$state", (object?)metadata.State ?? DBNull.Value);
+        command.Parameters.AddWithValue("$latitude", (object?)metadata.Latitude ?? DBNull.Value);
+        command.Parameters.AddWithValue("$longitude", (object?)metadata.Longitude ?? DBNull.Value);
+        command.Parameters.AddWithValue("$openingDate", (object?)metadata.OpeningDate ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sssg", (object?)metadata.Sssg ?? DBNull.Value);
+        command.Parameters.AddWithValue("$salesType", (object?)metadata.SalesType ?? DBNull.Value);
+        command.Parameters.AddWithValue("$status", (object?)metadata.Status ?? DBNull.Value);
+        command.Parameters.AddWithValue("$storey", (object?)metadata.Storey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$buildingStatus", (object?)metadata.BuildingStatus ?? DBNull.Value);
+        command.Parameters.AddWithValue("$gta", (object?)metadata.Gta ?? DBNull.Value);
+        command.Parameters.AddWithValue("$nta", (object?)metadata.Nta ?? DBNull.Value);
+        command.Parameters.AddWithValue("$rsom", (object?)metadata.Rsom ?? DBNull.Value);
+        command.Parameters.AddWithValue("$dm", (object?)metadata.Dm ?? DBNull.Value);
+        command.Parameters.AddWithValue("$rental", (object?)metadata.Rental ?? DBNull.Value);
+        command.Parameters.AddWithValue("$isActive", metadata.IsActive ? 1 : 0);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static StoreNodeMetadata? ResolveExistingStore(StoreNodeMetadata profile, IReadOnlyDictionary<long, StoreNodeMetadata> stores)
+    {
+        if (profile.StoreId > 0 && stores.TryGetValue(profile.StoreId, out var byId))
+        {
+            return byId;
+        }
+
+        var storeCode = profile.StoreCode?.Trim();
+        if (!string.IsNullOrWhiteSpace(storeCode))
+        {
+            return stores.Values.FirstOrDefault(candidate =>
+                string.Equals(candidate.StoreCode, storeCode, StringComparison.OrdinalIgnoreCase));
+        }
+
+        return stores.Values.FirstOrDefault(candidate =>
+            string.Equals(candidate.StoreLabel, profile.StoreLabel, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static StoreNodeMetadata NormalizePersistedStoreProfile(
+        StoreNodeMetadata profile,
+        IReadOnlyDictionary<long, StoreNodeMetadata> stores)
+    {
+        var resolvedLabel = string.IsNullOrWhiteSpace(profile.StoreLabel) ? profile.StoreCode?.Trim() : profile.StoreLabel.Trim();
+        if (string.IsNullOrWhiteSpace(resolvedLabel))
+        {
+            throw new InvalidOperationException("BranchName is required.");
+        }
+
+        var resolvedCode = string.IsNullOrWhiteSpace(profile.StoreCode)
+            ? BuildGeneratedStoreCode(resolvedLabel, stores)
+            : profile.StoreCode.Trim().ToUpperInvariant();
+
+        if (stores.Values.Any(candidate => candidate.StoreId != profile.StoreId && string.Equals(candidate.StoreCode, resolvedCode, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException($"Store code '{resolvedCode}' already exists.");
+        }
+
+        return profile with
+        {
+            StoreLabel = resolvedLabel,
+            StoreCode = resolvedCode,
+            ClusterLabel = string.IsNullOrWhiteSpace(profile.ClusterLabel) ? "Unassigned Cluster" : profile.ClusterLabel.Trim(),
+            RegionLabel = string.IsNullOrWhiteSpace(profile.RegionLabel) ? "Unassigned Region" : profile.RegionLabel.Trim(),
+            LifecycleState = string.IsNullOrWhiteSpace(profile.LifecycleState) ? (profile.IsActive ? "active" : "inactive") : profile.LifecycleState.Trim(),
+            RampProfileCode = string.IsNullOrWhiteSpace(profile.RampProfileCode) ? null : profile.RampProfileCode.Trim(),
+            State = string.IsNullOrWhiteSpace(profile.State) ? null : profile.State.Trim(),
+            OpeningDate = string.IsNullOrWhiteSpace(profile.OpeningDate) ? null : profile.OpeningDate.Trim(),
+            Sssg = string.IsNullOrWhiteSpace(profile.Sssg) ? null : profile.Sssg.Trim(),
+            SalesType = string.IsNullOrWhiteSpace(profile.SalesType) ? null : profile.SalesType.Trim(),
+            Status = string.IsNullOrWhiteSpace(profile.Status) ? null : profile.Status.Trim(),
+            Storey = string.IsNullOrWhiteSpace(profile.Storey) ? null : profile.Storey.Trim(),
+            BuildingStatus = string.IsNullOrWhiteSpace(profile.BuildingStatus) ? null : profile.BuildingStatus.Trim(),
+            Rsom = string.IsNullOrWhiteSpace(profile.Rsom) ? null : profile.Rsom.Trim(),
+            Dm = string.IsNullOrWhiteSpace(profile.Dm) ? null : profile.Dm.Trim()
+        };
+    }
+
+    private static string BuildGeneratedStoreCode(string storeLabel, IReadOnlyDictionary<long, StoreNodeMetadata> stores)
+    {
+        var baseCode = new string(storeLabel.Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(baseCode))
+        {
+            baseCode = "STORE";
+        }
+
+        var candidate = baseCode[..Math.Min(baseCode.Length, 12)];
+        var suffix = 1;
+        while (stores.Values.Any(store => string.Equals(store.StoreCode, candidate, StringComparison.OrdinalIgnoreCase)))
+        {
+            candidate = $"{baseCode[..Math.Min(baseCode.Length, 9)]}{suffix:000}";
+            suffix += 1;
+        }
+
+        return candidate;
+    }
+
+    private static async Task RenameStoreHierarchyAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        IReadOnlyList<ProductNode> storeNodes,
+        string newStoreLabel,
+        CancellationToken cancellationToken)
+    {
+        foreach (var node in storeNodes.OrderBy(node => node.Level))
+        {
+            var updatedPath = node.Path.Length == 0
+                ? new[] { newStoreLabel }
+                : (new[] { newStoreLabel }).Concat(node.Path.Skip(1)).ToArray();
+            var updatedNode = node with
+            {
+                Label = node.Level == 0 ? newStoreLabel : node.Label,
+                Path = updatedPath
+            };
+            await UpdateProductNodeAsync(connection, transaction, updatedNode, cancellationToken);
+        }
+    }
+
+    private static async Task DeletePlanningCellsForNodesAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long scenarioVersionId,
+        IReadOnlyList<long> nodeIdsToDelete,
+        CancellationToken cancellationToken)
+    {
+        if (nodeIdsToDelete.Count == 0)
+        {
+            return;
+        }
+
+        var parameterNames = nodeIdsToDelete.Select((_, index) => $"$nodeId{index}").ToArray();
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"""
+            delete from planning_cells
+            where scenario_version_id = $scenarioVersionId
+              and product_node_id in ({string.Join(", ", parameterNames)});
+            """;
+        command.Parameters.AddWithValue("$scenarioVersionId", scenarioVersionId);
+        for (var index = 0; index < nodeIdsToDelete.Count; index += 1)
+        {
+            command.Parameters.AddWithValue(parameterNames[index], nodeIdsToDelete[index]);
+        }
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task DeleteProductNodesAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        IReadOnlyList<long> nodeIdsToDelete,
+        CancellationToken cancellationToken)
+    {
+        if (nodeIdsToDelete.Count == 0)
+        {
+            return;
+        }
+
+        var parameterNames = nodeIdsToDelete.Select((_, index) => $"$nodeId{index}").ToArray();
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"""
+            delete from product_nodes
+            where product_node_id in ({string.Join(", ", parameterNames)});
+            """;
+        for (var index = 0; index < nodeIdsToDelete.Count; index += 1)
+        {
+            command.Parameters.AddWithValue(parameterNames[index], nodeIdsToDelete[index]);
+        }
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task DeleteStoreMetadataAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long storeId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "delete from store_metadata where store_id = $storeId;";
+        command.Parameters.AddWithValue("$storeId", storeId);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -1420,6 +1873,151 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         catch (SqliteException exception) when (exception.SqliteErrorCode == 1 && exception.Message.Contains("duplicate column name", StringComparison.OrdinalIgnoreCase))
         {
         }
+    }
+
+    private static async Task EnsureStoreProfileColumnsAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        var statements = new[]
+        {
+            "alter table store_metadata add column store_code text null;",
+            "alter table store_metadata add column state text null;",
+            "alter table store_metadata add column latitude real null;",
+            "alter table store_metadata add column longitude real null;",
+            "alter table store_metadata add column opening_date text null;",
+            "alter table store_metadata add column sssg text null;",
+            "alter table store_metadata add column sales_type text null;",
+            "alter table store_metadata add column status text null;",
+            "alter table store_metadata add column storey text null;",
+            "alter table store_metadata add column building_status text null;",
+            "alter table store_metadata add column gta real null;",
+            "alter table store_metadata add column nta real null;",
+            "alter table store_metadata add column rsom text null;",
+            "alter table store_metadata add column dm text null;",
+            "alter table store_metadata add column rental real null;",
+            "alter table store_metadata add column is_active integer not null default 1;"
+        };
+
+        foreach (var statement in statements)
+        {
+            try
+            {
+                await using var command = connection.CreateCommand();
+                command.Transaction = transaction;
+                command.CommandText = statement;
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+            catch (SqliteException exception) when (exception.SqliteErrorCode == 1 && exception.Message.Contains("duplicate column name", StringComparison.OrdinalIgnoreCase))
+            {
+            }
+        }
+    }
+
+    private static async Task EnsureStoreProfileOptionSeedAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        var stores = await LoadStoreMetadataAsync(connection, transaction, cancellationToken);
+        foreach (var store in stores.Values)
+        {
+            await UpsertStoreProfileOptionsForMetadataAsync(connection, transaction, store, cancellationToken);
+        }
+    }
+
+    private static async Task<IReadOnlyList<StoreProfileOptionValue>> LoadStoreProfileOptionsAsync(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        CancellationToken cancellationToken)
+    {
+        var result = new List<StoreProfileOptionValue>();
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            select field_name, option_value, is_active
+            from store_profile_options
+            order by field_name asc, option_value asc;
+            """;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            result.Add(new StoreProfileOptionValue(reader.GetString(0), reader.GetString(1), reader.GetInt64(2) == 1));
+        }
+
+        return result;
+    }
+
+    private static async Task UpsertStoreProfileOptionsForMetadataAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        StoreNodeMetadata metadata,
+        CancellationToken cancellationToken)
+    {
+        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["state"] = metadata.State,
+            ["clusterLabel"] = metadata.ClusterLabel,
+            ["regionLabel"] = metadata.RegionLabel,
+            ["sssg"] = metadata.Sssg,
+            ["salesType"] = metadata.SalesType,
+            ["status"] = metadata.Status,
+            ["buildingStatus"] = metadata.BuildingStatus,
+            ["lifecycleState"] = metadata.LifecycleState,
+            ["rampProfileCode"] = metadata.RampProfileCode
+        };
+
+        foreach (var (fieldName, value) in values)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            await UpsertStoreProfileOptionInternalAsync(connection, transaction, fieldName, value, true, cancellationToken);
+        }
+    }
+
+    private static async Task UpsertStoreProfileOptionInternalAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string fieldName,
+        string value,
+        bool isActive,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            insert into store_profile_options (field_name, option_value, is_active)
+            values ($fieldName, $value, $isActive)
+            on conflict (field_name, option_value)
+            do update set is_active = excluded.is_active;
+            """;
+        command.Parameters.AddWithValue("$fieldName", fieldName.Trim());
+        command.Parameters.AddWithValue("$value", value.Trim());
+        command.Parameters.AddWithValue("$isActive", isActive ? 1 : 0);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task DeleteStoreProfileOptionInternalAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string fieldName,
+        string value,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            delete from store_profile_options
+            where field_name = $fieldName
+              and option_value = $value;
+            """;
+        command.Parameters.AddWithValue("$fieldName", fieldName.Trim());
+        command.Parameters.AddWithValue("$value", value.Trim());
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task EnsureQuantitySeedAsync(

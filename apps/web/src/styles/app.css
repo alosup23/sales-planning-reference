@@ -27,10 +27,12 @@ button {
   padding: 8px 10px;
 }
 
-.view-switcher {
+.view-switcher,
+.view-menu-bar {
   display: flex;
   gap: 6px;
   margin-bottom: 6px;
+  flex-wrap: wrap;
 }
 
 .layout-switcher {
@@ -461,6 +463,153 @@ button {
   background: rgba(14, 95, 118, 0.12);
 }
 
+.store-profile-sheet {
+  display: grid;
+  gap: 8px;
+}
+
+.store-profile-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.store-profile-list,
+.store-profile-editor,
+.store-option-sheet {
+  border-radius: 16px;
+  border: 1px solid rgba(16, 33, 47, 0.08);
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: 0 18px 36px rgba(16, 33, 47, 0.08);
+  padding: 10px;
+}
+
+.store-profile-list-items {
+  display: grid;
+  gap: 6px;
+  max-height: 66vh;
+  overflow: auto;
+}
+
+.store-profile-list-item {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(16, 33, 47, 0.08);
+  background: rgba(255, 255, 255, 0.72);
+  text-align: left;
+}
+
+.store-profile-list-item span {
+  color: #44505a;
+  font-size: 0.82rem;
+}
+
+.store-profile-list-item-active {
+  border-color: rgba(14, 95, 118, 0.42);
+  background: rgba(14, 95, 118, 0.08);
+}
+
+.store-profile-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 10px;
+}
+
+.labeled-field {
+  display: grid;
+  gap: 4px;
+}
+
+.labeled-field span {
+  font-size: 0.78rem;
+  color: #44505a;
+}
+
+.labeled-field input,
+.labeled-field select {
+  width: 100%;
+  border: 1px solid rgba(16, 33, 47, 0.12);
+  border-radius: 10px;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.94);
+  font: inherit;
+}
+
+.checkbox-field {
+  align-content: end;
+}
+
+.checkbox-field input {
+  width: auto;
+}
+
+.store-profile-actions {
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+}
+
+.store-option-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  align-items: end;
+}
+
+.store-option-groups {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.store-option-card {
+  border: 1px solid rgba(16, 33, 47, 0.08);
+  border-radius: 12px;
+  padding: 8px;
+  background: rgba(248, 252, 253, 0.95);
+}
+
+.store-option-card ul {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.store-option-card li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.option-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.link-button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: #0e5f76;
+  font-size: 0.8rem;
+}
+
+.danger-link {
+  color: #9a2f2f;
+}
+
+.file-button {
+  position: relative;
+  overflow: hidden;
+}
+
 .planning-context-menu {
   position: fixed;
   z-index: 30;
@@ -556,6 +705,7 @@ button {
   }
 
   .view-switcher,
+  .view-menu-bar,
   .layout-switcher {
     flex-direction: column;
     align-items: flex-start;
@@ -571,6 +721,13 @@ button {
   }
 
   .planning-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .store-profile-layout,
+  .store-profile-form-grid,
+  .store-option-form,
+  .store-option-groups {
     grid-template-columns: 1fr;
   }
 }
