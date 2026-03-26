@@ -24,7 +24,7 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository, IDisposabl
     public Task AppendAuditAsync(PlanningActionAudit audit, CancellationToken cancellationToken) => _inner.AppendAuditAsync(audit, cancellationToken);
     public Task<long> GetNextActionIdAsync(CancellationToken cancellationToken) => _inner.GetNextActionIdAsync(cancellationToken);
     public Task<IReadOnlyList<PlanningActionAudit>> GetAuditAsync(long scenarioVersionId, long measureId, long storeId, long productNodeId, CancellationToken cancellationToken) => _inner.GetAuditAsync(scenarioVersionId, measureId, storeId, productNodeId, cancellationToken);
-    public Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, CancellationToken cancellationToken) => _inner.GetGridSliceAsync(scenarioVersionId, cancellationToken);
+    public Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, CancellationToken cancellationToken) => _inner.GetGridSliceAsync(scenarioVersionId, selectedStoreId, cancellationToken);
     public Task<ProductNode> AddRowAsync(AddRowRequest request, CancellationToken cancellationToken) => _inner.AddRowAsync(request, cancellationToken);
     public Task<int> DeleteRowAsync(long scenarioVersionId, long productNodeId, CancellationToken cancellationToken) => _inner.DeleteRowAsync(scenarioVersionId, productNodeId, cancellationToken);
     public Task<int> DeleteYearAsync(long scenarioVersionId, long yearTimePeriodId, CancellationToken cancellationToken) => _inner.DeleteYearAsync(scenarioVersionId, yearTimePeriodId, cancellationToken);

@@ -309,7 +309,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         return audits;
     }
 
-    public async Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, CancellationToken cancellationToken)
+    public async Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -321,7 +321,11 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             .Where(cell => cell.Coordinate.ScenarioVersionId == scenarioVersionId)
             .ToList();
 
-        var rows = productNodes.Values
+        var visibleNodes = productNodes.Values
+            .Where(node => node.Level == 0 || selectedStoreId is null || node.StoreId == selectedStoreId.Value)
+            .ToList();
+
+        var rows = visibleNodes
             .OrderBy(node => node.Path.Length)
             .ThenBy(node => string.Join(">", node.Path), StringComparer.OrdinalIgnoreCase)
             .Select(node =>

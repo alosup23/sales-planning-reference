@@ -21,9 +21,9 @@ public sealed class PlanningController : ControllerBase
     }
 
     [HttpGet("grid-slices")]
-    public Task<GridSliceResponse> GetGridSlice([FromQuery] long scenarioVersionId = 1, CancellationToken cancellationToken = default)
+    public Task<GridSliceResponse> GetGridSlice([FromQuery] long scenarioVersionId = 1, [FromQuery] long? selectedStoreId = null, CancellationToken cancellationToken = default)
     {
-        return _planningService.GetGridSliceAsync(scenarioVersionId, cancellationToken);
+        return _planningService.GetGridSliceAsync(scenarioVersionId, selectedStoreId, cancellationToken);
     }
 
     [HttpPost("cell-edits")]

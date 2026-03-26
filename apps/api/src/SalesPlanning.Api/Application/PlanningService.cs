@@ -40,9 +40,9 @@ public sealed class PlanningService : IPlanningService
         _splashAllocator = splashAllocator;
     }
 
-    public Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, CancellationToken cancellationToken)
+    public Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, CancellationToken cancellationToken)
     {
-        return _repository.GetGridSliceAsync(scenarioVersionId, cancellationToken);
+        return _repository.GetGridSliceAsync(scenarioVersionId, selectedStoreId, cancellationToken);
     }
 
     public async Task<EditCellsResponse> ApplyEditsAsync(EditCellsRequest request, string userId, CancellationToken cancellationToken)

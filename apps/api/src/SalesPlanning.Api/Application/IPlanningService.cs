@@ -4,7 +4,7 @@ namespace SalesPlanning.Api.Application;
 
 public interface IPlanningService
 {
-    Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, CancellationToken cancellationToken);
+    Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, CancellationToken cancellationToken);
     Task<EditCellsResponse> ApplyEditsAsync(EditCellsRequest request, string userId, CancellationToken cancellationToken);
     Task<SplashResponse> ApplySplashAsync(SplashRequest request, string userId, CancellationToken cancellationToken);
     Task<LockCellsResponse> ApplyLockAsync(LockCellsRequest request, string userId, CancellationToken cancellationToken);

@@ -30,7 +30,7 @@ async function selectWorkspace(page: import("@playwright/test").Page, value: "pl
 }
 
 async function selectDepartmentLayout(page: import("@playwright/test").Page, value: "department-store-class" | "department-class-store") {
-  await page.locator(".view-menu-bar select").nth(1).selectOption(value);
+  await page.locator(".view-menu-bar .year-picker").filter({ hasText: "Layout" }).locator("select").selectOption(value);
 }
 
 async function toggleRowCaret(page: import("@playwright/test").Page, rowId: string) {
@@ -331,13 +331,14 @@ test("department view totals stay aligned with store view after a leaf edit", as
   await editCell(page, storeRowId(101, 2110), "202600:1", "12000");
   await expectReady(page);
 
-  const storeDepartmentTotal = await (await gridCellByPinnedText(page, "Beverages", "202600:1")).textContent();
+  const storeDepartmentTotal = await (await gridCell(page, storeRowId(101, 2100), "202600:1")).textContent();
   await selectWorkspace(page, "planning-department");
   await expectReady(page);
   await page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"]`).click({ button: "right" });
   await page.getByRole("button", { name: "Expand All" }).click();
-
-  await expect(await gridCellByPinnedText(page, "Beverages", "202600:1")).toContainText(storeDepartmentTotal ?? "");
+  const departmentRow = page.locator('.ag-pinned-left-cols-container [row-id="synthetic:Department Total>Beverages:-2"]').first();
+  await expect(departmentRow).toBeVisible();
+  await expect(page.locator('.ag-center-cols-container [row-id="synthetic:Department Total>Beverages:-2"] [col-id="202600:1"]').first()).toContainText(storeDepartmentTotal ?? "");
 });
 
 test("adds Department and Class rows and shows them in hierarchy maintenance", async ({ page }) => {
@@ -374,7 +375,7 @@ test("adds a store and reveals it immediately without a page reload", async ({ p
     detachPromptHandler();
   }
 
-  await expect(page.getByText("Store Z E2E", { exact: true })).toBeVisible();
+  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(103, 2002)}"] .hierarchy-label`)).toContainText("Store Z E2E");
 });
 
 test("imports a workbook in the new store-sheet format", async ({ page }) => {

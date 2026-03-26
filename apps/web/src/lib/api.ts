@@ -63,9 +63,14 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-export async function getGridSlice(): Promise<GridSliceResponse> {
+export async function getGridSlice(selectedStoreId?: number | null): Promise<GridSliceResponse> {
   try {
-    return await fetchJson<GridSliceResponse>(`${API_BASE_URL}/grid-slices?scenarioVersionId=1`);
+    const params = new URLSearchParams({ scenarioVersionId: "1" });
+    if (selectedStoreId) {
+      params.set("selectedStoreId", String(selectedStoreId));
+    }
+
+    return await fetchJson<GridSliceResponse>(`${API_BASE_URL}/grid-slices?${params.toString()}`);
   } catch {
     if (!ENABLE_SAMPLE_FALLBACK) {
       throw new Error("Planning API unavailable.");

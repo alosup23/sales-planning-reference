@@ -82,14 +82,16 @@ export default function App() {
   const [pendingRevealRow, setPendingRevealRow] = useState<AddRowResponse | null>(null);
   const [productSearchTerm, setProductSearchTerm] = useState("");
   const [productPageNumber, setProductPageNumber] = useState(1);
+  const [selectedPlanningStoreId, setSelectedPlanningStoreId] = useState<number | null>(null);
 
   useEffect(() => {
     void preloadPlanningGrid();
   }, []);
 
   const gridQuery = useQuery({
-    queryKey: ["grid-slice", 1],
-    queryFn: () => getGridSlice(),
+    queryKey: ["grid-slice", 1, selectedPlanningStoreId],
+    queryFn: () => getGridSlice(selectedPlanningStoreId),
+    enabled: selectedPlanningStoreId !== null,
   });
   const hierarchyQuery = useQuery({
     queryKey: ["hierarchy-mappings"],
@@ -123,6 +125,14 @@ export default function App() {
     queryFn: () => getPlanningInsights(insightScope!.storeId, insightScope!.productNodeId, insightScope!.yearTimePeriodId),
     enabled: Boolean(insightScope),
   });
+
+  useEffect(() => {
+    if (selectedPlanningStoreId || !storeProfileQuery.data?.stores.length) {
+      return;
+    }
+
+    setSelectedPlanningStoreId(storeProfileQuery.data.stores[0].storeId);
+  }, [selectedPlanningStoreId, storeProfileQuery.data]);
 
   useEffect(() => {
     if (selectedYearId || !gridQuery.data) {
@@ -536,7 +546,7 @@ export default function App() {
 
   const productMaintenanceReady = activeView !== "product-profile" || (productProfileQuery.data && productProfileOptionsQuery.data && productHierarchyQuery.data);
 
-  if (!gridQuery.data || !hierarchyQuery.data || !storeProfileQuery.data || !storeProfileOptionsQuery.data || !productMaintenanceReady || !storeViewData || !departmentViewData) {
+    if (!selectedPlanningStoreId || !gridQuery.data || !hierarchyQuery.data || !storeProfileQuery.data || !storeProfileOptionsQuery.data || !productMaintenanceReady || !storeViewData || !departmentViewData) {
     return (
       <main className="app-shell">
         <section className="hero">
@@ -683,6 +693,7 @@ export default function App() {
 
     if (level === "store") {
       setActiveView("planning-store");
+      setSelectedPlanningStoreId(createdRow.storeId);
     }
 
     setPendingRevealRow(createdRow);
@@ -922,6 +933,18 @@ export default function App() {
             <option value="product-profile">Product Profile Maintenance</option>
           </select>
         </label>
+        {(activeView === "planning-store" || activeView === "planning-department") ? (
+          <label className="year-picker">
+            <span>Store Scope</span>
+            <select value={selectedPlanningStoreId ?? ""} onChange={(event) => setSelectedPlanningStoreId(Number(event.target.value) || null)}>
+              {storeProfileQuery.data.stores.map((store) => (
+                <option key={store.storeId} value={store.storeId}>
+                  {store.branchName}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         {activeView === "planning-department" ? (
           <label className="year-picker">
             <span>Layout</span>
