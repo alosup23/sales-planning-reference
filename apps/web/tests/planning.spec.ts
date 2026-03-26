@@ -86,6 +86,18 @@ async function editCell(page: import("@playwright/test").Page, rowId: string, co
   await editor.press("Enter");
 }
 
+async function acceptPrompts(page: import("@playwright/test").Page, responses: string[]) {
+  let responseIndex = 0;
+  const handler = async (dialog: import("@playwright/test").Dialog) => {
+    const response = responses[responseIndex] ?? "";
+    responseIndex += 1;
+    await dialog.accept(response);
+  };
+
+  page.on("dialog", handler);
+  return () => page.off("dialog", handler);
+}
+
 function createWorkbookBuffer(rows: Array<Record<string, string | number>>, sheetName = "Store B"): Buffer {
   const tempRoot = mkdtempSync(path.join(tmpdir(), "sales-plan-xlsx-"));
   const workbookRoot = path.join(tempRoot, "xlsx");
@@ -279,6 +291,24 @@ test("adds Department and Class rows and shows them in hierarchy maintenance", a
   await expect(page.getByText("Department / Class / Subclass Mapping")).toBeVisible();
   await expect(page.getByRole("button", { name: /Frozen E2E/ })).toBeVisible();
   await expect(page.getByText("Ice Cream E2E")).toBeVisible();
+});
+
+test("adds a store and reveals it immediately without a page reload", async ({ page }) => {
+  const detachPromptHandler = await acceptPrompts(page, [
+    "Store Z E2E",
+    "Store A",
+    "Baby Centre",
+    "Central",
+  ]);
+
+  try {
+    await page.getByRole("button", { name: "Add Store" }).click();
+    await expectReady(page);
+  } finally {
+    detachPromptHandler();
+  }
+
+  await expect(page.getByText("Store Z E2E", { exact: true })).toBeVisible();
 });
 
 test("imports a workbook in the new store-sheet format", async ({ page }) => {

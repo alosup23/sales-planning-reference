@@ -140,6 +140,15 @@ export type AddRowRequest = {
   regionLabel?: string | null;
 };
 
+export type AddRowResponse = {
+  storeId: number;
+  productNodeId: number;
+  label: string;
+  level: number;
+  path: string[];
+  isLeaf: boolean;
+};
+
 export type DeleteRowRequest = {
   scenarioVersionId: number;
   productNodeId: number;

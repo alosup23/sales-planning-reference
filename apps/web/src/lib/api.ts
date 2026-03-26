@@ -1,5 +1,6 @@
 import type {
   AddRowRequest,
+  AddRowResponse,
   DeleteRowRequest,
   DeleteYearRequest,
   EditCellsRequest,
@@ -76,8 +77,8 @@ export async function postLock(request: LockCellsRequest): Promise<void> {
   });
 }
 
-export async function postAddRow(request: AddRowRequest): Promise<void> {
-  await fetchJson(`${API_BASE_URL}/rows`, {
+export async function postAddRow(request: AddRowRequest): Promise<AddRowResponse> {
+  return await fetchJson<AddRowResponse>(`${API_BASE_URL}/rows`, {
     method: "POST",
     body: JSON.stringify(request),
   });

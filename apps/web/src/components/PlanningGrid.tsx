@@ -17,7 +17,7 @@ import {
 } from "ag-grid-community";
 import "ag-grid-enterprise";
 import { AgGridReact } from "ag-grid-react";
-import type { GridMeasure, GridPeriod, GridRow, GridSliceResponse } from "../lib/types";
+import type { AddRowResponse, GridMeasure, GridPeriod, GridRow, GridSliceResponse } from "../lib/types";
 import "ag-grid-community/styles/ag-grid.css";
 import "ag-grid-community/styles/ag-theme-quartz.css";
 
@@ -39,6 +39,8 @@ type PlanningGridProps = {
   onDeleteRow: (row: GridRow | null) => Promise<void>;
   onImportWorkbook: (file: File) => Promise<void>;
   sheetLabel: string;
+  pendingRevealRow: AddRowResponse | null;
+  onRevealHandled: () => void;
 };
 
 type GridRowView = GridRow & {
@@ -85,6 +87,8 @@ export function PlanningGrid({
   onDeleteRow,
   onImportWorkbook,
   sheetLabel,
+  pendingRevealRow,
+  onRevealHandled,
 }: PlanningGridProps) {
   const [selectedRowKey, setSelectedRowKey] = useState<RowKey | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -243,6 +247,47 @@ export function PlanningGrid({
     hasAppliedInitialExpansionRef.current = true;
   }, [rowData]);
 
+  useEffect(() => {
+    if (!pendingRevealRow) {
+      return;
+    }
+
+    const api = gridRef.current?.api;
+    if (!api) {
+      return;
+    }
+
+    const targetRow = rowData.find((row) => row.bindingProductNodeId === pendingRevealRow.productNodeId && row.bindingStoreId === pendingRevealRow.storeId)
+      ?? rowData.find((row) => row.productNodeId === pendingRevealRow.productNodeId && row.storeId === pendingRevealRow.storeId);
+
+    if (!targetRow) {
+      return;
+    }
+
+    for (let depth = 1; depth < targetRow.__path.length; depth += 1) {
+      const ancestor = rowData.find((row) =>
+        row.__path.length === depth &&
+        row.__path.every((segment, index) => segment === targetRow.__path[index]));
+
+      if (!ancestor) {
+        continue;
+      }
+
+      const ancestorKey = getRowKey(ancestor);
+      expandedRowStateRef.current.set(ancestorKey, true);
+      api.getRowNode(ancestorKey)?.setExpanded(true);
+    }
+
+    const rowKey = getRowKey(targetRow);
+    syncSelectedRow(targetRow);
+    const rowNode = api.getRowNode(rowKey);
+    rowNode?.setSelected(true, true);
+    if (rowNode) {
+      api.ensureNodeVisible(rowNode, "middle");
+    }
+    onRevealHandled();
+  }, [onRevealHandled, pendingRevealRow, rowData]);
+
   const handleCellContextMenu = (event: CellContextMenuEvent<GridRowView>) => {
     event.event?.preventDefault();
     const row = event.data;
@@ -310,6 +355,16 @@ export function PlanningGrid({
   };
 
   const handleCellClicked = (event: CellClickedEvent<GridRowView>) => {
+    const clickedElement = event.event?.target instanceof HTMLElement ? event.event.target : null;
+    const clickedToggle = clickedElement?.closest(".ag-group-contracted, .ag-group-expanded, .ag-group-contracted-icon, .ag-group-expanded-icon");
+    if (clickedToggle && event.node?.group && event.data) {
+      const nextExpanded = !(event.node.expanded ?? false);
+      queueMicrotask(() => {
+        event.node.setExpanded(nextExpanded);
+        expandedRowStateRef.current.set(getRowKey(event.data!), nextExpanded);
+      });
+    }
+
     syncSelectedRow(event.data);
     const [timePeriodIdRaw, measureIdRaw] = String(event.column?.getColId() ?? "").split(":");
     const timePeriodId = Number(timePeriodIdRaw);

@@ -21,7 +21,7 @@ import {
   postWorkbookImport,
 } from "./lib/api";
 import { HierarchyMaintenanceSheet } from "./components/HierarchyMaintenanceSheet";
-import type { GridCell, GridMeasure, GridRow, GridSliceResponse, PlanningInsightResponse } from "./lib/types";
+import type { AddRowResponse, GridCell, GridMeasure, GridRow, GridSliceResponse, PlanningInsightResponse } from "./lib/types";
 
 const preloadPlanningGrid = () => import("./components/PlanningGrid");
 
@@ -42,6 +42,7 @@ export default function App() {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [insightScope, setInsightScope] = useState<{ storeId: number; productNodeId: number; yearTimePeriodId: number } | null>(null);
+  const [pendingRevealRow, setPendingRevealRow] = useState<AddRowResponse | null>(null);
 
   useEffect(() => {
     void preloadPlanningGrid();
@@ -72,8 +73,8 @@ export default function App() {
 
   const refresh = async () => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["grid-slice", 1] }),
-      queryClient.invalidateQueries({ queryKey: ["hierarchy-mappings"] }),
+      queryClient.refetchQueries({ queryKey: ["grid-slice", 1], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["hierarchy-mappings"], type: "active" }),
     ]);
   };
 
@@ -421,7 +422,7 @@ export default function App() {
       regionLabel = window.prompt("Region label", sourceStore.regionLabel) ?? sourceStore.regionLabel;
     }
 
-    await addRowMutation.mutateAsync({
+    const createdRow = await addRowMutation.mutateAsync({
       scenarioVersionId: gridQuery.data.scenarioVersionId,
       level,
       parentProductNodeId: level === "store" ? null : parentRow?.bindingProductNodeId ?? null,
@@ -430,6 +431,12 @@ export default function App() {
       clusterLabel,
       regionLabel,
     });
+
+    if (level === "store") {
+      setActiveView("planning-store");
+    }
+
+    setPendingRevealRow(createdRow);
   };
 
   const handleDeleteRow = async (row: GridRow | null) => {
@@ -659,6 +666,8 @@ export default function App() {
               onDeleteRow={handleDeleteRow}
               onImportWorkbook={handleImportWorkbook}
               sheetLabel={activeView === "planning-store" ? "Planning - by Store" : "Planning - by Department"}
+              pendingRevealRow={pendingRevealRow}
+              onRevealHandled={() => setPendingRevealRow(null)}
             />
           </Suspense>
           <aside className="insight-panel" aria-live="polite">
