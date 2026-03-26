@@ -14,6 +14,7 @@ public sealed class PlanningService : IPlanningService
         "Sales Revenue", "Sold Qty", "ASP", "Unit Cost", "Total Costs", "GP", "GP%"
     ];
     private const string RemarkHeader = "Remark";
+    private const string ExpectedValueHeader = "Expected Value";
     private readonly IPlanningRepository _repository;
     private readonly ISplashAllocator _splashAllocator;
 
@@ -410,9 +411,9 @@ public sealed class PlanningService : IPlanningService
                 rowsProcessed += 1;
                 var importRow = ReadImportRow(worksheet.Name, row, headerMap);
 
-                if (!TryNormalizeImportRow(importRow, out var normalized, out var exceptionMessage))
+                if (!TryNormalizeImportRow(importRow, out var normalized, out var exceptionMessage, out var expectedValue))
                 {
-                    WriteImportExceptionRow(exceptionSheet, exceptionRowIndex++, importRow, exceptionMessage);
+                    WriteImportExceptionRow(exceptionSheet, exceptionRowIndex++, importRow, exceptionMessage, expectedValue);
                     exceptionCountsBySheet[worksheet.Name] = exceptionRowIndex - 2;
                     continue;
                 }
@@ -1231,13 +1232,15 @@ public sealed class PlanningService : IPlanningService
             row.Cell(headerMap["Total Costs"]).GetString().Trim(),
             row.Cell(headerMap["GP"]).GetString().Trim(),
             row.Cell(headerMap["GP%"]).GetString().Trim(),
-            headerMap.TryGetValue(RemarkHeader, out var remarkColumn) ? row.Cell(remarkColumn).GetString().Trim() : string.Empty);
+            headerMap.TryGetValue(RemarkHeader, out var remarkColumn) ? row.Cell(remarkColumn).GetString().Trim() : string.Empty,
+            headerMap.TryGetValue(ExpectedValueHeader, out var expectedValueColumn) ? row.Cell(expectedValueColumn).GetString().Trim() : string.Empty);
     }
 
-    private static bool TryNormalizeImportRow(ImportedPlanRow row, out NormalizedImportRow normalized, out string exceptionMessage)
+    private static bool TryNormalizeImportRow(ImportedPlanRow row, out NormalizedImportRow normalized, out string exceptionMessage, out string expectedValue)
     {
         normalized = default;
         exceptionMessage = string.Empty;
+        expectedValue = string.Empty;
 
         var store = string.IsNullOrWhiteSpace(row.Store) ? row.SheetName : row.Store.Trim();
         if (!string.Equals(store, row.SheetName, StringComparison.OrdinalIgnoreCase))
@@ -1319,24 +1322,28 @@ public sealed class PlanningService : IPlanningService
         if (hasRevenue && normalizedRevenue != PlanningMath.NormalizeRevenue(revenue))
         {
             exceptionMessage = "Sales Revenue does not equal Sold Qty * ASP after normalization.";
+            expectedValue = FormatWholeNumber(normalizedRevenue);
             return false;
         }
 
         if (hasTotalCosts && normalizedTotalCosts != PlanningMath.NormalizeTotalCosts(totalCosts))
         {
             exceptionMessage = "Total Costs does not equal Unit Cost * Sold Qty after normalization.";
+            expectedValue = FormatWholeNumber(normalizedTotalCosts);
             return false;
         }
 
         if (hasGrossProfit && normalizedGrossProfit != PlanningMath.NormalizeGrossProfit(grossProfit))
         {
             exceptionMessage = "GP does not equal (ASP - Unit Cost) * Sold Qty after normalization.";
+            expectedValue = FormatWholeNumber(normalizedGrossProfit);
             return false;
         }
 
         if (hasGrossProfitPercent && normalizedGrossProfitPercent != PlanningMath.NormalizeGrossProfitPercent(grossProfitPercent))
         {
             exceptionMessage = "GP% does not equal (ASP - Unit Cost) / ASP * 100 after normalization.";
+            expectedValue = FormatPercent(normalizedGrossProfitPercent);
             return false;
         }
 
@@ -1359,14 +1366,14 @@ public sealed class PlanningService : IPlanningService
 
     private static void WriteImportHeader(IXLWorksheet sheet, bool includeRemark = false)
     {
-        var headers = includeRemark ? [..ImportHeaders, RemarkHeader] : ImportHeaders;
+        var headers = includeRemark ? [..ImportHeaders, RemarkHeader, ExpectedValueHeader] : ImportHeaders;
         for (var index = 0; index < headers.Length; index += 1)
         {
             sheet.Cell(1, index + 1).Value = headers[index];
         }
     }
 
-    private static void WriteImportExceptionRow(IXLWorksheet sheet, int rowIndex, ImportedPlanRow row, string exceptionMessage)
+    private static void WriteImportExceptionRow(IXLWorksheet sheet, int rowIndex, ImportedPlanRow row, string exceptionMessage, string expectedValue)
     {
         sheet.Cell(rowIndex, 1).Value = row.Store;
         sheet.Cell(rowIndex, 2).Value = row.Department;
@@ -1382,7 +1389,18 @@ public sealed class PlanningService : IPlanningService
         sheet.Cell(rowIndex, 12).Value = row.Gp;
         sheet.Cell(rowIndex, 13).Value = row.GpPercent;
         sheet.Cell(rowIndex, 14).Value = exceptionMessage;
+        sheet.Cell(rowIndex, 15).Value = expectedValue;
         sheet.Row(rowIndex).Style.Fill.BackgroundColor = XLColor.LightPink;
+    }
+
+    private static string FormatWholeNumber(decimal value)
+    {
+        return value.ToString("0", CultureInfo.InvariantCulture);
+    }
+
+    private static string FormatPercent(decimal value)
+    {
+        return value.ToString("0.0", CultureInfo.InvariantCulture) + "%";
     }
 
     private static void RemoveEmptyWorksheets(XLWorkbook workbook)
@@ -1425,7 +1443,8 @@ public sealed class PlanningService : IPlanningService
         string TotalCosts,
         string Gp,
         string GpPercent,
-        string Remark);
+        string Remark,
+        string ExpectedValue);
 
     private readonly record struct NormalizedImportRow(
         string Store,

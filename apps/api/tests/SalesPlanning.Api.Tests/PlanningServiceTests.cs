@@ -116,7 +116,9 @@ public sealed class PlanningServiceTests
         using var exceptionWorkbook = new XLWorkbook(exceptionStream);
         var exceptionSheet = exceptionWorkbook.Worksheet("Store B");
         Assert.Equal("Remark", exceptionSheet.Cell(1, 14).GetString());
+        Assert.Equal("Expected Value", exceptionSheet.Cell(1, 15).GetString());
         Assert.Contains("Sales Revenue does not equal Sold Qty * ASP after normalization.", exceptionSheet.Cell(2, 14).GetString());
+        Assert.Equal("100", exceptionSheet.Cell(2, 15).GetString());
 
         var mappings = await _service.GetHierarchyMappingsAsync(CancellationToken.None);
         var frozen = mappings.Departments.Single(department => department.DepartmentLabel == "Frozen");
@@ -167,12 +169,12 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
-    public async Task ImportWorkbookAsync_IgnoresOptionalRemarkColumn()
+    public async Task ImportWorkbookAsync_IgnoresOptionalRemarkAndExpectedValueColumns()
     {
         using var workbook = new XLWorkbook();
         var storeSheet = workbook.AddWorksheet("Store B");
         WriteImportHeader(storeSheet, includeRemark: true);
-        WriteImportRow(storeSheet, 2, "Store B", "Frozen", "Ice Cream", "Vanilla", 2026, "Jan", 100m, 50m, 2m, 1.20m, 60m, 40m, 40m, "ignore this");
+        WriteImportRow(storeSheet, 2, "Store B", "Frozen", "Ice Cream", "Vanilla", 2026, "Jan", 100m, 50m, 2m, 1.20m, 60m, 40m, 40m, "ignore this", "100");
 
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
@@ -350,6 +352,7 @@ public sealed class PlanningServiceTests
         if (includeRemark)
         {
             sheet.Cell(1, 14).Value = "Remark";
+            sheet.Cell(1, 15).Value = "Expected Value";
         }
     }
 
@@ -369,7 +372,8 @@ public sealed class PlanningServiceTests
         decimal totalCosts,
         decimal gp,
         decimal gpPercent,
-        string? remark = null)
+        string? remark = null,
+        string? expectedValue = null)
     {
         sheet.Cell(rowIndex, 1).Value = store;
         sheet.Cell(rowIndex, 2).Value = department;
@@ -387,6 +391,11 @@ public sealed class PlanningServiceTests
         if (remark is not null)
         {
             sheet.Cell(rowIndex, 14).Value = remark;
+        }
+
+        if (expectedValue is not null)
+        {
+            sheet.Cell(rowIndex, 15).Value = expectedValue;
         }
     }
 }
