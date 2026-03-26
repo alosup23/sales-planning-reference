@@ -20,7 +20,9 @@ import {
   postSplash,
   postWorkbookImport,
 } from "./lib/api";
+import { SignedInUserBadge } from "./components/AuthShell";
 import { HierarchyMaintenanceSheet } from "./components/HierarchyMaintenanceSheet";
+import { authEnabled } from "./lib/auth";
 import type { AddRowResponse, GridCell, GridMeasure, GridRow, GridSliceResponse, PlanningInsightResponse } from "./lib/types";
 
 const preloadPlanningGrid = () => import("./components/PlanningGrid");
@@ -559,8 +561,11 @@ export default function App() {
             Excel-like planning with store-first and department-first sheets backed by the same live planning data.
           </p>
         </div>
-        <div className={`status-card${lastError ? " status-card-error" : ""}`} aria-live="polite">
-          {statusText}
+        <div className="hero-sidecar">
+          {authEnabled ? <SignedInUserBadge /> : null}
+          <div className={`status-card${lastError ? " status-card-error" : ""}`} aria-live="polite">
+            {statusText}
+          </div>
         </div>
       </section>
 

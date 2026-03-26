@@ -34,7 +34,7 @@ export default defineConfig({
       reuseExistingServer: false,
     },
     {
-      command: "VITE_API_PROXY_TARGET=http://127.0.0.1:5080 npm run dev -- --host localhost --port 5173",
+      command: "VITE_AUTH_MODE=disabled VITE_API_PROXY_TARGET=http://127.0.0.1:5080 npm run dev -- --host localhost --port 5173",
       cwd: path.join(workspaceRoot, "apps/web"),
       url: "http://localhost:5173",
       reuseExistingServer: false,

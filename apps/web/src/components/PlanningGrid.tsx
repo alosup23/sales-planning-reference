@@ -812,25 +812,26 @@ function getRowBandClass(row: GridRowView): string {
 
 function getMeasureBandColor(row: GridRowView | undefined, timePeriodId: number, yearIndexByTimePeriodId: Map<number, number>): string {
   const baseColor = getBaseBandColor(row);
-  if (baseColor === "#ffffff") {
-    return baseColor;
-  }
-
   return enrichHexColor(baseColor, yearIndexByTimePeriodId.get(timePeriodId) ?? 0);
 }
 
 function getBaseBandColor(row: GridRowView | undefined): string {
+  const rawColor = getRawBandColor(row);
+  return lightenHexColor(rawColor, 0.05);
+}
+
+function getRawBandColor(row: GridRowView | undefined): string {
   if (!row || row.isLeaf) {
-    return "#ffffff";
+    return "#ebfafa";
   }
 
   switch (Math.min(row.level, 3)) {
     case 0:
       return "#d9d9d9";
     case 1:
-      return "#adebeb";
+      return "#ffffff";
     case 2:
-      return "#c2f0f0";
+      return "#ccf5ff";
     default:
       return "#d6f5f5";
   }
@@ -845,6 +846,12 @@ function enrichHexColor(hex: string, yearIndex: number): string {
   const [red, green, blue] = [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16));
   const toHex = (value: number) => Math.round(value * richnessFactor).toString(16).padStart(2, "0");
   return `#${toHex(red)}${toHex(green)}${toHex(blue)}`;
+}
+
+function lightenHexColor(hex: string, lightnessFactor: number): string {
+  const [red, green, blue] = [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16));
+  const mix = (channel: number) => Math.round(channel + ((255 - channel) * lightnessFactor)).toString(16).padStart(2, "0");
+  return `#${mix(red)}${mix(green)}${mix(blue)}`;
 }
 
 type GrowthCellRendererProps = {
