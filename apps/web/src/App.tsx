@@ -283,8 +283,8 @@ export default function App() {
     [gridQuery.data],
   );
   const departmentViewData = useMemo(
-    () => (storeViewData ? buildDepartmentView(storeViewData, departmentLayout) : null),
-    [departmentLayout, storeViewData],
+    () => (gridQuery.data ? buildDepartmentView(gridQuery.data, departmentLayout) : null),
+    [departmentLayout, gridQuery.data],
   );
 
   if (!gridQuery.data || !hierarchyQuery.data || !storeViewData || !departmentViewData) {
@@ -734,17 +734,12 @@ function InsightPanelContent({ insight }: { insight: PlanningInsightResponse }) 
 
 function buildStoreView(data: GridSliceResponse): GridSliceResponse {
   const rootLabel = "Store Total";
-  const directRows: GridRow[] = data.rows.map((row) => ({
+  const canonicalRows = buildCanonicalRows(data.rows);
+  const directRows: GridRow[] = canonicalRows.map((row) => ({
     ...row,
     viewRowId: `store-view:${row.storeId}:${row.productNodeId}`,
     level: row.level + 1,
     path: [rootLabel, ...row.path],
-    structureRole: row.nodeKind === "store" || row.nodeKind === "department" || row.nodeKind === "class" || row.nodeKind === "subclass"
-      ? row.nodeKind
-      : "virtual",
-    bindingStoreId: row.storeId,
-    bindingProductNodeId: row.productNodeId,
-    splashRoots: [{ storeId: row.storeId, productNodeId: row.productNodeId }],
   }));
   const storeRows = directRows.filter((row) => row.structureRole === "store");
 
@@ -767,30 +762,31 @@ function buildStoreView(data: GridSliceResponse): GridSliceResponse {
 }
 
 function buildDepartmentView(data: GridSliceResponse, layout: DepartmentLayout): GridSliceResponse {
-  const storeRows = data.rows.filter((row) => row.structureRole === "store" && Boolean(row.bindingProductNodeId));
-  const departmentRows = data.rows.filter((row) => row.structureRole === "department" && Boolean(row.bindingProductNodeId));
-  const classRows = data.rows.filter((row) => row.structureRole === "class" && Boolean(row.bindingProductNodeId));
-  const subclassRows = data.rows.filter((row) => row.structureRole === "subclass" && Boolean(row.bindingProductNodeId));
+  const canonicalRows = buildCanonicalRows(data.rows);
+  const storeRows = canonicalRows.filter((row) => row.structureRole === "store");
+  const departmentRows = canonicalRows.filter((row) => row.structureRole === "department");
+  const classRows = canonicalRows.filter((row) => row.structureRole === "class");
+  const subclassRows = canonicalRows.filter((row) => row.structureRole === "subclass");
   const storeLabels = new Map(storeRows.map((row) => [row.storeId, row.storeLabel]));
   let syntheticRowSeed = -1;
 
   const departmentGroups = new Map<string, { departmentRows: GridRow[]; classRows: GridRow[]; subclassRows: GridRow[] }>();
   for (const departmentRow of departmentRows) {
-    const departmentLabel = departmentRow.path[2];
+    const departmentLabel = getDepartmentLabel(departmentRow);
     const group = departmentGroups.get(departmentLabel) ?? { departmentRows: [], classRows: [], subclassRows: [] };
     group.departmentRows.push(departmentRow);
     departmentGroups.set(departmentLabel, group);
   }
 
   for (const classRow of classRows) {
-    const departmentLabel = classRow.path[2];
+    const departmentLabel = getDepartmentLabel(classRow);
     const group = departmentGroups.get(departmentLabel) ?? { departmentRows: [], classRows: [], subclassRows: [] };
     group.classRows.push(classRow);
     departmentGroups.set(departmentLabel, group);
   }
 
   for (const subclassRow of subclassRows) {
-    const departmentLabel = subclassRow.path[2];
+    const departmentLabel = getDepartmentLabel(subclassRow);
     const group = departmentGroups.get(departmentLabel) ?? { departmentRows: [], classRows: [], subclassRows: [] };
     group.subclassRows.push(subclassRow);
     departmentGroups.set(departmentLabel, group);
@@ -833,10 +829,11 @@ function buildDepartmentView(data: GridSliceResponse, layout: DepartmentLayout):
           label: storeLabel,
           level: 2,
           path: ["Department Total", departmentLabel, storeLabel],
+          structureRole: "store" as const,
         });
 
         const matchingClasses = group.classRows
-          .filter((classRow) => classRow.storeId === departmentRow.storeId && classRow.path[2] === departmentLabel)
+          .filter((classRow) => classRow.storeId === departmentRow.storeId && getDepartmentLabel(classRow) === departmentLabel)
           .sort((left, right) => left.label.localeCompare(right.label));
 
         for (const classRow of matchingClasses) {
@@ -845,10 +842,11 @@ function buildDepartmentView(data: GridSliceResponse, layout: DepartmentLayout):
             viewRowId: `department-view:${layout}:${departmentLabel}:${storeLabel}:${classRow.label}`,
             level: 3,
             path: ["Department Total", departmentLabel, storeLabel, classRow.label],
+            structureRole: "class" as const,
           });
 
           const matchingSubclasses = group.subclassRows
-            .filter((subclassRow) => subclassRow.storeId === departmentRow.storeId && subclassRow.path[2] === departmentLabel && subclassRow.path[3] === classRow.label)
+            .filter((subclassRow) => subclassRow.storeId === departmentRow.storeId && getDepartmentLabel(subclassRow) === departmentLabel && getClassLabel(subclassRow) === classRow.label)
             .sort((left, right) => left.label.localeCompare(right.label));
 
           rows.push(...matchingSubclasses.map((subclassRow) => ({
@@ -856,6 +854,7 @@ function buildDepartmentView(data: GridSliceResponse, layout: DepartmentLayout):
             viewRowId: `department-view:${layout}:${departmentLabel}:${storeLabel}:${classRow.label}:${subclassRow.label}`,
             level: 4,
             path: ["Department Total", departmentLabel, storeLabel, classRow.label, subclassRow.label],
+            structureRole: "subclass" as const,
           })));
         }
       }
@@ -895,10 +894,11 @@ function buildDepartmentView(data: GridSliceResponse, layout: DepartmentLayout):
           label: storeLabel,
           level: 3,
           path: ["Department Total", departmentLabel, classLabel, storeLabel],
+          structureRole: "store" as const,
         });
 
         const matchingSubclasses = group.subclassRows
-          .filter((subclassRow) => subclassRow.storeId === classRow.storeId && subclassRow.path[2] === departmentLabel && subclassRow.path[3] === classLabel)
+          .filter((subclassRow) => subclassRow.storeId === classRow.storeId && getDepartmentLabel(subclassRow) === departmentLabel && getClassLabel(subclassRow) === classLabel)
           .sort((left, right) => left.label.localeCompare(right.label));
 
         rows.push(...matchingSubclasses.map((subclassRow) => ({
@@ -906,6 +906,7 @@ function buildDepartmentView(data: GridSliceResponse, layout: DepartmentLayout):
           viewRowId: `department-view:${layout}:${departmentLabel}:${classLabel}:${storeLabel}:${subclassRow.label}`,
           level: 4,
           path: ["Department Total", departmentLabel, classLabel, storeLabel, subclassRow.label],
+          structureRole: "subclass" as const,
         })));
       }
     }
@@ -915,6 +916,39 @@ function buildDepartmentView(data: GridSliceResponse, layout: DepartmentLayout):
     ...data,
     rows,
   };
+}
+
+function buildCanonicalRows(rows: GridRow[]): GridRow[] {
+  return rows.map((row) => {
+    const structureRole: NonNullable<GridRow["structureRole"]> =
+      row.nodeKind === "store" || row.nodeKind === "department" || row.nodeKind === "class" || row.nodeKind === "subclass"
+        ? row.nodeKind
+        : "virtual";
+
+    return {
+      ...row,
+      structureRole,
+      bindingStoreId: row.storeId,
+      bindingProductNodeId: row.productNodeId,
+      splashRoots: [{ storeId: row.storeId, productNodeId: row.productNodeId }],
+    };
+  });
+}
+
+function getDepartmentLabel(row: GridRow): string {
+  if (row.structureRole === "department") {
+    return row.label;
+  }
+
+  return row.path[1] ?? row.label;
+}
+
+function getClassLabel(row: GridRow): string {
+  if (row.structureRole === "class") {
+    return row.label;
+  }
+
+  return row.path[2] ?? row.label;
 }
 
 function createSyntheticRow({

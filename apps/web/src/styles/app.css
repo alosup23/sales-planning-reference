@@ -388,6 +388,21 @@ button {
   box-shadow: inset 0 -2px 0 #d99315;
 }
 
+.ag-theme-quartz .ag-row.aggregate-row-level-2 .ag-cell,
+.ag-theme-quartz .ag-row.aggregate-row-level-2 .ag-group-value {
+  background: rgba(232, 242, 249, 0.92);
+}
+
+.ag-theme-quartz .ag-row.aggregate-row-level-3 .ag-cell,
+.ag-theme-quartz .ag-row.aggregate-row-level-3 .ag-group-value {
+  background: rgba(242, 236, 249, 0.92);
+}
+
+.ag-theme-quartz .ag-row.aggregate-row-level-2 .ag-cell.cell-locked,
+.ag-theme-quartz .ag-row.aggregate-row-level-3 .ag-cell.cell-locked {
+  box-shadow: inset 0 0 0 1px rgba(154, 47, 47, 0.18);
+}
+
 @media (max-width: 960px) {
   .hero {
     flex-direction: column;

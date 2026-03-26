@@ -25,15 +25,15 @@ The React app is organized around three concerns:
 
 AG Grid is configured to mimic a planning sheet:
 
-- tree rows for `Store -> Category -> Subcategory`
+- tree rows for `Store -> Department -> Class -> Subclass`
+- alternate department-first projections for `Department -> Store -> Class -> Subclass` and `Department -> Class -> Store -> Subclass`
 - grouped columns for `Year -> Month`
 - editable month and year cells based on metadata
-- visual states for locked, calculated, and overridden cells
+- visual states for locked, calculated, overridden, and depth-based aggregate bands
 
 ## Suggested Next Steps
 
-1. Replace the in-memory repository with PostgreSQL + Redis.
+1. Replace the SQLite demo repository with PostgreSQL + Redis.
 2. Add Azure AD authentication and store-based ABAC.
 3. Move audit writes to immutable append tables.
-4. Add Excel import/export and background job processing.
-
+4. Move workbook import/export and forecast jobs into background workers.

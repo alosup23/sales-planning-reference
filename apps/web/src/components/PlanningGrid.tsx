@@ -633,6 +633,7 @@ export function PlanningGrid({
           rowData={rowData}
           columnDefs={columnDefs}
           defaultColDef={defaultColDef}
+          getRowClass={(params) => getAggregateRowClass(params.data)}
           treeData
           animateRows
           getDataPath={(dataRow) => dataRow.__path}
@@ -761,6 +762,22 @@ export function PlanningGrid({
 
 function getRowKey(row: GridRowView | GridRow): string {
   return row.viewRowId ?? `${row.storeId}-${row.productNodeId}`;
+}
+
+function getAggregateRowClass(row: GridRowView | undefined): string | undefined {
+  if (!row || row.isLeaf) {
+    return undefined;
+  }
+
+  if (row.level === 2) {
+    return "aggregate-row-level-2";
+  }
+
+  if (row.level === 3) {
+    return "aggregate-row-level-3";
+  }
+
+  return undefined;
 }
 
 type GrowthCellRendererProps = {

@@ -3,8 +3,8 @@
 This repository contains a greenfield reference implementation skeleton for an enterprise sales planning application with:
 
 - `React + TypeScript + AG Grid Enterprise` on the web front end
-- `.NET 10 Web API` for planning actions, locking, and the splash engine
-- In-memory sample data to keep the skeleton easy to inspect before a real database is introduced
+- `.NET 8 Web API` for planning actions, locking, import/export, and the splash engine
+- SQLite-backed sample persistence locally plus an AWS Lambda demo path with S3-backed persistence
 
 ## Workspace Layout
 
@@ -19,17 +19,16 @@ This repository contains a greenfield reference implementation skeleton for an e
 - Top-down splash engine with locked-cell exclusion and deterministic residual distribution
 - Cross-axis recalculation so row and column totals stay aligned after bottom-up and top-down edits
 - Audit trail contracts
-- AG Grid shell with `Planning - by Store` and `Planning - by Category` sheets over the same planning data
-- Category-first layouts for `Category -> Store -> Subcategory` and `Category -> Subcategory -> Store`
-- Copied-store creation, workbook upload, and hierarchy maintenance sheet for category/subcategory mapping
-- Workbook import support for both planning data and a separate hierarchy mapping worksheet
+- AG Grid shell with `Planning - by Store` and `Planning - by Department` sheets over the same planning data
+- Department-first layouts for `Department -> Store -> Class -> Subclass` and `Department -> Class -> Store -> Subclass`
+- Distinct aggregate color bands for second- and third-level subtotal rows
+- Copied-store creation, workbook upload, and hierarchy maintenance sheet for department/class/subclass mapping
+- Workbook import and export support in the store-sheet format with round-trip validation and exception workbooks
 - Playwright browser smoke and interaction coverage for planning and hierarchy maintenance flows
 
 ## What Is Not Included Yet
 
-- Database persistence
 - Authentication wiring
-- Excel import/export workers
 - Real-time collaboration notifications
 - Approval workflows
 

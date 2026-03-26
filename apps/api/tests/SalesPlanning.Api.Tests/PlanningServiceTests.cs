@@ -267,6 +267,8 @@ public sealed class PlanningServiceTests
     [Fact]
     public async Task ApplyEditsAsync_OnClassYearRevenue_KeepsDepartmentYearTotalAlignedToChildClasses()
     {
+        var softDrinksBefore = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202600), CancellationToken.None);
+
         await _service.ApplyEditsAsync(
             new EditCellsRequest(
                 1,
@@ -286,6 +288,8 @@ public sealed class PlanningServiceTests
         Assert.NotNull(departmentRevenue);
         Assert.NotNull(softDrinksRevenue);
         Assert.NotNull(teaRevenue);
+        Assert.NotNull(softDrinksBefore);
+        Assert.NotEqual(softDrinksBefore!.EffectiveValue, softDrinksRevenue!.EffectiveValue);
         Assert.Equal(softDrinksRevenue!.EffectiveValue + teaRevenue!.EffectiveValue, departmentRevenue!.EffectiveValue);
     }
 
