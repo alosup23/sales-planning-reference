@@ -292,9 +292,9 @@ test("renders the correct department hierarchy order in both layouts and applies
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentClassRowId}"]`)).toBeVisible();
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentStoreRowId}"]`)).toHaveClass(/aggregate-row-level-2/);
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentClassRowId}"]`)).toHaveClass(/aggregate-row-level-3/);
-  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"] .ag-cell`).first()).toHaveCSS("background-color", "rgb(219, 219, 219)");
-  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentStoreRowId}"] .ag-cell`).first()).toHaveCSS("background-color", "rgb(207, 246, 255)");
-  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentClassRowId}"] .ag-cell`).first()).toHaveCSS("background-color", "rgb(216, 246, 246)");
+  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"] .ag-cell`).first()).toHaveCSS("background-color", "rgb(221, 221, 221)");
+  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentStoreRowId}"] .ag-cell`).first()).toHaveCSS("background-color", "rgb(200, 242, 242)");
+  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentClassRowId}"] .ag-cell`).first()).toHaveCSS("background-color", "rgb(218, 246, 246)");
 
   await page.getByRole("button", { name: "Department - Class - Store - Subclass" }).click();
   await expectReady(page);

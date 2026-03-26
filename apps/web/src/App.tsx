@@ -20,7 +20,7 @@ import {
   postSplash,
   postWorkbookImport,
 } from "./lib/api";
-import { SignedInUserBadge } from "./components/AuthShell";
+import { SignedInUserMenu } from "./components/AuthShell";
 import { HierarchyMaintenanceSheet } from "./components/HierarchyMaintenanceSheet";
 import { authEnabled } from "./lib/auth";
 import type { AddRowResponse, GridCell, GridMeasure, GridRow, GridSliceResponse, PlanningInsightResponse } from "./lib/types";
@@ -562,7 +562,7 @@ export default function App() {
           </p>
         </div>
         <div className="hero-sidecar">
-          {authEnabled ? <SignedInUserBadge /> : null}
+          {authEnabled ? <SignedInUserMenu /> : null}
           <div className={`status-card${lastError ? " status-card-error" : ""}`} aria-live="polite">
             {statusText}
           </div>

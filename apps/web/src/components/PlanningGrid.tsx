@@ -817,7 +817,7 @@ function getMeasureBandColor(row: GridRowView | undefined, timePeriodId: number,
 
 function getBaseBandColor(row: GridRowView | undefined): string {
   const rawColor = getRawBandColor(row);
-  return lightenHexColor(rawColor, 0.05);
+  return lightenHexColor(rawColor, 0.10);
 }
 
 function getRawBandColor(row: GridRowView | undefined): string {
@@ -831,7 +831,7 @@ function getRawBandColor(row: GridRowView | undefined): string {
     case 1:
       return "#ffffff";
     case 2:
-      return "#ccf5ff";
+      return "#c2f0f0";
     default:
       return "#d6f5f5";
   }
