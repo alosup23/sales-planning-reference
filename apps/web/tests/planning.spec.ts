@@ -227,6 +227,9 @@ test("loads with collapsed years, readable measure labels, and only stores visib
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2000)}"]`)).toBeVisible();
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2100)}"]`)).toHaveCount(0);
   await expect(await gridCell(page, storeRowId(101, 2000), "202600:1")).toContainText(/[0-9,]+/);
+  await expect((await gridCell(page, storeRowId(101, 2000), "202600:1")).locator(".measure-value")).toHaveCSS("text-align", "right");
+  await expect(await gridCell(page, storeRowId(101, 2000), "202600:1")).toHaveCSS("background-color", "rgb(173, 235, 235)");
+  await expect(await gridCell(page, storeRowId(101, 2000), "202700:1")).toHaveCSS("background-color", "rgb(164, 223, 223)");
 });
 
 test("supports expand and collapse controls for rows and years", async ({ page }) => {
@@ -289,6 +292,9 @@ test("renders the correct department hierarchy order in both layouts and applies
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentClassRowId}"]`)).toBeVisible();
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentStoreRowId}"]`)).toHaveClass(/aggregate-row-level-2/);
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentClassRowId}"]`)).toHaveClass(/aggregate-row-level-3/);
+  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"] .ag-cell`).first()).toHaveCSS("background-color", "rgb(217, 217, 217)");
+  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentStoreRowId}"] .ag-cell`).first()).toHaveCSS("background-color", "rgb(194, 240, 240)");
+  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentClassRowId}"] .ag-cell`).first()).toHaveCSS("background-color", "rgb(214, 245, 245)");
 
   await page.getByRole("button", { name: "Department - Class - Store - Subclass" }).click();
   await expectReady(page);
@@ -304,7 +310,7 @@ test("editing a visible Sales Revenue year total refreshes the row total", async
   const targetCell = await gridCell(page, storeRowId(101, 2110), revenueCol);
   const before = await targetCell.textContent();
 
-  await editCell(page, storeRowId(101, 2110), revenueCol, "15000");
+  await editCell(page, storeRowId(101, 2110), revenueCol, "12000");
   await expectReady(page);
   await expect(await gridCell(page, storeRowId(101, 2110), revenueCol)).not.toContainText(before ?? "");
 });

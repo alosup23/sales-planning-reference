@@ -5,6 +5,7 @@ import {
   type CellEditRequestEvent,
   type CellFocusedEvent,
   ClientSideRowModelModule,
+  type CellStyle,
   type ColumnGroupOpenedEvent,
   type ColumnResizedEvent,
   CommunityFeaturesModule,
@@ -109,6 +110,19 @@ export function PlanningGrid({
     () => data.periods.filter((period) => period.grain === "year"),
     [data.periods],
   );
+  const yearIndexByTimePeriodId = useMemo(() => {
+    const indexByPeriod = new Map<number, number>();
+    const sortedYears = [...yearPeriods].sort((left, right) => left.sortOrder - right.sortOrder);
+
+    sortedYears.forEach((yearPeriod, index) => {
+      indexByPeriod.set(yearPeriod.timePeriodId, index);
+      data.periods
+        .filter((period) => period.parentTimePeriodId === yearPeriod.timePeriodId)
+        .forEach((period) => indexByPeriod.set(period.timePeriodId, index));
+    });
+
+    return indexByPeriod;
+  }, [data.periods, yearPeriods]);
 
   const rowData = useMemo<GridRowView[]>(
     () => data.rows.map((row) => ({ ...row, __path: row.path })),
@@ -165,6 +179,10 @@ export function PlanningGrid({
         valueFormatter: (params) => formatValue(params, measure),
         initialWidth: columnWidthStateRef.current.get(`${period.timePeriodId}:${measure.measureId}`) ?? (isYearTotal ? measureHeaderWidth : (measure.displayAsPercent ? 92 : 100)),
         minWidth: isYearTotal ? measureHeaderWidth : (measure.displayAsPercent ? 92 : 100),
+        cellStyle: (params): CellStyle => ({
+          backgroundColor: getMeasureBandColor(params.data, period.timePeriodId, yearIndexByTimePeriodId),
+          textAlign: "right",
+        }),
         cellRenderer: GrowthCellRenderer,
         cellRendererParams: {
           measure,
@@ -201,7 +219,7 @@ export function PlanningGrid({
         ],
       };
     });
-  }, [data.measures, data.periods, yearPeriods, onApplyGrowthFactor, showGrowthFactors]);
+  }, [data.measures, data.periods, onApplyGrowthFactor, showGrowthFactors, yearIndexByTimePeriodId, yearPeriods]);
 
   const defaultColDef = useMemo<ColDef<GridRowView>>(
     () => ({
@@ -633,7 +651,7 @@ export function PlanningGrid({
           rowData={rowData}
           columnDefs={columnDefs}
           defaultColDef={defaultColDef}
-          getRowClass={(params) => getAggregateRowClass(params.data)}
+          getRowClass={(params) => getRowClasses(params.data)}
           treeData
           animateRows
           getDataPath={(dataRow) => dataRow.__path}
@@ -664,6 +682,9 @@ export function PlanningGrid({
             pinned: "left",
             minWidth: 260,
             valueGetter: (params) => params.data?.label ?? "",
+            cellStyle: (params) => ({
+              backgroundColor: getBaseBandColor(params.data),
+            }),
             cellRenderer: HierarchyCellRenderer,
             cellRendererParams: {
               onToggleExpandedState: (row: GridRowView, expanded: boolean) => {
@@ -764,20 +785,66 @@ function getRowKey(row: GridRowView | GridRow): string {
   return row.viewRowId ?? `${row.storeId}-${row.productNodeId}`;
 }
 
-function getAggregateRowClass(row: GridRowView | undefined): string | undefined {
+function getRowClasses(row: GridRowView | undefined): string[] {
+  if (!row) {
+    return [];
+  }
+
+  const classes = [getRowBandClass(row)];
+  if (!row.isLeaf && row.level === 2) {
+    classes.push("aggregate-row-level-2");
+  }
+
+  if (!row.isLeaf && row.level === 3) {
+    classes.push("aggregate-row-level-3");
+  }
+
+  return classes;
+}
+
+function getRowBandClass(row: GridRowView): string {
+  if (row.isLeaf) {
+    return "row-band-leaf";
+  }
+
+  return `row-band-level-${Math.min(row.level, 3)}`;
+}
+
+function getMeasureBandColor(row: GridRowView | undefined, timePeriodId: number, yearIndexByTimePeriodId: Map<number, number>): string {
+  const baseColor = getBaseBandColor(row);
+  if (baseColor === "#ffffff") {
+    return baseColor;
+  }
+
+  return enrichHexColor(baseColor, yearIndexByTimePeriodId.get(timePeriodId) ?? 0);
+}
+
+function getBaseBandColor(row: GridRowView | undefined): string {
   if (!row || row.isLeaf) {
-    return undefined;
+    return "#ffffff";
   }
 
-  if (row.level === 2) {
-    return "aggregate-row-level-2";
+  switch (Math.min(row.level, 3)) {
+    case 0:
+      return "#d9d9d9";
+    case 1:
+      return "#adebeb";
+    case 2:
+      return "#c2f0f0";
+    default:
+      return "#d6f5f5";
+  }
+}
+
+function enrichHexColor(hex: string, yearIndex: number): string {
+  if (yearIndex <= 0) {
+    return hex;
   }
 
-  if (row.level === 3) {
-    return "aggregate-row-level-3";
-  }
-
-  return undefined;
+  const richnessFactor = Math.max(0, 1 - (yearIndex * 0.05));
+  const [red, green, blue] = [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16));
+  const toHex = (value: number) => Math.round(value * richnessFactor).toString(16).padStart(2, "0");
+  return `#${toHex(red)}${toHex(green)}${toHex(blue)}`;
 }
 
 type GrowthCellRendererProps = {
@@ -878,7 +945,7 @@ function GrowthCellRenderer(props: GrowthCellRendererProps) {
   };
 
   return (
-    <div className="measure-cell">
+    <div className={`measure-cell${showGrowthFactors ? " measure-cell-with-growth" : ""}`}>
       <span className="measure-value">{formatValue({ value: currentValue } as ValueFormatterParams<GridRowView>, measure)}</span>
       {showGrowthFactors ? (
         <input

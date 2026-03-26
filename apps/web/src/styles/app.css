@@ -238,9 +238,13 @@ button {
 .measure-cell {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 6px;
   width: 100%;
+}
+
+.measure-cell-with-growth {
+  justify-content: space-between;
 }
 
 .hierarchy-cell {
@@ -281,9 +285,11 @@ button {
 }
 
 .measure-value {
+  width: 100%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-align: right;
 }
 
 .growth-factor-input {
@@ -375,32 +381,44 @@ button {
 }
 
 .cell-locked {
-  background: rgba(176, 74, 74, 0.14);
   color: #6d1f1f;
   font-weight: 600;
+  box-shadow: inset 0 0 0 2px rgba(176, 74, 74, 0.42);
 }
 
 .cell-calculated {
-  background: rgba(15, 100, 120, 0.08);
+  color: #0d5d74;
 }
 
 .cell-override {
-  box-shadow: inset 0 -2px 0 #d99315;
+  border-bottom: 2px solid #d99315;
 }
 
-.ag-theme-quartz .ag-row.aggregate-row-level-2 .ag-cell,
-.ag-theme-quartz .ag-row.aggregate-row-level-2 .ag-group-value {
-  background: rgba(232, 242, 249, 0.92);
+.ag-theme-quartz .ag-row.row-band-level-0 {
+  --row-band-color: #d9d9d9;
 }
 
-.ag-theme-quartz .ag-row.aggregate-row-level-3 .ag-cell,
-.ag-theme-quartz .ag-row.aggregate-row-level-3 .ag-group-value {
-  background: rgba(242, 236, 249, 0.92);
+.ag-theme-quartz .ag-row.row-band-level-1 {
+  --row-band-color: #adebeb;
 }
 
-.ag-theme-quartz .ag-row.aggregate-row-level-2 .ag-cell.cell-locked,
-.ag-theme-quartz .ag-row.aggregate-row-level-3 .ag-cell.cell-locked {
-  box-shadow: inset 0 0 0 1px rgba(154, 47, 47, 0.18);
+.ag-theme-quartz .ag-row.row-band-level-2 {
+  --row-band-color: #c2f0f0;
+}
+
+.ag-theme-quartz .ag-row.row-band-level-3 {
+  --row-band-color: #d6f5f5;
+}
+
+.ag-theme-quartz .ag-row.row-band-leaf {
+  --row-band-color: #ffffff;
+}
+
+.ag-theme-quartz .ag-row[class*="row-band-"] .ag-cell,
+.ag-theme-quartz .ag-row[class*="row-band-"] .ag-group-value,
+.ag-theme-quartz .ag-row[class*="row-band-"] .ag-cell.ag-cell-focus,
+.ag-theme-quartz .ag-row[class*="row-band-"] .ag-cell[class*="ag-cell-range-selected"] {
+  background: var(--row-band-color);
 }
 
 @media (max-width: 960px) {
