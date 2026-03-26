@@ -3,6 +3,7 @@ using Amazon.S3.Model;
 using SalesPlanning.Api.Application;
 using SalesPlanning.Api.Contracts;
 using SalesPlanning.Api.Domain;
+using System.Threading;
 
 namespace SalesPlanning.Api.Infrastructure;
 
@@ -15,6 +16,8 @@ public sealed class S3BackedSqlitePlanningRepository : IPlanningRepository
     private readonly string _objectKey;
     private readonly string _localDatabasePath;
     private readonly SemaphoreSlim _syncGate = new(1, 1);
+    private readonly AsyncLocal<int> _atomicDepth = new();
+    private readonly AsyncLocal<bool> _pendingUpload = new();
     private bool _hydrated;
 
     public S3BackedSqlitePlanningRepository(
@@ -34,6 +37,42 @@ public sealed class S3BackedSqlitePlanningRepository : IPlanningRepository
 
     public Task<PlanningMetadataSnapshot> GetMetadataAsync(CancellationToken cancellationToken) =>
         WithReadAsync(_innerRepository.GetMetadataAsync, cancellationToken);
+
+    public async Task<T> ExecuteAtomicAsync<T>(Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken)
+    {
+        await EnsureHydratedAsync(cancellationToken);
+        _atomicDepth.Value += 1;
+        var succeeded = false;
+
+        try
+        {
+            var result = await action(cancellationToken);
+            succeeded = true;
+            return result;
+        }
+        finally
+        {
+            _atomicDepth.Value -= 1;
+            if (_atomicDepth.Value == 0)
+            {
+                var shouldUpload = succeeded && _pendingUpload.Value;
+                _pendingUpload.Value = false;
+
+                if (shouldUpload)
+                {
+                    await _syncGate.WaitAsync(cancellationToken);
+                    try
+                    {
+                        await UploadLocalDatabaseAsync(cancellationToken);
+                    }
+                    finally
+                    {
+                        _syncGate.Release();
+                    }
+                }
+            }
+        }
+    }
 
     public Task<IReadOnlyList<PlanningCell>> GetCellsAsync(IEnumerable<PlanningCellCoordinate> coordinates, CancellationToken cancellationToken) =>
         WithReadAsync((ct) => _innerRepository.GetCellsAsync(coordinates, ct), cancellationToken);
@@ -105,7 +144,14 @@ public sealed class S3BackedSqlitePlanningRepository : IPlanningRepository
         try
         {
             var result = await action(cancellationToken);
-            await UploadLocalDatabaseAsync(cancellationToken);
+            if (_atomicDepth.Value > 0)
+            {
+                _pendingUpload.Value = true;
+            }
+            else
+            {
+                await UploadLocalDatabaseAsync(cancellationToken);
+            }
             return result;
         }
         finally
@@ -121,7 +167,14 @@ public sealed class S3BackedSqlitePlanningRepository : IPlanningRepository
         try
         {
             await action(cancellationToken);
-            await UploadLocalDatabaseAsync(cancellationToken);
+            if (_atomicDepth.Value > 0)
+            {
+                _pendingUpload.Value = true;
+            }
+            else
+            {
+                await UploadLocalDatabaseAsync(cancellationToken);
+            }
         }
         finally
         {

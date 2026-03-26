@@ -373,61 +373,36 @@ public sealed class PlanningService : IPlanningService
 
     public async Task<ImportWorkbookResponse> ImportWorkbookAsync(long scenarioVersionId, Stream workbookStream, string fileName, string userId, CancellationToken cancellationToken)
     {
-        if (!fileName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
+        return await _repository.ExecuteAtomicAsync(async ct =>
         {
-            throw new InvalidOperationException("Only .xlsx workbook uploads are supported in this reference implementation.");
-        }
-
-        using var workbook = new XLWorkbook(workbookStream);
-        if (!workbook.Worksheets.Any())
-        {
-            throw new InvalidOperationException("The uploaded workbook does not contain any worksheets.");
-        }
-
-        var metadata = await _repository.GetMetadataAsync(cancellationToken);
-        var originalCells = await _repository.GetScenarioCellsAsync(scenarioVersionId, cancellationToken);
-        var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
-        var rowsProcessed = 0;
-        var rowsCreated = 0;
-        var touchedCoordinates = new HashSet<string>(StringComparer.Ordinal);
-        var exceptionWorkbook = new XLWorkbook();
-        var exceptionCountsBySheet = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var worksheet in workbook.Worksheets)
-        {
-            var headerMap = GetHeaderMap(worksheet);
-            ValidateImportHeaders(headerMap);
-            var exceptionSheet = exceptionWorkbook.AddWorksheet(worksheet.Name);
-            WriteImportHeader(exceptionSheet, includeRemark: true);
-            var exceptionRowIndex = 2;
-
-            foreach (var row in worksheet.RowsUsed().Skip(1))
+            if (!fileName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
             {
-                if (row.CellsUsed().All(cell => cell.IsEmpty()))
-                {
-                    continue;
-                }
+                throw new InvalidOperationException("Only .xlsx workbook uploads are supported in this reference implementation.");
+            }
 
-                rowsProcessed += 1;
-                var importRow = ReadImportRow(worksheet.Name, row, headerMap);
+            using var workbook = new XLWorkbook(workbookStream);
+            if (!workbook.Worksheets.Any())
+            {
+                throw new InvalidOperationException("The uploaded workbook does not contain any worksheets.");
+            }
 
-                if (!TryNormalizeImportRow(importRow, out var normalized, out var exceptionMessage, out var expectedValue))
-                {
-                    WriteImportExceptionRow(exceptionSheet, exceptionRowIndex++, importRow, exceptionMessage, expectedValue);
-                    exceptionCountsBySheet[worksheet.Name] = exceptionRowIndex - 2;
-                    continue;
-                }
+            var metadata = await _repository.GetMetadataAsync(ct);
+            var originalCells = await _repository.GetScenarioCellsAsync(scenarioVersionId, ct);
+            var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
+            var existingYears = metadata.TimePeriods.Values
+                .Where(period => string.Equals(period.Grain, "year", StringComparison.OrdinalIgnoreCase))
+                .Select(period => (int)(period.TimePeriodId / 100))
+                .ToHashSet();
+            var rowsProcessed = 0;
+            var rowsCreated = 0;
+            var touchedCoordinates = new HashSet<string>(StringComparer.Ordinal);
+            var exceptionWorkbook = new XLWorkbook();
+            var exceptionCountsBySheet = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-                await _repository.EnsureYearAsync(scenarioVersionId, normalized.Year, cancellationToken);
-                metadata = await _repository.GetMetadataAsync(cancellationToken);
-
-                var storeNode = await EnsureNodeAsync(scenarioVersionId, "store", null, normalized.Store, cancellationToken);
-                var departmentNode = await EnsureNodeAsync(scenarioVersionId, "department", storeNode.Node.ProductNodeId, normalized.Department, cancellationToken);
-                var classNode = await EnsureNodeAsync(scenarioVersionId, "class", departmentNode.Node.ProductNodeId, normalized.Class, cancellationToken);
-                var subclassNode = await EnsureNodeAsync(scenarioVersionId, "subclass", classNode.Node.ProductNodeId, normalized.Subclass, cancellationToken);
-                rowsCreated += storeNode.CreatedCount + departmentNode.CreatedCount + classNode.CreatedCount + subclassNode.CreatedCount;
-                metadata = await _repository.GetMetadataAsync(cancellationToken);
-                var refreshedCells = await _repository.GetScenarioCellsAsync(scenarioVersionId, cancellationToken);
+            async Task RefreshScenarioStateAsync()
+            {
+                metadata = await _repository.GetMetadataAsync(ct);
+                var refreshedCells = await _repository.GetScenarioCellsAsync(scenarioVersionId, ct);
                 foreach (var cell in refreshedCells)
                 {
                     if (!workingCells.ContainsKey(cell.Coordinate.Key))
@@ -435,35 +410,81 @@ public sealed class PlanningService : IPlanningService
                         workingCells[cell.Coordinate.Key] = cell.Clone();
                     }
                 }
+            }
 
-                var timePeriodId = BuildMonthTimePeriodId(normalized.Year, normalized.MonthIndex);
-                ApplyLeafMeasureEdit(new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SoldQuantity, subclassNode.Node.StoreId, subclassNode.Node.ProductNodeId, timePeriodId), normalized.SoldQty, workingCells, metadata);
-                ApplyLeafMeasureEdit(new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.AverageSellingPrice, subclassNode.Node.StoreId, subclassNode.Node.ProductNodeId, timePeriodId), normalized.Asp, workingCells, metadata);
-                ApplyLeafMeasureEdit(new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.UnitCost, subclassNode.Node.StoreId, subclassNode.Node.ProductNodeId, timePeriodId), normalized.UnitCost, workingCells, metadata);
+            foreach (var worksheet in workbook.Worksheets)
+            {
+                var headerMap = GetHeaderMap(worksheet);
+                ValidateImportHeaders(headerMap);
+                var exceptionSheet = exceptionWorkbook.AddWorksheet(worksheet.Name);
+                WriteImportHeader(exceptionSheet, includeRemark: true);
+                var exceptionRowIndex = 2;
 
-                foreach (var measureId in PlanningMeasures.SupportedMeasureIds)
+                foreach (var row in worksheet.RowsUsed().Skip(1))
                 {
-                    touchedCoordinates.Add(new PlanningCellCoordinate(scenarioVersionId, measureId, subclassNode.Node.StoreId, subclassNode.Node.ProductNodeId, timePeriodId).Key);
+                    if (row.CellsUsed().All(cell => cell.IsEmpty()))
+                    {
+                        continue;
+                    }
+
+                    rowsProcessed += 1;
+                    var importRow = ReadImportRow(worksheet.Name, row, headerMap);
+
+                    if (!TryNormalizeImportRow(importRow, out var normalized, out var exceptionMessage, out var expectedValue))
+                    {
+                        WriteImportExceptionRow(exceptionSheet, exceptionRowIndex++, importRow, exceptionMessage, expectedValue);
+                        exceptionCountsBySheet[worksheet.Name] = exceptionRowIndex - 2;
+                        continue;
+                    }
+
+                    if (!existingYears.Contains(normalized.Year))
+                    {
+                        await _repository.EnsureYearAsync(scenarioVersionId, normalized.Year, ct);
+                        existingYears.Add(normalized.Year);
+                        await RefreshScenarioStateAsync();
+                    }
+
+                    var storeNode = await EnsureNodeAsync(scenarioVersionId, "store", null, normalized.Store, ct);
+                    var departmentNode = await EnsureNodeAsync(scenarioVersionId, "department", storeNode.Node.ProductNodeId, normalized.Department, ct);
+                    var classNode = await EnsureNodeAsync(scenarioVersionId, "class", departmentNode.Node.ProductNodeId, normalized.Class, ct);
+                    var subclassNode = await EnsureNodeAsync(scenarioVersionId, "subclass", classNode.Node.ProductNodeId, normalized.Subclass, ct);
+                    var createdCount = storeNode.CreatedCount + departmentNode.CreatedCount + classNode.CreatedCount + subclassNode.CreatedCount;
+                    rowsCreated += createdCount;
+
+                    if (createdCount > 0)
+                    {
+                        await RefreshScenarioStateAsync();
+                    }
+
+                    var timePeriodId = BuildMonthTimePeriodId(normalized.Year, normalized.MonthIndex);
+                    ApplyLeafMeasureEdit(new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SoldQuantity, subclassNode.Node.StoreId, subclassNode.Node.ProductNodeId, timePeriodId), normalized.SoldQty, workingCells, metadata);
+                    ApplyLeafMeasureEdit(new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.AverageSellingPrice, subclassNode.Node.StoreId, subclassNode.Node.ProductNodeId, timePeriodId), normalized.Asp, workingCells, metadata);
+                    ApplyLeafMeasureEdit(new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.UnitCost, subclassNode.Node.StoreId, subclassNode.Node.ProductNodeId, timePeriodId), normalized.UnitCost, workingCells, metadata);
+
+                    foreach (var measureId in PlanningMeasures.SupportedMeasureIds)
+                    {
+                        touchedCoordinates.Add(new PlanningCellCoordinate(scenarioVersionId, measureId, subclassNode.Node.StoreId, subclassNode.Node.ProductNodeId, timePeriodId).Key);
+                    }
                 }
             }
-        }
 
-        RecalculateAll(workingCells, metadata, scenarioVersionId);
-        var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "import", cancellationToken);
-        await AppendAuditAsync("import", "workbook", userId, $"Imported workbook {fileName}", deltas, cancellationToken);
+            RecalculateAll(workingCells, metadata, scenarioVersionId);
+            var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "import", ct);
+            await AppendAuditAsync("import", "workbook", userId, $"Imported workbook {fileName}", deltas, ct);
 
-        string? exceptionWorkbookBase64 = null;
-        string? exceptionFileName = null;
-        if (exceptionCountsBySheet.Values.Sum() > 0)
-        {
-            RemoveEmptyWorksheets(exceptionWorkbook);
-            using var exceptionStream = new MemoryStream();
-            exceptionWorkbook.SaveAs(exceptionStream);
-            exceptionWorkbookBase64 = Convert.ToBase64String(exceptionStream.ToArray());
-            exceptionFileName = $"{Path.GetFileNameWithoutExtension(fileName)}-exceptions.xlsx";
-        }
+            string? exceptionWorkbookBase64 = null;
+            string? exceptionFileName = null;
+            if (exceptionCountsBySheet.Values.Sum() > 0)
+            {
+                RemoveEmptyWorksheets(exceptionWorkbook);
+                using var exceptionStream = new MemoryStream();
+                exceptionWorkbook.SaveAs(exceptionStream);
+                exceptionWorkbookBase64 = Convert.ToBase64String(exceptionStream.ToArray());
+                exceptionFileName = $"{Path.GetFileNameWithoutExtension(fileName)}-exceptions.xlsx";
+            }
 
-        return new ImportWorkbookResponse(rowsProcessed, touchedCoordinates.Count, rowsCreated, "applied", exceptionFileName, exceptionWorkbookBase64);
+            return new ImportWorkbookResponse(rowsProcessed, touchedCoordinates.Count, rowsCreated, "applied", exceptionFileName, exceptionWorkbookBase64);
+        }, cancellationToken);
     }
 
     public async Task<(byte[] Content, string FileName)> ExportWorkbookAsync(long scenarioVersionId, CancellationToken cancellationToken)

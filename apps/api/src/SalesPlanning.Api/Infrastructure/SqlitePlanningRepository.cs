@@ -31,6 +31,11 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         }.ToString();
     }
 
+    public Task<T> ExecuteAtomicAsync<T>(Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken)
+    {
+        return action(cancellationToken);
+    }
+
     public async Task<PlanningMetadataSnapshot> GetMetadataAsync(CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);

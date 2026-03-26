@@ -15,6 +15,7 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository, IDisposabl
         _inner = new SqlitePlanningRepository(_databasePath);
     }
 
+    public Task<T> ExecuteAtomicAsync<T>(Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken) => _inner.ExecuteAtomicAsync(action, cancellationToken);
     public Task<PlanningMetadataSnapshot> GetMetadataAsync(CancellationToken cancellationToken) => _inner.GetMetadataAsync(cancellationToken);
     public Task<IReadOnlyList<PlanningCell>> GetCellsAsync(IEnumerable<PlanningCellCoordinate> coordinates, CancellationToken cancellationToken) => _inner.GetCellsAsync(coordinates, cancellationToken);
     public Task<PlanningCell?> GetCellAsync(PlanningCellCoordinate coordinate, CancellationToken cancellationToken) => _inner.GetCellAsync(coordinate, cancellationToken);

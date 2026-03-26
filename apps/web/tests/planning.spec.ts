@@ -221,9 +221,13 @@ test.beforeEach(async ({ page, request }) => {
   await openGrid(page);
 });
 
-test("loads the live grid with FY26 and FY27 columns", async ({ page }) => {
+test("loads with collapsed years, readable measure labels, and only stores visible under Store Total by default", async ({ page }) => {
   await expect(page.locator(".ag-header-group-text", { hasText: "FY26" }).first()).toBeVisible();
-  await expect(page.locator(".ag-header-group-text", { hasText: "FY27" }).first()).toBeVisible();
+  await expect(page.locator(".ag-header-cell-text", { hasText: "Sales Revenue" }).first()).toBeVisible();
+  await expect(page.locator(".ag-header-cell-text", { hasText: "Sold Qty" }).first()).toBeVisible();
+  await expect(page.locator(".ag-header-group-text", { hasText: "Jan" })).toHaveCount(0);
+  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2000)}"]`)).toBeVisible();
+  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2100)}"]`)).toHaveCount(0);
   await expect(await gridCell(page, storeRowId(101, 2000), "202600:1")).toContainText(/[0-9,]+/);
 });
 
@@ -365,6 +369,7 @@ test("imports a workbook in the new store-sheet format", async ({ page }) => {
     buffer: workbookBuffer,
   });
   await expectReady(page);
+  await expect(page.locator(".status-card")).not.toContainText("Failed to fetch");
   await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2000)}"]`).click({ button: "right" });
   await page.getByRole("button", { name: "Expand All" }).click();
   await page.getByRole("button", { name: "Expand Years" }).click();

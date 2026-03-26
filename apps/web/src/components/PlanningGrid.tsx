@@ -137,6 +137,8 @@ export function PlanningGrid({
 
   const columnDefs = useMemo<(ColDef<GridRowView> | ColGroupDef<GridRowView>)[]>(() => {
       const buildMeasureColumn = (period: GridPeriod, measure: GridMeasure): ColDef<GridRowView> => {
+        const isYearTotal = period.grain === "year";
+        const measureHeaderWidth = Math.max(measure.displayAsPercent ? 108 : 112, measure.label.length * 8 + 32);
         const isLeafMonthEditable = (row: GridRowView | undefined) =>
           Boolean(
             measure.editableAtLeaf &&
@@ -156,11 +158,13 @@ export function PlanningGrid({
       return {
         headerName: measure.label,
         colId: `${period.timePeriodId}:${measure.measureId}`,
+        wrapHeaderText: true,
+        autoHeaderHeight: true,
         editable: (params) => !showGrowthFactors && (isLeafMonthEditable(params.data) || isTopDownEditable(params.data)),
         valueGetter: (params) => params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.value ?? 0,
         valueFormatter: (params) => formatValue(params, measure),
-        initialWidth: columnWidthStateRef.current.get(`${period.timePeriodId}:${measure.measureId}`) ?? (measure.displayAsPercent ? 92 : 100),
-        minWidth: measure.displayAsPercent ? 92 : 100,
+        initialWidth: columnWidthStateRef.current.get(`${period.timePeriodId}:${measure.measureId}`) ?? (isYearTotal ? measureHeaderWidth : (measure.displayAsPercent ? 92 : 100)),
+        minWidth: isYearTotal ? measureHeaderWidth : (measure.displayAsPercent ? 92 : 100),
         cellRenderer: GrowthCellRenderer,
         cellRendererParams: {
           measure,
@@ -242,7 +246,7 @@ export function PlanningGrid({
 
       const rowKey = getRowKey(node.data);
       const rememberedState = expandedRowStateRef.current.get(rowKey);
-      const nextExpanded = rememberedState ?? (!hasAppliedInitialExpansionRef.current && (node.level ?? 0) < 2);
+      const nextExpanded = rememberedState ?? (!hasAppliedInitialExpansionRef.current && (node.level ?? 0) < 1);
 
       if (nextExpanded !== undefined) {
         node.setExpanded(nextExpanded);
@@ -267,9 +271,9 @@ export function PlanningGrid({
     yearPeriods.forEach((year) => {
       const groupId = `year-${year.timePeriodId}`;
       const rememberedState = yearGroupStateRef.current.get(groupId);
-      if (rememberedState !== undefined) {
-        api.setColumnGroupOpened(groupId, rememberedState);
-      }
+      const nextOpened = rememberedState ?? false;
+      yearGroupStateRef.current.set(groupId, nextOpened);
+      api.setColumnGroupOpened(groupId, nextOpened);
     });
   }, [columnDefs, yearPeriods]);
 
@@ -632,7 +636,7 @@ export function PlanningGrid({
           treeData
           animateRows
           getDataPath={(dataRow) => dataRow.__path}
-          groupDefaultExpanded={0}
+          groupDefaultExpanded={1}
           getRowId={(params) => getRowKey(params.data)}
           suppressAggFuncInHeader
           enableCellTextSelection

@@ -5,6 +5,7 @@ namespace SalesPlanning.Api.Application;
 
 public interface IPlanningRepository
 {
+    Task<T> ExecuteAtomicAsync<T>(Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken);
     Task<PlanningMetadataSnapshot> GetMetadataAsync(CancellationToken cancellationToken);
     Task<IReadOnlyList<PlanningCell>> GetCellsAsync(IEnumerable<PlanningCellCoordinate> coordinates, CancellationToken cancellationToken);
     Task<PlanningCell?> GetCellAsync(PlanningCellCoordinate coordinate, CancellationToken cancellationToken);
