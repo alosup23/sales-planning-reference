@@ -131,6 +131,45 @@ public sealed class S3BackedSqlitePlanningRepository : IPlanningRepository
     public Task DeleteStoreProfileOptionAsync(string fieldName, string value, CancellationToken cancellationToken) =>
         WithMutationAsync((ct) => _innerRepository.DeleteStoreProfileOptionAsync(fieldName, value, ct), cancellationToken);
 
+    public Task<(IReadOnlyList<ProductProfileMetadata> Profiles, int TotalCount)> GetProductProfilesAsync(string? searchTerm, int pageNumber, int pageSize, CancellationToken cancellationToken) =>
+        WithReadAsync((ct) => _innerRepository.GetProductProfilesAsync(searchTerm, pageNumber, pageSize, ct), cancellationToken);
+
+    public Task<ProductProfileMetadata> UpsertProductProfileAsync(ProductProfileMetadata profile, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.UpsertProductProfileAsync(profile, ct), cancellationToken);
+
+    public Task DeleteProductProfileAsync(string skuVariant, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.DeleteProductProfileAsync(skuVariant, ct), cancellationToken);
+
+    public Task InactivateProductProfileAsync(string skuVariant, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.InactivateProductProfileAsync(skuVariant, ct), cancellationToken);
+
+    public Task<IReadOnlyList<ProductProfileOptionValue>> GetProductProfileOptionsAsync(CancellationToken cancellationToken) =>
+        WithReadAsync(_innerRepository.GetProductProfileOptionsAsync, cancellationToken);
+
+    public Task UpsertProductProfileOptionAsync(string fieldName, string value, bool isActive, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.UpsertProductProfileOptionAsync(fieldName, value, isActive, ct), cancellationToken);
+
+    public Task DeleteProductProfileOptionAsync(string fieldName, string value, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.DeleteProductProfileOptionAsync(fieldName, value, ct), cancellationToken);
+
+    public Task<IReadOnlyList<ProductHierarchyCatalogRecord>> GetProductHierarchyCatalogAsync(CancellationToken cancellationToken) =>
+        WithReadAsync(_innerRepository.GetProductHierarchyCatalogAsync, cancellationToken);
+
+    public Task<IReadOnlyList<ProductSubclassCatalogRecord>> GetProductSubclassCatalogAsync(CancellationToken cancellationToken) =>
+        WithReadAsync(_innerRepository.GetProductSubclassCatalogAsync, cancellationToken);
+
+    public Task UpsertProductHierarchyCatalogAsync(ProductHierarchyCatalogRecord record, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.UpsertProductHierarchyCatalogAsync(record, ct), cancellationToken);
+
+    public Task DeleteProductHierarchyCatalogAsync(string dptNo, string clssNo, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.DeleteProductHierarchyCatalogAsync(dptNo, clssNo, ct), cancellationToken);
+
+    public Task ReplaceProductMasterDataAsync(IReadOnlyList<ProductHierarchyCatalogRecord> hierarchyRows, IReadOnlyList<ProductProfileMetadata> profiles, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.ReplaceProductMasterDataAsync(hierarchyRows, profiles, ct), cancellationToken);
+
+    public Task RebuildPlanningFromMasterDataAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.RebuildPlanningFromMasterDataAsync(scenarioVersionId, fiscalYear, ct), cancellationToken);
+
     public Task<IReadOnlyList<HierarchyDepartmentRecord>> GetHierarchyMappingsAsync(CancellationToken cancellationToken) =>
         WithReadAsync(_innerRepository.GetHierarchyMappingsAsync, cancellationToken);
 

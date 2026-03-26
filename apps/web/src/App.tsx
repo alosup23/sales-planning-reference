@@ -1,15 +1,22 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  downloadProductProfileExport,
   downloadStoreProfileExport,
   downloadBase64Workbook,
   downloadWorkbookExport,
   getGridSlice,
   getHierarchyMappings,
   getPlanningInsights,
+  getProductHierarchy,
+  getProductProfileOptions,
+  getProductProfiles,
   getStoreProfileOptions,
   getStoreProfiles,
   postAddRow,
+  postDeleteProductHierarchy,
+  postDeleteProductProfile,
+  postDeleteProductProfileOption,
   postDeleteStoreProfile,
   postDeleteRow,
   postDeleteYear,
@@ -20,6 +27,11 @@ import {
   postHierarchyDepartment,
   postHierarchySubclass,
   postLock,
+  postProductHierarchy,
+  postProductProfile,
+  postProductProfileImport,
+  postProductProfileOption,
+  postInactivateProductProfile,
   postSave,
   postSplash,
   postStoreProfile,
@@ -31,6 +43,7 @@ import {
 } from "./lib/api";
 import { SignedInUserMenu } from "./components/AuthShell";
 import { HierarchyMaintenanceSheet } from "./components/HierarchyMaintenanceSheet";
+import { ProductProfileMaintenanceSheet } from "./components/ProductProfileMaintenanceSheet";
 import { StoreProfileMaintenanceSheet } from "./components/StoreProfileMaintenanceSheet";
 import { authEnabled } from "./lib/auth";
 import type {
@@ -40,7 +53,10 @@ import type {
   GridRow,
   GridSliceResponse,
   PlanningInsightResponse,
+  ProductHierarchyCatalog,
+  ProductProfile,
   StoreProfile,
+  UpsertProductProfileRequest,
   UpsertStoreProfileRequest,
 } from "./lib/types";
 
@@ -51,7 +67,7 @@ const PlanningGrid = lazy(async () => {
   return { default: module.PlanningGrid };
 });
 
-type ActiveView = "planning-store" | "planning-department" | "hierarchy" | "store-profile";
+type ActiveView = "planning-store" | "planning-department" | "hierarchy" | "store-profile" | "product-profile";
 type DepartmentLayout = "department-store-class" | "department-class-store";
 
 export default function App() {
@@ -64,6 +80,8 @@ export default function App() {
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [insightScope, setInsightScope] = useState<{ storeId: number; productNodeId: number; yearTimePeriodId: number } | null>(null);
   const [pendingRevealRow, setPendingRevealRow] = useState<AddRowResponse | null>(null);
+  const [productSearchTerm, setProductSearchTerm] = useState("");
+  const [productPageNumber, setProductPageNumber] = useState(1);
 
   useEffect(() => {
     void preloadPlanningGrid();
@@ -84,6 +102,21 @@ export default function App() {
   const storeProfileOptionsQuery = useQuery({
     queryKey: ["store-profile-options"],
     queryFn: getStoreProfileOptions,
+  });
+  const productProfileQuery = useQuery({
+    queryKey: ["product-profiles", productSearchTerm, productPageNumber],
+    queryFn: () => getProductProfiles(productSearchTerm, productPageNumber, 50),
+    enabled: activeView === "product-profile",
+  });
+  const productProfileOptionsQuery = useQuery({
+    queryKey: ["product-profile-options"],
+    queryFn: getProductProfileOptions,
+    enabled: activeView === "product-profile",
+  });
+  const productHierarchyQuery = useQuery({
+    queryKey: ["product-hierarchy"],
+    queryFn: getProductHierarchy,
+    enabled: activeView === "product-profile",
   });
   const insightQuery = useQuery({
     queryKey: ["planning-insights", insightScope?.storeId, insightScope?.productNodeId, insightScope?.yearTimePeriodId],
@@ -106,6 +139,9 @@ export default function App() {
       queryClient.refetchQueries({ queryKey: ["hierarchy-mappings"], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["store-profiles"], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["store-profile-options"], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["product-profiles"], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["product-profile-options"], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["product-hierarchy"], type: "active" }),
     ]);
   };
 
@@ -321,6 +357,96 @@ export default function App() {
     onError: (error: Error) => setLastError(error.message),
   });
 
+  const upsertProductProfileMutation = useMutation({
+    mutationFn: postProductProfile,
+    onSuccess: async () => {
+      setLastError(null);
+      setHasUnsavedChanges(true);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const deleteProductProfileMutation = useMutation({
+    mutationFn: postDeleteProductProfile,
+    onSuccess: async () => {
+      setLastError(null);
+      setHasUnsavedChanges(true);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const inactivateProductProfileMutation = useMutation({
+    mutationFn: postInactivateProductProfile,
+    onSuccess: async () => {
+      setLastError(null);
+      setHasUnsavedChanges(true);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const productProfileImportMutation = useMutation({
+    mutationFn: postProductProfileImport,
+    onSuccess: async (result) => {
+      setLastError(null);
+      setHasUnsavedChanges(true);
+      if (result.exceptionWorkbookBase64 && result.exceptionFileName) {
+        downloadBase64Workbook(result.exceptionWorkbookBase64, result.exceptionFileName);
+      }
+
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const productProfileExportMutation = useMutation({
+    mutationFn: downloadProductProfileExport,
+    onSuccess: () => setLastError(null),
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const productProfileOptionMutation = useMutation({
+    mutationFn: ({ fieldName, value, isActive }: { fieldName: string; value: string; isActive: boolean }) =>
+      postProductProfileOption({ fieldName, value, isActive }),
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const deleteProductProfileOptionMutation = useMutation({
+    mutationFn: ({ fieldName, value }: { fieldName: string; value: string }) =>
+      postDeleteProductProfileOption(fieldName, value),
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const productHierarchyMutation = useMutation({
+    mutationFn: postProductHierarchy,
+    onSuccess: async () => {
+      setLastError(null);
+      setHasUnsavedChanges(true);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const deleteProductHierarchyMutation = useMutation({
+    mutationFn: ({ dptNo, clssNo }: { dptNo: string; clssNo: string }) => postDeleteProductHierarchy(dptNo, clssNo),
+    onSuccess: async () => {
+      setLastError(null);
+      setHasUnsavedChanges(true);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
   useEffect(() => {
     const interval = window.setInterval(() => {
       if (!hasUnsavedChanges || saveMutation.isPending) {
@@ -354,10 +480,19 @@ export default function App() {
     storeProfileImportMutation.isPending ||
     storeProfileExportMutation.isPending ||
     storeProfileOptionMutation.isPending ||
-    deleteStoreProfileOptionMutation.isPending;
+    deleteStoreProfileOptionMutation.isPending ||
+    upsertProductProfileMutation.isPending ||
+    deleteProductProfileMutation.isPending ||
+    inactivateProductProfileMutation.isPending ||
+    productProfileImportMutation.isPending ||
+    productProfileExportMutation.isPending ||
+    productProfileOptionMutation.isPending ||
+    deleteProductProfileOptionMutation.isPending ||
+    productHierarchyMutation.isPending ||
+    deleteProductHierarchyMutation.isPending;
 
   const statusText = useMemo(() => {
-    if (gridQuery.isLoading || hierarchyQuery.isLoading || storeProfileQuery.isLoading || storeProfileOptionsQuery.isLoading) {
+    if (gridQuery.isLoading || hierarchyQuery.isLoading || storeProfileQuery.isLoading || storeProfileOptionsQuery.isLoading || (activeView === "product-profile" && (productProfileQuery.isLoading || productProfileOptionsQuery.isLoading || productHierarchyQuery.isLoading))) {
       return "Loading planning slice...";
     }
 
@@ -365,7 +500,7 @@ export default function App() {
       return "Applying changes...";
     }
 
-    if (gridQuery.isError || hierarchyQuery.isError || storeProfileQuery.isError || storeProfileOptionsQuery.isError) {
+    if (gridQuery.isError || hierarchyQuery.isError || storeProfileQuery.isError || storeProfileOptionsQuery.isError || (activeView === "product-profile" && (productProfileQuery.isError || productProfileOptionsQuery.isError || productHierarchyQuery.isError))) {
       return "API unavailable.";
     }
 
@@ -385,8 +520,10 @@ export default function App() {
       ? "Department / Class maintenance sheet ready."
       : activeView === "store-profile"
         ? "Store profile maintenance ready."
+        : activeView === "product-profile"
+          ? "Product profile maintenance ready."
       : "Multi-year planning grid ready.";
-  }, [activeView, gridQuery.isError, gridQuery.isLoading, hasUnsavedChanges, hierarchyQuery.isError, hierarchyQuery.isLoading, isMutating, lastError, lastSavedAt, storeProfileOptionsQuery.isError, storeProfileOptionsQuery.isLoading, storeProfileQuery.isError, storeProfileQuery.isLoading]);
+  }, [activeView, gridQuery.isError, gridQuery.isLoading, hasUnsavedChanges, hierarchyQuery.isError, hierarchyQuery.isLoading, isMutating, lastError, lastSavedAt, productHierarchyQuery.isError, productHierarchyQuery.isLoading, productProfileOptionsQuery.isError, productProfileOptionsQuery.isLoading, productProfileQuery.isError, productProfileQuery.isLoading, storeProfileOptionsQuery.isError, storeProfileOptionsQuery.isLoading, storeProfileQuery.isError, storeProfileQuery.isLoading]);
 
   const storeViewData = useMemo(
     () => (gridQuery.data ? buildStoreView(gridQuery.data) : null),
@@ -397,7 +534,9 @@ export default function App() {
     [departmentLayout, gridQuery.data],
   );
 
-  if (!gridQuery.data || !hierarchyQuery.data || !storeProfileQuery.data || !storeProfileOptionsQuery.data || !storeViewData || !departmentViewData) {
+  const productMaintenanceReady = activeView !== "product-profile" || (productProfileQuery.data && productProfileOptionsQuery.data && productHierarchyQuery.data);
+
+  if (!gridQuery.data || !hierarchyQuery.data || !storeProfileQuery.data || !storeProfileOptionsQuery.data || !productMaintenanceReady || !storeViewData || !departmentViewData) {
     return (
       <main className="app-shell">
         <section className="hero">
@@ -712,6 +851,48 @@ export default function App() {
     await storeProfileExportMutation.mutateAsync();
   };
 
+  const handleSaveProductProfile = async (profile: ProductProfile) => {
+    const request: UpsertProductProfileRequest = { ...profile };
+    await upsertProductProfileMutation.mutateAsync(request);
+  };
+
+  const handleDeleteProductProfile = async (profile: ProductProfile) => {
+    if (!window.confirm(`Delete SKU '${profile.skuVariant}'? Deletes cannot be undone.`)) {
+      return;
+    }
+
+    await deleteProductProfileMutation.mutateAsync(profile.skuVariant);
+  };
+
+  const handleInactivateProductProfile = async (profile: ProductProfile) => {
+    if (!window.confirm(`Inactivate SKU '${profile.skuVariant}'?`)) {
+      return;
+    }
+
+    await inactivateProductProfileMutation.mutateAsync(profile.skuVariant);
+  };
+
+  const handleImportProductProfiles = async (file: File) => {
+    await productProfileImportMutation.mutateAsync(file);
+    setProductPageNumber(1);
+  };
+
+  const handleExportProductProfiles = async () => {
+    await productProfileExportMutation.mutateAsync();
+  };
+
+  const handleSaveProductHierarchy = async (row: ProductHierarchyCatalog) => {
+    await productHierarchyMutation.mutateAsync(row);
+  };
+
+  const handleDeleteProductHierarchy = async (row: ProductHierarchyCatalog) => {
+    if (!window.confirm(`Delete Department/Class '${row.department} / ${row.class}' and related product mappings? Deletes cannot be undone.`)) {
+      return;
+    }
+
+    await deleteProductHierarchyMutation.mutateAsync({ dptNo: row.dptNo, clssNo: row.clssNo });
+  };
+
   return (
     <main className="app-shell">
       <section className="hero">
@@ -738,6 +919,7 @@ export default function App() {
             <option value="planning-department">Planning - by Department</option>
             <option value="hierarchy">Hierarchy Maintenance</option>
             <option value="store-profile">Store Profile Maintenance</option>
+            <option value="product-profile">Product Profile Maintenance</option>
           </select>
         </label>
         {activeView === "planning-department" ? (
@@ -805,6 +987,35 @@ export default function App() {
           onDeleteOption={async (fieldName, value) => {
             await deleteStoreProfileOptionMutation.mutateAsync({ fieldName, value });
           }}
+        />
+      ) : activeView === "product-profile" ? (
+        <ProductProfileMaintenanceSheet
+          profiles={productProfileQuery.data!.profiles}
+          totalCount={productProfileQuery.data!.totalCount}
+          pageNumber={productProfileQuery.data!.pageNumber}
+          pageSize={productProfileQuery.data!.pageSize}
+          searchTerm={productSearchTerm}
+          hierarchyRows={productHierarchyQuery.data!.hierarchyRows}
+          subclassRows={productHierarchyQuery.data!.subclassRows}
+          options={productProfileOptionsQuery.data!.options}
+          onSearchChange={(value) => {
+            setProductSearchTerm(value);
+            setProductPageNumber(1);
+          }}
+          onPageChange={setProductPageNumber}
+          onSave={handleSaveProductProfile}
+          onDelete={handleDeleteProductProfile}
+          onInactivate={handleInactivateProductProfile}
+          onImport={handleImportProductProfiles}
+          onExport={handleExportProductProfiles}
+          onUpsertOption={async (fieldName, value, isActive) => {
+            await productProfileOptionMutation.mutateAsync({ fieldName, value, isActive });
+          }}
+          onDeleteOption={async (fieldName, value) => {
+            await deleteProductProfileOptionMutation.mutateAsync({ fieldName, value });
+          }}
+          onSaveHierarchy={handleSaveProductHierarchy}
+          onDeleteHierarchy={handleDeleteProductHierarchy}
         />
       ) : (
         <div className="planning-workspace">

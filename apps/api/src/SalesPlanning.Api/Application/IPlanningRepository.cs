@@ -30,6 +30,19 @@ public interface IPlanningRepository
     Task UpsertHierarchyDepartmentAsync(string departmentLabel, CancellationToken cancellationToken);
     Task UpsertHierarchyClassAsync(string departmentLabel, string classLabel, CancellationToken cancellationToken);
     Task UpsertHierarchySubclassAsync(string departmentLabel, string classLabel, string subclassLabel, CancellationToken cancellationToken);
+    Task<(IReadOnlyList<ProductProfileMetadata> Profiles, int TotalCount)> GetProductProfilesAsync(string? searchTerm, int pageNumber, int pageSize, CancellationToken cancellationToken);
+    Task<ProductProfileMetadata> UpsertProductProfileAsync(ProductProfileMetadata profile, CancellationToken cancellationToken);
+    Task DeleteProductProfileAsync(string skuVariant, CancellationToken cancellationToken);
+    Task InactivateProductProfileAsync(string skuVariant, CancellationToken cancellationToken);
+    Task<IReadOnlyList<ProductProfileOptionValue>> GetProductProfileOptionsAsync(CancellationToken cancellationToken);
+    Task UpsertProductProfileOptionAsync(string fieldName, string value, bool isActive, CancellationToken cancellationToken);
+    Task DeleteProductProfileOptionAsync(string fieldName, string value, CancellationToken cancellationToken);
+    Task<IReadOnlyList<ProductHierarchyCatalogRecord>> GetProductHierarchyCatalogAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyList<ProductSubclassCatalogRecord>> GetProductSubclassCatalogAsync(CancellationToken cancellationToken);
+    Task UpsertProductHierarchyCatalogAsync(ProductHierarchyCatalogRecord record, CancellationToken cancellationToken);
+    Task DeleteProductHierarchyCatalogAsync(string dptNo, string clssNo, CancellationToken cancellationToken);
+    Task ReplaceProductMasterDataAsync(IReadOnlyList<ProductHierarchyCatalogRecord> hierarchyRows, IReadOnlyList<ProductProfileMetadata> profiles, CancellationToken cancellationToken);
+    Task RebuildPlanningFromMasterDataAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken);
     Task<ProductNode?> FindProductNodeByPathAsync(string[] path, CancellationToken cancellationToken);
     Task ResetAsync(CancellationToken cancellationToken);
 }

@@ -185,6 +185,87 @@ public sealed class PlanningController : ControllerBase
         return File(result.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", result.FileName);
     }
 
+    [HttpGet("product-profiles")]
+    public Task<ProductProfileResponse> GetProductProfiles(
+        [FromQuery] string? searchTerm,
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 200,
+        CancellationToken cancellationToken = default)
+    {
+        return _planningService.GetProductProfilesAsync(searchTerm, pageNumber, pageSize, cancellationToken);
+    }
+
+    [HttpPost("product-profiles")]
+    public Task<ProductProfileDto> UpsertProductProfile([FromBody] UpsertProductProfileRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.UpsertProductProfileAsync(request, cancellationToken);
+    }
+
+    [HttpPost("product-profiles/delete")]
+    public Task DeleteProductProfile([FromBody] DeleteProductProfileRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.DeleteProductProfileAsync(request, cancellationToken);
+    }
+
+    [HttpPost("product-profiles/inactivate")]
+    public Task<ProductProfileDto> InactivateProductProfile([FromBody] InactivateProductProfileRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.InactivateProductProfileAsync(request, cancellationToken);
+    }
+
+    [HttpGet("product-profile-options")]
+    public Task<ProductProfileOptionsResponse> GetProductProfileOptions(CancellationToken cancellationToken)
+    {
+        return _planningService.GetProductProfileOptionsAsync(cancellationToken);
+    }
+
+    [HttpPost("product-profile-options")]
+    public Task<ProductProfileOptionsResponse> UpsertProductProfileOption([FromBody] UpsertProductProfileOptionRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.UpsertProductProfileOptionAsync(request, cancellationToken);
+    }
+
+    [HttpPost("product-profile-options/delete")]
+    public Task<ProductProfileOptionsResponse> DeleteProductProfileOption([FromBody] DeleteProductProfileOptionRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.DeleteProductProfileOptionAsync(request, cancellationToken);
+    }
+
+    [HttpGet("product-hierarchy")]
+    public Task<ProductHierarchyResponse> GetProductHierarchy(CancellationToken cancellationToken)
+    {
+        return _planningService.GetProductHierarchyCatalogAsync(cancellationToken);
+    }
+
+    [HttpPost("product-hierarchy")]
+    public Task<ProductHierarchyResponse> UpsertProductHierarchy([FromBody] UpsertProductHierarchyRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.UpsertProductHierarchyCatalogAsync(request, cancellationToken);
+    }
+
+    [HttpPost("product-hierarchy/delete")]
+    public Task<ProductHierarchyResponse> DeleteProductHierarchy([FromBody] DeleteProductHierarchyRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.DeleteProductHierarchyCatalogAsync(request, cancellationToken);
+    }
+
+    [HttpPost("imports/product-profiles")]
+    [RequestSizeLimit(30_000_000)]
+    public async Task<ProductProfileImportResponse> ImportProductProfiles(
+        [FromForm] IFormFile file,
+        CancellationToken cancellationToken)
+    {
+        await using var stream = file.OpenReadStream();
+        return await _planningService.ImportProductProfilesAsync(stream, file.FileName, cancellationToken);
+    }
+
+    [HttpGet("exports/product-profiles")]
+    public async Task<IActionResult> ExportProductProfiles(CancellationToken cancellationToken = default)
+    {
+        var result = await _planningService.ExportProductProfilesAsync(cancellationToken);
+        return File(result.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", result.FileName);
+    }
+
     [HttpPost("imports/workbook")]
     [RequestSizeLimit(10_000_000)]
     public async Task<ImportWorkbookResponse> ImportWorkbook(

@@ -306,3 +306,89 @@ export type UpsertStoreProfileOptionRequest = {
   value: string;
   isActive: boolean;
 };
+
+export type ProductProfile = {
+  skuVariant: string;
+  description: string;
+  description2?: string | null;
+  price: number;
+  cost: number;
+  dptNo: string;
+  clssNo: string;
+  brandNo?: string | null;
+  department: string;
+  class: string;
+  brand?: string | null;
+  revDepartment?: string | null;
+  revClass?: string | null;
+  subclass: string;
+  prodGroup?: string | null;
+  prodType?: string | null;
+  activeFlag?: string | null;
+  orderFlag?: string | null;
+  brandType?: string | null;
+  launchMonth?: string | null;
+  gender?: string | null;
+  size?: string | null;
+  collection?: string | null;
+  promo?: string | null;
+  ramadhanPromo?: string | null;
+  isActive: boolean;
+};
+
+export type ProductProfileResponse = {
+  profiles: ProductProfile[];
+  totalCount: number;
+  pageNumber: number;
+  pageSize: number;
+  searchTerm?: string | null;
+};
+
+export type UpsertProductProfileRequest = ProductProfile;
+
+export type ProductProfileImportResponse = {
+  rowsProcessed: number;
+  productsAdded: number;
+  productsUpdated: number;
+  hierarchyRowsProcessed: number;
+  status: string;
+  exceptionFileName?: string | null;
+  exceptionWorkbookBase64?: string | null;
+};
+
+export type ProductProfileOption = {
+  fieldName: string;
+  value: string;
+  isActive: boolean;
+};
+
+export type ProductProfileOptionsResponse = {
+  options: ProductProfileOption[];
+};
+
+export type UpsertProductProfileOptionRequest = {
+  fieldName: string;
+  value: string;
+  isActive: boolean;
+};
+
+export type ProductHierarchyCatalog = {
+  dptNo: string;
+  clssNo: string;
+  department: string;
+  class: string;
+  prodGroup: string;
+  isActive: boolean;
+};
+
+export type ProductHierarchySubclass = {
+  department: string;
+  class: string;
+  subclass: string;
+  isActive: boolean;
+};
+
+export type ProductHierarchyResponse = {
+  hierarchyRows: ProductHierarchyCatalog[];
+  subclassRows: ProductHierarchySubclass[];
+};

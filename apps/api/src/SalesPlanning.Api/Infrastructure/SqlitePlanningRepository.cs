@@ -704,6 +704,266 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         }
     }
 
+    public async Task<(IReadOnlyList<ProductProfileMetadata> Profiles, int TotalCount)> GetProductProfilesAsync(string? searchTerm, int pageNumber, int pageSize, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        var normalizedSearch = string.IsNullOrWhiteSpace(searchTerm) ? null : $"%{searchTerm.Trim()}%";
+        var normalizedPageNumber = Math.Max(1, pageNumber);
+        var normalizedPageSize = Math.Clamp(pageSize, 25, 500);
+        var offset = (normalizedPageNumber - 1) * normalizedPageSize;
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        var totalCount = await CountProductProfilesAsync(connection, null, normalizedSearch, cancellationToken);
+        var profiles = await LoadProductProfilesAsync(connection, null, normalizedSearch, normalizedPageSize, offset, cancellationToken);
+        return (profiles, totalCount);
+    }
+
+    public async Task<ProductProfileMetadata> UpsertProductProfileAsync(ProductProfileMetadata profile, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            var normalized = NormalizeProductProfile(profile);
+            await UpsertProductProfileInternalAsync(connection, transaction, normalized, cancellationToken);
+            await UpsertProductProfileOptionSeedsAsync(connection, transaction, normalized, cancellationToken);
+            await UpsertDerivedSubclassCatalogAsync(connection, transaction, normalized, cancellationToken);
+            await RebuildPlanningFromMasterDataInternalAsync(connection, transaction, 1, 2026, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return normalized;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task DeleteProductProfileAsync(string skuVariant, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            await using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = "delete from product_profiles where sku_variant = $skuVariant;";
+                command.Parameters.AddWithValue("$skuVariant", skuVariant.Trim());
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await RefreshProductSubclassCatalogAsync(connection, transaction, cancellationToken);
+            await EnsureProductProfileOptionSeedAsync(connection, transaction, cancellationToken);
+            await RebuildPlanningFromMasterDataInternalAsync(connection, transaction, 1, 2026, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task InactivateProductProfileAsync(string skuVariant, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            await using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = """
+                    update product_profiles
+                    set is_active = 0,
+                        active_flag = '0'
+                    where sku_variant = $skuVariant;
+                    """;
+                command.Parameters.AddWithValue("$skuVariant", skuVariant.Trim());
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await RefreshProductSubclassCatalogAsync(connection, transaction, cancellationToken);
+            await EnsureProductProfileOptionSeedAsync(connection, transaction, cancellationToken);
+            await RebuildPlanningFromMasterDataInternalAsync(connection, transaction, 1, 2026, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<IReadOnlyList<ProductProfileOptionValue>> GetProductProfileOptionsAsync(CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        return await LoadProductProfileOptionsAsync(connection, null, cancellationToken);
+    }
+
+    public async Task UpsertProductProfileOptionAsync(string fieldName, string value, bool isActive, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            await UpsertOptionAsync(connection, transaction, "product_profile_options", fieldName, value, isActive, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task DeleteProductProfileOptionAsync(string fieldName, string value, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            await DeleteOptionAsync(connection, transaction, "product_profile_options", fieldName, value, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<IReadOnlyList<ProductHierarchyCatalogRecord>> GetProductHierarchyCatalogAsync(CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        return await LoadProductHierarchyCatalogAsync(connection, null, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<ProductSubclassCatalogRecord>> GetProductSubclassCatalogAsync(CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        return await LoadProductSubclassCatalogAsync(connection, null, cancellationToken);
+    }
+
+    public async Task UpsertProductHierarchyCatalogAsync(ProductHierarchyCatalogRecord record, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            await UpsertProductHierarchyCatalogInternalAsync(connection, transaction, NormalizeProductHierarchyRecord(record), cancellationToken);
+            await EnsureProductProfileOptionSeedAsync(connection, transaction, cancellationToken);
+            await RebuildPlanningFromMasterDataInternalAsync(connection, transaction, 1, 2026, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task DeleteProductHierarchyCatalogAsync(string dptNo, string clssNo, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            await using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = "delete from product_hierarchy_catalog where dpt_no = $dptNo and clss_no = $clssNo;";
+                command.Parameters.AddWithValue("$dptNo", dptNo.Trim());
+                command.Parameters.AddWithValue("$clssNo", clssNo.Trim());
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = "delete from product_profiles where dpt_no = $dptNo and clss_no = $clssNo;";
+                command.Parameters.AddWithValue("$dptNo", dptNo.Trim());
+                command.Parameters.AddWithValue("$clssNo", clssNo.Trim());
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await RefreshProductSubclassCatalogAsync(connection, transaction, cancellationToken);
+            await EnsureProductProfileOptionSeedAsync(connection, transaction, cancellationToken);
+            await RebuildPlanningFromMasterDataInternalAsync(connection, transaction, 1, 2026, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task ReplaceProductMasterDataAsync(IReadOnlyList<ProductHierarchyCatalogRecord> hierarchyRows, IReadOnlyList<ProductProfileMetadata> profiles, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            foreach (var tableName in new[] { "product_subclass_catalog", "product_hierarchy_catalog", "product_profile_options", "product_profiles" })
+            {
+                await using var command = connection.CreateCommand();
+                command.Transaction = transaction;
+                command.CommandText = $"delete from {tableName};";
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            foreach (var hierarchyRow in hierarchyRows.Select(NormalizeProductHierarchyRecord))
+            {
+                await UpsertProductHierarchyCatalogInternalAsync(connection, transaction, hierarchyRow, cancellationToken);
+            }
+
+            foreach (var profile in profiles.Select(NormalizeProductProfile))
+            {
+                await UpsertProductProfileInternalAsync(connection, transaction, profile, cancellationToken);
+            }
+
+            await RefreshProductSubclassCatalogAsync(connection, transaction, cancellationToken);
+            await EnsureProductProfileOptionSeedAsync(connection, transaction, cancellationToken);
+            await RebuildPlanningFromMasterDataInternalAsync(connection, transaction, 1, 2026, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task RebuildPlanningFromMasterDataAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            await RebuildPlanningFromMasterDataInternalAsync(connection, transaction, scenarioVersionId, fiscalYear, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task<IReadOnlyList<HierarchyDepartmentRecord>> GetHierarchyMappingsAsync(CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
@@ -960,6 +1220,11 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                          "audit_deltas",
                          "audits",
                          "planning_cells",
+                         "product_subclass_catalog",
+                         "product_hierarchy_catalog",
+                         "product_profile_options",
+                         "product_profiles",
+                         "store_profile_options",
                          "hierarchy_subclasses_v2",
                          "hierarchy_classes_v2",
                          "hierarchy_departments_v2",
@@ -1102,6 +1367,56 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                         is_active integer not null default 1,
                         primary key (field_name, option_value)
                     );
+                    create table if not exists product_profiles (
+                        sku_variant text primary key,
+                        description text not null,
+                        description2 text null,
+                        price real not null,
+                        cost real not null,
+                        dpt_no text not null,
+                        clss_no text not null,
+                        brand_no text null,
+                        department text not null,
+                        class text not null,
+                        brand text null,
+                        rev_department text null,
+                        rev_class text null,
+                        subclass text not null,
+                        prod_group text null,
+                        prod_type text null,
+                        active_flag text null,
+                        order_flag text null,
+                        brand_type text null,
+                        launch_month text null,
+                        gender text null,
+                        size text null,
+                        collection text null,
+                        promo text null,
+                        ramadhan_promo text null,
+                        is_active integer not null default 1
+                    );
+                    create table if not exists product_profile_options (
+                        field_name text not null,
+                        option_value text not null,
+                        is_active integer not null default 1,
+                        primary key (field_name, option_value)
+                    );
+                    create table if not exists product_hierarchy_catalog (
+                        dpt_no text not null,
+                        clss_no text not null,
+                        department text not null,
+                        class text not null,
+                        prod_group text not null,
+                        is_active integer not null default 1,
+                        primary key (dpt_no, clss_no)
+                    );
+                    create table if not exists product_subclass_catalog (
+                        department text not null,
+                        class text not null,
+                        subclass text not null,
+                        is_active integer not null default 1,
+                        primary key (department, class, subclass)
+                    );
                     create table if not exists hierarchy_departments_v2 (
                         department_label text primary key,
                         lifecycle_state text not null default 'active',
@@ -1155,6 +1470,8 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             await EnsureAspSeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
             await EnsureExtendedMeasureSeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
             await EnsureStoreProfileOptionSeedAsync(connection, transaction, cancellationToken);
+            await EnsureProductProfileSeedAsync(connection, transaction, cancellationToken);
+            await EnsureProductProfileOptionSeedAsync(connection, transaction, cancellationToken);
 
             await transaction.CommitAsync(cancellationToken);
             _initialized = true;
@@ -2018,6 +2335,794 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         command.Parameters.AddWithValue("$fieldName", fieldName.Trim());
         command.Parameters.AddWithValue("$value", value.Trim());
         await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<int> CountProductProfilesAsync(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        string? normalizedSearch,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = normalizedSearch is null
+            ? "select count(*) from product_profiles;"
+            : """
+                select count(*)
+                from product_profiles
+                where sku_variant like $search
+                   or description like $search
+                   or department like $search
+                   or class like $search
+                   or subclass like $search;
+                """;
+        if (normalizedSearch is not null)
+        {
+            command.Parameters.AddWithValue("$search", normalizedSearch);
+        }
+
+        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
+    }
+
+    private static async Task<IReadOnlyList<ProductProfileMetadata>> LoadProductProfilesAsync(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        string? normalizedSearch,
+        int limit,
+        int offset,
+        CancellationToken cancellationToken)
+    {
+        var result = new List<ProductProfileMetadata>();
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = normalizedSearch is null
+            ? """
+                select sku_variant, description, description2, price, cost, dpt_no, clss_no, brand_no, department, class,
+                       brand, rev_department, rev_class, subclass, prod_group, prod_type, active_flag, order_flag,
+                       brand_type, launch_month, gender, size, collection, promo, ramadhan_promo, is_active
+                from product_profiles
+                order by department, class, subclass, description, sku_variant
+                limit $limit offset $offset;
+                """
+            : """
+                select sku_variant, description, description2, price, cost, dpt_no, clss_no, brand_no, department, class,
+                       brand, rev_department, rev_class, subclass, prod_group, prod_type, active_flag, order_flag,
+                       brand_type, launch_month, gender, size, collection, promo, ramadhan_promo, is_active
+                from product_profiles
+                where sku_variant like $search
+                   or description like $search
+                   or department like $search
+                   or class like $search
+                   or subclass like $search
+                order by department, class, subclass, description, sku_variant
+                limit $limit offset $offset;
+                """;
+        command.Parameters.AddWithValue("$limit", limit);
+        command.Parameters.AddWithValue("$offset", offset);
+        if (normalizedSearch is not null)
+        {
+            command.Parameters.AddWithValue("$search", normalizedSearch);
+        }
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            result.Add(new ProductProfileMetadata(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                ReadDecimal(reader, 3),
+                ReadDecimal(reader, 4),
+                reader.GetString(5),
+                reader.GetString(6),
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.GetString(8),
+                reader.GetString(9),
+                reader.IsDBNull(10) ? null : reader.GetString(10),
+                reader.IsDBNull(11) ? null : reader.GetString(11),
+                reader.IsDBNull(12) ? null : reader.GetString(12),
+                reader.GetString(13),
+                reader.IsDBNull(14) ? null : reader.GetString(14),
+                reader.IsDBNull(15) ? null : reader.GetString(15),
+                reader.IsDBNull(16) ? null : reader.GetString(16),
+                reader.IsDBNull(17) ? null : reader.GetString(17),
+                reader.IsDBNull(18) ? null : reader.GetString(18),
+                reader.IsDBNull(19) ? null : reader.GetString(19),
+                reader.IsDBNull(20) ? null : reader.GetString(20),
+                reader.IsDBNull(21) ? null : reader.GetString(21),
+                reader.IsDBNull(22) ? null : reader.GetString(22),
+                reader.IsDBNull(23) ? null : reader.GetString(23),
+                reader.IsDBNull(24) ? null : reader.GetString(24),
+                reader.GetInt64(25) == 1));
+        }
+
+        return result;
+    }
+
+    private static ProductProfileMetadata NormalizeProductProfile(ProductProfileMetadata profile)
+    {
+        string Require(string? value, string label)
+        {
+            var normalized = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+            if (normalized is null)
+            {
+                throw new InvalidOperationException($"{label} is required.");
+            }
+
+            return normalized;
+        }
+
+        string? Optional(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+        return profile with
+        {
+            SkuVariant = Require(profile.SkuVariant, "SKU Variant"),
+            Description = Require(profile.Description, "Description"),
+            Description2 = Optional(profile.Description2),
+            Price = PlanningMath.NormalizeAsp(profile.Price),
+            Cost = PlanningMath.NormalizeUnitCost(profile.Cost),
+            DptNo = Require(profile.DptNo, "DptNo"),
+            ClssNo = Require(profile.ClssNo, "ClssNo"),
+            BrandNo = Optional(profile.BrandNo),
+            Department = Require(profile.Department, "Department"),
+            Class = Require(profile.Class, "Class"),
+            Brand = Optional(profile.Brand),
+            RevDepartment = Optional(profile.RevDepartment),
+            RevClass = Optional(profile.RevClass),
+            Subclass = Require(profile.Subclass, "Subclass"),
+            ProdGroup = Optional(profile.ProdGroup),
+            ProdType = Optional(profile.ProdType),
+            ActiveFlag = Optional(profile.ActiveFlag),
+            OrderFlag = Optional(profile.OrderFlag),
+            BrandType = Optional(profile.BrandType),
+            LaunchMonth = Optional(profile.LaunchMonth),
+            Gender = Optional(profile.Gender),
+            Size = Optional(profile.Size),
+            Collection = Optional(profile.Collection),
+            Promo = Optional(profile.Promo),
+            RamadhanPromo = Optional(profile.RamadhanPromo)
+        };
+    }
+
+    private static async Task UpsertProductProfileInternalAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        ProductProfileMetadata profile,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            insert into product_profiles (
+                sku_variant, description, description2, price, cost, dpt_no, clss_no, brand_no, department, class,
+                brand, rev_department, rev_class, subclass, prod_group, prod_type, active_flag, order_flag, brand_type,
+                launch_month, gender, size, collection, promo, ramadhan_promo, is_active)
+            values (
+                $skuVariant, $description, $description2, $price, $cost, $dptNo, $clssNo, $brandNo, $department, $class,
+                $brand, $revDepartment, $revClass, $subclass, $prodGroup, $prodType, $activeFlag, $orderFlag, $brandType,
+                $launchMonth, $gender, $size, $collection, $promo, $ramadhanPromo, $isActive)
+            on conflict (sku_variant)
+            do update set
+                description = excluded.description,
+                description2 = excluded.description2,
+                price = excluded.price,
+                cost = excluded.cost,
+                dpt_no = excluded.dpt_no,
+                clss_no = excluded.clss_no,
+                brand_no = excluded.brand_no,
+                department = excluded.department,
+                class = excluded.class,
+                brand = excluded.brand,
+                rev_department = excluded.rev_department,
+                rev_class = excluded.rev_class,
+                subclass = excluded.subclass,
+                prod_group = excluded.prod_group,
+                prod_type = excluded.prod_type,
+                active_flag = excluded.active_flag,
+                order_flag = excluded.order_flag,
+                brand_type = excluded.brand_type,
+                launch_month = excluded.launch_month,
+                gender = excluded.gender,
+                size = excluded.size,
+                collection = excluded.collection,
+                promo = excluded.promo,
+                ramadhan_promo = excluded.ramadhan_promo,
+                is_active = excluded.is_active;
+            """;
+        command.Parameters.AddWithValue("$skuVariant", profile.SkuVariant);
+        command.Parameters.AddWithValue("$description", profile.Description);
+        command.Parameters.AddWithValue("$description2", (object?)profile.Description2 ?? DBNull.Value);
+        command.Parameters.AddWithValue("$price", profile.Price);
+        command.Parameters.AddWithValue("$cost", profile.Cost);
+        command.Parameters.AddWithValue("$dptNo", profile.DptNo);
+        command.Parameters.AddWithValue("$clssNo", profile.ClssNo);
+        command.Parameters.AddWithValue("$brandNo", (object?)profile.BrandNo ?? DBNull.Value);
+        command.Parameters.AddWithValue("$department", profile.Department);
+        command.Parameters.AddWithValue("$class", profile.Class);
+        command.Parameters.AddWithValue("$brand", (object?)profile.Brand ?? DBNull.Value);
+        command.Parameters.AddWithValue("$revDepartment", (object?)profile.RevDepartment ?? DBNull.Value);
+        command.Parameters.AddWithValue("$revClass", (object?)profile.RevClass ?? DBNull.Value);
+        command.Parameters.AddWithValue("$subclass", profile.Subclass);
+        command.Parameters.AddWithValue("$prodGroup", (object?)profile.ProdGroup ?? DBNull.Value);
+        command.Parameters.AddWithValue("$prodType", (object?)profile.ProdType ?? DBNull.Value);
+        command.Parameters.AddWithValue("$activeFlag", (object?)profile.ActiveFlag ?? DBNull.Value);
+        command.Parameters.AddWithValue("$orderFlag", (object?)profile.OrderFlag ?? DBNull.Value);
+        command.Parameters.AddWithValue("$brandType", (object?)profile.BrandType ?? DBNull.Value);
+        command.Parameters.AddWithValue("$launchMonth", (object?)profile.LaunchMonth ?? DBNull.Value);
+        command.Parameters.AddWithValue("$gender", (object?)profile.Gender ?? DBNull.Value);
+        command.Parameters.AddWithValue("$size", (object?)profile.Size ?? DBNull.Value);
+        command.Parameters.AddWithValue("$collection", (object?)profile.Collection ?? DBNull.Value);
+        command.Parameters.AddWithValue("$promo", (object?)profile.Promo ?? DBNull.Value);
+        command.Parameters.AddWithValue("$ramadhanPromo", (object?)profile.RamadhanPromo ?? DBNull.Value);
+        command.Parameters.AddWithValue("$isActive", profile.IsActive ? 1 : 0);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task UpsertProductProfileOptionSeedsAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        ProductProfileMetadata profile,
+        CancellationToken cancellationToken)
+    {
+        var options = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["department"] = profile.Department,
+            ["class"] = profile.Class,
+            ["subclass"] = profile.Subclass,
+            ["prodGroup"] = profile.ProdGroup,
+            ["prodType"] = profile.ProdType,
+            ["brand"] = profile.Brand,
+            ["brandType"] = profile.BrandType,
+            ["gender"] = profile.Gender,
+            ["size"] = profile.Size,
+            ["collection"] = profile.Collection,
+            ["promo"] = profile.Promo,
+            ["ramadhanPromo"] = profile.RamadhanPromo,
+            ["activeFlag"] = profile.ActiveFlag,
+            ["orderFlag"] = profile.OrderFlag,
+            ["launchMonth"] = profile.LaunchMonth
+        };
+
+        foreach (var (fieldName, value) in options)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            await UpsertOptionAsync(connection, transaction, "product_profile_options", fieldName, value, true, cancellationToken);
+        }
+    }
+
+    private static async Task UpsertDerivedSubclassCatalogAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        ProductProfileMetadata profile,
+        CancellationToken cancellationToken)
+    {
+        await UpsertProductHierarchyCatalogInternalAsync(connection, transaction, new ProductHierarchyCatalogRecord(
+            profile.DptNo,
+            profile.ClssNo,
+            profile.Department,
+            profile.Class,
+            profile.ProdGroup ?? "UNASSIGNED",
+            true), cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            insert into product_subclass_catalog (department, class, subclass, is_active)
+            values ($department, $class, $subclass, $isActive)
+            on conflict (department, class, subclass)
+            do update set is_active = excluded.is_active;
+            """;
+        command.Parameters.AddWithValue("$department", profile.Department);
+        command.Parameters.AddWithValue("$class", profile.Class);
+        command.Parameters.AddWithValue("$subclass", profile.Subclass);
+        command.Parameters.AddWithValue("$isActive", profile.IsActive ? 1 : 0);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<IReadOnlyList<ProductProfileOptionValue>> LoadProductProfileOptionsAsync(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        CancellationToken cancellationToken)
+    {
+        var result = new List<ProductProfileOptionValue>();
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            select field_name, option_value, is_active
+            from product_profile_options
+            order by field_name asc, option_value asc;
+            """;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            result.Add(new ProductProfileOptionValue(reader.GetString(0), reader.GetString(1), reader.GetInt64(2) == 1));
+        }
+
+        return result;
+    }
+
+    private static async Task UpsertOptionAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string tableName,
+        string fieldName,
+        string value,
+        bool isActive,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"""
+            insert into {tableName} (field_name, option_value, is_active)
+            values ($fieldName, $value, $isActive)
+            on conflict (field_name, option_value)
+            do update set is_active = excluded.is_active;
+            """;
+        command.Parameters.AddWithValue("$fieldName", fieldName.Trim());
+        command.Parameters.AddWithValue("$value", value.Trim());
+        command.Parameters.AddWithValue("$isActive", isActive ? 1 : 0);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task DeleteOptionAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string tableName,
+        string fieldName,
+        string value,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"""
+            delete from {tableName}
+            where field_name = $fieldName
+              and option_value = $value;
+            """;
+        command.Parameters.AddWithValue("$fieldName", fieldName.Trim());
+        command.Parameters.AddWithValue("$value", value.Trim());
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<IReadOnlyList<ProductHierarchyCatalogRecord>> LoadProductHierarchyCatalogAsync(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        CancellationToken cancellationToken)
+    {
+        var result = new List<ProductHierarchyCatalogRecord>();
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            select dpt_no, clss_no, department, class, prod_group, is_active
+            from product_hierarchy_catalog
+            order by department asc, class asc;
+            """;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            result.Add(new ProductHierarchyCatalogRecord(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetInt64(5) == 1));
+        }
+
+        return result;
+    }
+
+    private static async Task<IReadOnlyList<ProductSubclassCatalogRecord>> LoadProductSubclassCatalogAsync(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        CancellationToken cancellationToken)
+    {
+        var result = new List<ProductSubclassCatalogRecord>();
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            select department, class, subclass, is_active
+            from product_subclass_catalog
+            order by department asc, class asc, subclass asc;
+            """;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            result.Add(new ProductSubclassCatalogRecord(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetInt64(3) == 1));
+        }
+
+        return result;
+    }
+
+    private static ProductHierarchyCatalogRecord NormalizeProductHierarchyRecord(ProductHierarchyCatalogRecord record)
+    {
+        string Require(string? value, string label)
+        {
+            var normalized = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+            if (normalized is null)
+            {
+                throw new InvalidOperationException($"{label} is required.");
+            }
+
+            return normalized;
+        }
+
+        return record with
+        {
+            DptNo = Require(record.DptNo, "DptNo"),
+            ClssNo = Require(record.ClssNo, "ClssNo"),
+            Department = Require(record.Department, "Department"),
+            Class = Require(record.Class, "Class"),
+            ProdGroup = Require(record.ProdGroup, "Prod Group")
+        };
+    }
+
+    private static async Task UpsertProductHierarchyCatalogInternalAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        ProductHierarchyCatalogRecord record,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            insert into product_hierarchy_catalog (dpt_no, clss_no, department, class, prod_group, is_active)
+            values ($dptNo, $clssNo, $department, $class, $prodGroup, $isActive)
+            on conflict (dpt_no, clss_no)
+            do update set
+                department = excluded.department,
+                class = excluded.class,
+                prod_group = excluded.prod_group,
+                is_active = excluded.is_active;
+            """;
+        command.Parameters.AddWithValue("$dptNo", record.DptNo);
+        command.Parameters.AddWithValue("$clssNo", record.ClssNo);
+        command.Parameters.AddWithValue("$department", record.Department);
+        command.Parameters.AddWithValue("$class", record.Class);
+        command.Parameters.AddWithValue("$prodGroup", record.ProdGroup);
+        command.Parameters.AddWithValue("$isActive", record.IsActive ? 1 : 0);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task RefreshProductSubclassCatalogAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using (var deleteSubclasses = connection.CreateCommand())
+        {
+            deleteSubclasses.Transaction = transaction;
+            deleteSubclasses.CommandText = "delete from product_subclass_catalog;";
+            await deleteSubclasses.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var deleteHierarchy = connection.CreateCommand())
+        {
+            deleteHierarchy.Transaction = transaction;
+            deleteHierarchy.CommandText = "delete from product_hierarchy_catalog;";
+            await deleteHierarchy.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var profiles = await LoadProductProfilesAsync(connection, transaction, null, int.MaxValue, 0, cancellationToken);
+        foreach (var hierarchyRow in profiles
+                     .Select(profile => new ProductHierarchyCatalogRecord(profile.DptNo, profile.ClssNo, profile.Department, profile.Class, profile.ProdGroup ?? "UNASSIGNED", profile.IsActive))
+                     .Distinct())
+        {
+            await UpsertProductHierarchyCatalogInternalAsync(connection, transaction, hierarchyRow, cancellationToken);
+        }
+
+        foreach (var subclassRow in profiles
+                     .Select(profile => new ProductSubclassCatalogRecord(profile.Department, profile.Class, profile.Subclass, profile.IsActive))
+                     .Distinct())
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                insert into product_subclass_catalog (department, class, subclass, is_active)
+                values ($department, $class, $subclass, $isActive)
+                on conflict (department, class, subclass)
+                do update set is_active = excluded.is_active;
+                """;
+            command.Parameters.AddWithValue("$department", subclassRow.Department);
+            command.Parameters.AddWithValue("$class", subclassRow.Class);
+            command.Parameters.AddWithValue("$subclass", subclassRow.Subclass);
+            command.Parameters.AddWithValue("$isActive", subclassRow.IsActive ? 1 : 0);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+    }
+
+    private static async Task RebuildPlanningFromMasterDataInternalAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long scenarioVersionId,
+        int fiscalYear,
+        CancellationToken cancellationToken)
+    {
+        var stores = (await LoadStoreMetadataAsync(connection, transaction, cancellationToken)).Values
+            .OrderBy(store => store.StoreLabel, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var hierarchyRows = (await LoadProductHierarchyCatalogAsync(connection, transaction, cancellationToken))
+            .Where(row => row.IsActive)
+            .OrderBy(row => row.Department, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => row.Class, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var subclassRows = (await LoadProductSubclassCatalogAsync(connection, transaction, cancellationToken))
+            .Where(row => row.IsActive)
+            .OrderBy(row => row.Department, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => row.Class, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => row.Subclass, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        foreach (var tableName in new[] { "planning_cells", "product_nodes", "hierarchy_subclasses_v2", "hierarchy_classes_v2", "hierarchy_departments_v2", "hierarchy_subcategories", "hierarchy_categories", "time_periods" })
+        {
+            await using var deleteCommand = connection.CreateCommand();
+            deleteCommand.Transaction = transaction;
+            deleteCommand.CommandText = $"delete from {tableName};";
+            await deleteCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        foreach (var period in BuildYearPeriods(fiscalYear).Values.OrderBy(period => period.SortOrder))
+        {
+            await using var insertPeriod = connection.CreateCommand();
+            insertPeriod.Transaction = transaction;
+            insertPeriod.CommandText = """
+                insert into time_periods (time_period_id, parent_time_period_id, label, grain, sort_order)
+                values ($timePeriodId, $parentTimePeriodId, $label, $grain, $sortOrder);
+                """;
+            insertPeriod.Parameters.AddWithValue("$timePeriodId", period.TimePeriodId);
+            insertPeriod.Parameters.AddWithValue("$parentTimePeriodId", (object?)period.ParentTimePeriodId ?? DBNull.Value);
+            insertPeriod.Parameters.AddWithValue("$label", period.Label);
+            insertPeriod.Parameters.AddWithValue("$grain", period.Grain);
+            insertPeriod.Parameters.AddWithValue("$sortOrder", period.SortOrder);
+            await insertPeriod.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var timePeriods = await LoadTimePeriodsAsync(connection, transaction, cancellationToken);
+        var nextProductNodeId = stores.Count == 0 ? 100 : stores.Max(store => store.StoreId);
+        var classLookup = hierarchyRows.GroupBy(row => row.Department, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
+        var subclassLookup = subclassRows.GroupBy(row => (row.Department, row.Class))
+            .ToDictionary(group => group.Key, group => group.ToList());
+
+        foreach (var store in stores)
+        {
+            var rootNode = new ProductNode(
+                store.StoreId,
+                store.StoreId,
+                null,
+                store.StoreLabel,
+                0,
+                [store.StoreLabel],
+                false,
+                "store",
+                store.LifecycleState,
+                store.RampProfileCode,
+                store.EffectiveFromTimePeriodId,
+                store.EffectiveToTimePeriodId);
+            await InsertProductNodeAsync(connection, transaction, rootNode, cancellationToken);
+            await InitializeCellsForNodeAsync(connection, transaction, scenarioVersionId, rootNode, SupportedMeasureIds, timePeriods.Values, cancellationToken);
+
+            foreach (var hierarchyGroup in classLookup)
+            {
+                var departmentLabel = hierarchyGroup.Key;
+                var departmentNode = new ProductNode(
+                    ++nextProductNodeId,
+                    store.StoreId,
+                    rootNode.ProductNodeId,
+                    departmentLabel,
+                    1,
+                    [store.StoreLabel, departmentLabel],
+                    false,
+                    "department",
+                    "active",
+                    null,
+                    null,
+                    null);
+                await InsertProductNodeAsync(connection, transaction, departmentNode, cancellationToken);
+                await InitializeCellsForNodeAsync(connection, transaction, scenarioVersionId, departmentNode, SupportedMeasureIds, timePeriods.Values, cancellationToken);
+
+                foreach (var classRow in hierarchyGroup.Value)
+                {
+                    var classNode = new ProductNode(
+                        ++nextProductNodeId,
+                        store.StoreId,
+                        departmentNode.ProductNodeId,
+                        classRow.Class,
+                        2,
+                        [store.StoreLabel, departmentLabel, classRow.Class],
+                        false,
+                        "class",
+                        "active",
+                        null,
+                        null,
+                        null);
+                    await InsertProductNodeAsync(connection, transaction, classNode, cancellationToken);
+                    await InitializeCellsForNodeAsync(connection, transaction, scenarioVersionId, classNode, SupportedMeasureIds, timePeriods.Values, cancellationToken);
+
+                    foreach (var subclassRow in subclassLookup.GetValueOrDefault((departmentLabel, classRow.Class)) ?? [])
+                    {
+                        var subclassNode = new ProductNode(
+                            ++nextProductNodeId,
+                            store.StoreId,
+                            classNode.ProductNodeId,
+                            subclassRow.Subclass,
+                            3,
+                            [store.StoreLabel, departmentLabel, classRow.Class, subclassRow.Subclass],
+                            true,
+                            "subclass",
+                            "active",
+                            null,
+                            null,
+                            null);
+                        await InsertProductNodeAsync(connection, transaction, subclassNode, cancellationToken);
+                        await InitializeCellsForNodeAsync(connection, transaction, scenarioVersionId, subclassNode, SupportedMeasureIds, timePeriods.Values, cancellationToken);
+                    }
+                }
+            }
+        }
+
+        var productNodes = await LoadProductNodesAsync(connection, transaction, cancellationToken);
+        var profiles = await LoadProductProfilesAsync(connection, transaction, null, int.MaxValue, 0, cancellationToken);
+        var subclassAverages = profiles
+            .Where(profile => profile.IsActive)
+            .GroupBy(profile => (profile.Department, profile.Class, profile.Subclass))
+            .ToDictionary(
+                group => group.Key,
+                group => new
+                {
+                    Price = PlanningMath.NormalizeAsp(group.Average(item => item.Price)),
+                    Cost = PlanningMath.NormalizeUnitCost(group.Average(item => item.Cost))
+                });
+
+        var cells = await LoadCellsAsync(connection, transaction, cancellationToken);
+        var workingCells = cells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
+        var monthPeriods = timePeriods.Values.Where(period => string.Equals(period.Grain, "month", StringComparison.OrdinalIgnoreCase)).OrderBy(period => period.SortOrder).ToList();
+
+        foreach (var leafNode in productNodes.Values.Where(node => node.IsLeaf))
+        {
+            var subclassKey = (Department: leafNode.Path[1], Class: leafNode.Path[2], Subclass: leafNode.Path[3]);
+            var averages = subclassAverages.GetValueOrDefault(subclassKey) ?? new { Price = 10.00m, Cost = 6.00m };
+
+            foreach (var period in monthPeriods)
+            {
+                var quantity = BuildMockQuantity(leafNode.StoreId, subclassKey.Department, subclassKey.Class, subclassKey.Subclass, period.TimePeriodId);
+                var revenue = PlanningMath.CalculateRevenue(quantity, averages.Price);
+                var totalCosts = PlanningMath.CalculateTotalCosts(quantity, averages.Cost);
+                var grossProfit = PlanningMath.CalculateGrossProfit(quantity, averages.Price, averages.Cost);
+                var grossProfitPercent = PlanningMath.CalculateGrossProfitPercent(averages.Price, averages.Cost);
+
+                SetSeedInputValue(workingCells[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SoldQuantity, leafNode.StoreId, leafNode.ProductNodeId, period.TimePeriodId).Key], quantity);
+                SetSeedInputValue(workingCells[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.AverageSellingPrice, leafNode.StoreId, leafNode.ProductNodeId, period.TimePeriodId).Key], averages.Price);
+                SetSeedInputValue(workingCells[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.UnitCost, leafNode.StoreId, leafNode.ProductNodeId, period.TimePeriodId).Key], averages.Cost);
+                SetSeedInputValue(workingCells[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SalesRevenue, leafNode.StoreId, leafNode.ProductNodeId, period.TimePeriodId).Key], revenue);
+                SetSeedCalculatedValue(workingCells[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.TotalCosts, leafNode.StoreId, leafNode.ProductNodeId, period.TimePeriodId).Key], totalCosts, true);
+                SetSeedCalculatedValue(workingCells[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.GrossProfit, leafNode.StoreId, leafNode.ProductNodeId, period.TimePeriodId).Key], grossProfit, true);
+                SetSeedCalculatedValue(workingCells[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.GrossProfitPercent, leafNode.StoreId, leafNode.ProductNodeId, period.TimePeriodId).Key], grossProfitPercent, true);
+            }
+        }
+
+        RecalculateSeedTotals(scenarioVersionId, PlanningMeasures.SalesRevenue, workingCells, productNodes, timePeriods);
+        RecalculateSeedTotals(scenarioVersionId, PlanningMeasures.SoldQuantity, workingCells, productNodes, timePeriods);
+        RecalculateSeedTotals(scenarioVersionId, PlanningMeasures.TotalCosts, workingCells, productNodes, timePeriods);
+        RecalculateSeedTotals(scenarioVersionId, PlanningMeasures.GrossProfit, workingCells, productNodes, timePeriods);
+        RecalculateSeedDerivedRateTotals(scenarioVersionId, PlanningMeasures.AverageSellingPrice, workingCells, productNodes, timePeriods);
+        RecalculateSeedDerivedRateTotals(scenarioVersionId, PlanningMeasures.UnitCost, workingCells, productNodes, timePeriods);
+        RecalculateSeedDerivedRateTotals(scenarioVersionId, PlanningMeasures.GrossProfitPercent, workingCells, productNodes, timePeriods);
+
+        await RebuildHierarchyMappingsAsync(connection, transaction, cancellationToken);
+        foreach (var cell in workingCells.Values)
+        {
+            await UpsertCellAsync(connection, transaction, cell, cancellationToken);
+        }
+    }
+
+    private static decimal BuildMockQuantity(long storeId, string department, string classLabel, string subclass, long timePeriodId)
+    {
+        var seed = $"{storeId}|{department}|{classLabel}|{subclass}|{timePeriodId}";
+        unchecked
+        {
+            var hash = 23;
+            foreach (var character in seed)
+            {
+                hash = (hash * 31) + character;
+            }
+
+            var index = Math.Abs(hash % 5);
+            return (index + 1) * 100m;
+        }
+    }
+
+    private static async Task EnsureProductProfileSeedAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var countCommand = connection.CreateCommand();
+        countCommand.Transaction = transaction;
+        countCommand.CommandText = "select count(*) from product_profiles;";
+        var existingCount = Convert.ToInt32(await countCommand.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
+        if (existingCount > 0)
+        {
+            return;
+        }
+
+        var productNodes = await LoadProductNodesAsync(connection, transaction, cancellationToken);
+        var classCodes = new Dictionary<(string Department, string Class), (string DptNo, string ClssNo)>();
+        var departmentNumbers = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var leafNode in productNodes.Values.Where(node => node.IsLeaf).OrderBy(node => string.Join(">", node.Path), StringComparer.OrdinalIgnoreCase))
+        {
+            var department = leafNode.Path[1];
+            var classLabel = leafNode.Path[2];
+            if (!departmentNumbers.ContainsKey(department))
+            {
+                departmentNumbers[department] = departmentNumbers.Count + 10;
+            }
+
+            if (!classCodes.ContainsKey((department, classLabel)))
+            {
+                var dptNo = departmentNumbers[department].ToString("000", CultureInfo.InvariantCulture);
+                var clssNo = $"{departmentNumbers[department]}{classCodes.Count(code => code.Key.Department.Equals(department, StringComparison.OrdinalIgnoreCase)) + 1:00}";
+                classCodes[(department, classLabel)] = (dptNo, clssNo);
+            }
+
+            var codes = classCodes[(department, classLabel)];
+            var profile = new ProductProfileMetadata(
+                $"SKU-{leafNode.ProductNodeId}",
+                leafNode.Label,
+                null,
+                10.00m + (leafNode.ProductNodeId % 5),
+                6.00m + (leafNode.ProductNodeId % 3),
+                codes.DptNo,
+                codes.ClssNo,
+                null,
+                department,
+                classLabel,
+                null,
+                null,
+                null,
+                leafNode.Label,
+                "UNASSIGNED",
+                null,
+                "1",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                true);
+            await UpsertProductProfileInternalAsync(connection, transaction, profile, cancellationToken);
+            await UpsertDerivedSubclassCatalogAsync(connection, transaction, profile, cancellationToken);
+        }
+    }
+
+    private static async Task EnsureProductProfileOptionSeedAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using (var deleteCommand = connection.CreateCommand())
+        {
+            deleteCommand.Transaction = transaction;
+            deleteCommand.CommandText = "delete from product_profile_options;";
+            await deleteCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var profiles = await LoadProductProfilesAsync(connection, transaction, null, int.MaxValue, 0, cancellationToken);
+        foreach (var profile in profiles)
+        {
+            await UpsertProductProfileOptionSeedsAsync(connection, transaction, profile, cancellationToken);
+        }
     }
 
     private static async Task EnsureQuantitySeedAsync(

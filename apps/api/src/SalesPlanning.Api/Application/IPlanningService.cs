@@ -29,6 +29,18 @@ public interface IPlanningService
     Task<StoreProfileOptionsResponse> DeleteStoreProfileOptionAsync(DeleteStoreProfileOptionRequest request, CancellationToken cancellationToken);
     Task<StoreProfileImportResponse> ImportStoreProfilesAsync(Stream workbookStream, string fileName, CancellationToken cancellationToken);
     Task<(byte[] Content, string FileName)> ExportStoreProfilesAsync(CancellationToken cancellationToken);
+    Task<ProductProfileResponse> GetProductProfilesAsync(string? searchTerm, int pageNumber, int pageSize, CancellationToken cancellationToken);
+    Task<ProductProfileDto> UpsertProductProfileAsync(UpsertProductProfileRequest request, CancellationToken cancellationToken);
+    Task DeleteProductProfileAsync(DeleteProductProfileRequest request, CancellationToken cancellationToken);
+    Task<ProductProfileDto> InactivateProductProfileAsync(InactivateProductProfileRequest request, CancellationToken cancellationToken);
+    Task<ProductProfileOptionsResponse> GetProductProfileOptionsAsync(CancellationToken cancellationToken);
+    Task<ProductProfileOptionsResponse> UpsertProductProfileOptionAsync(UpsertProductProfileOptionRequest request, CancellationToken cancellationToken);
+    Task<ProductProfileOptionsResponse> DeleteProductProfileOptionAsync(DeleteProductProfileOptionRequest request, CancellationToken cancellationToken);
+    Task<ProductHierarchyResponse> GetProductHierarchyCatalogAsync(CancellationToken cancellationToken);
+    Task<ProductHierarchyResponse> UpsertProductHierarchyCatalogAsync(UpsertProductHierarchyRequest request, CancellationToken cancellationToken);
+    Task<ProductHierarchyResponse> DeleteProductHierarchyCatalogAsync(DeleteProductHierarchyRequest request, CancellationToken cancellationToken);
+    Task<ProductProfileImportResponse> ImportProductProfilesAsync(Stream workbookStream, string fileName, CancellationToken cancellationToken);
+    Task<(byte[] Content, string FileName)> ExportProductProfilesAsync(CancellationToken cancellationToken);
     Task<ImportWorkbookResponse> ImportWorkbookAsync(long scenarioVersionId, Stream workbookStream, string fileName, string userId, CancellationToken cancellationToken);
     Task<(byte[] Content, string FileName)> ExportWorkbookAsync(long scenarioVersionId, CancellationToken cancellationToken);
     Task ResetAsync(CancellationToken cancellationToken);

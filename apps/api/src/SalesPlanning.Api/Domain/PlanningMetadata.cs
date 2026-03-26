@@ -45,6 +45,53 @@ public sealed record StoreProfileOptionValue(
     string Value,
     bool IsActive);
 
+public sealed record ProductProfileMetadata(
+    string SkuVariant,
+    string Description,
+    string? Description2,
+    decimal Price,
+    decimal Cost,
+    string DptNo,
+    string ClssNo,
+    string? BrandNo,
+    string Department,
+    string Class,
+    string? Brand,
+    string? RevDepartment,
+    string? RevClass,
+    string Subclass,
+    string? ProdGroup,
+    string? ProdType,
+    string? ActiveFlag,
+    string? OrderFlag,
+    string? BrandType,
+    string? LaunchMonth,
+    string? Gender,
+    string? Size,
+    string? Collection,
+    string? Promo,
+    string? RamadhanPromo,
+    bool IsActive);
+
+public sealed record ProductProfileOptionValue(
+    string FieldName,
+    string Value,
+    bool IsActive);
+
+public sealed record ProductHierarchyCatalogRecord(
+    string DptNo,
+    string ClssNo,
+    string Department,
+    string Class,
+    string ProdGroup,
+    bool IsActive);
+
+public sealed record ProductSubclassCatalogRecord(
+    string Department,
+    string Class,
+    string Subclass,
+    bool IsActive);
+
 public sealed record TimePeriodNode(long TimePeriodId, long? ParentTimePeriodId, string Label, string Grain, int SortOrder);
 
 public sealed record PlanningMetadataSnapshot(

@@ -19,6 +19,16 @@ public sealed class PlanningService : IPlanningService
         "SSSG", "Sales Type", "Status", "Storey", "Building Status", "GTA", "NTA", "RSOM", "DM", "Rental",
         "Lifecycle State", "Ramp Profile", "Active"
     ];
+    private static readonly string[] ProductProfileImportHeaders =
+    [
+        "SKU Variant", "Description", "Description2", "Price", "Cost", "DptNo", "ClssNo", "BrandNo",
+        "Department", "Class", "Brand", "Rev. Dept", "Rev. Class", "Subclass", "Prod Group", "Prod Type",
+        "Active Flag", "Order Flag", "Brand Type", "Launch Month", "Gender", "Size", "Collection", "Promo", "Ramadhan Promo"
+    ];
+    private static readonly string[] ProductHierarchyImportHeaders =
+    [
+        "DptNo", "ClssNo", "Dept", "Class", "Prod Group"
+    ];
     private const string RemarkHeader = "Remark";
     private const string ExpectedValueHeader = "Expected Value";
     private readonly IPlanningRepository _repository;
@@ -524,6 +534,238 @@ public sealed class PlanningService : IPlanningService
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
         return (stream.ToArray(), "store-profile-export.xlsx");
+    }
+
+    public async Task<ProductProfileResponse> GetProductProfilesAsync(string? searchTerm, int pageNumber, int pageSize, CancellationToken cancellationToken)
+    {
+        var (profiles, totalCount) = await _repository.GetProductProfilesAsync(searchTerm, pageNumber, pageSize, cancellationToken);
+        return new ProductProfileResponse(
+            profiles.Select(ToProductProfileDto).ToList(),
+            totalCount,
+            Math.Max(1, pageNumber),
+            Math.Clamp(pageSize, 25, 500),
+            string.IsNullOrWhiteSpace(searchTerm) ? null : searchTerm.Trim());
+    }
+
+    public async Task<ProductProfileDto> UpsertProductProfileAsync(UpsertProductProfileRequest request, CancellationToken cancellationToken)
+    {
+        var upserted = await _repository.UpsertProductProfileAsync(NormalizeProductProfile(request), cancellationToken);
+        return ToProductProfileDto(upserted);
+    }
+
+    public Task DeleteProductProfileAsync(DeleteProductProfileRequest request, CancellationToken cancellationToken)
+    {
+        return _repository.DeleteProductProfileAsync(request.SkuVariant, cancellationToken);
+    }
+
+    public async Task<ProductProfileDto> InactivateProductProfileAsync(InactivateProductProfileRequest request, CancellationToken cancellationToken)
+    {
+        await _repository.InactivateProductProfileAsync(request.SkuVariant, cancellationToken);
+        var existing = await LoadAllProductProfilesAsync(cancellationToken);
+        var profile = existing.Single(item => string.Equals(item.SkuVariant, request.SkuVariant, StringComparison.OrdinalIgnoreCase));
+        return ToProductProfileDto(profile);
+    }
+
+    public async Task<ProductProfileOptionsResponse> GetProductProfileOptionsAsync(CancellationToken cancellationToken)
+    {
+        return new ProductProfileOptionsResponse((await _repository.GetProductProfileOptionsAsync(cancellationToken))
+            .OrderBy(option => option.FieldName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.Value, StringComparer.OrdinalIgnoreCase)
+            .Select(option => new ProductProfileOptionDto(option.FieldName, option.Value, option.IsActive))
+            .ToList());
+    }
+
+    public async Task<ProductProfileOptionsResponse> UpsertProductProfileOptionAsync(UpsertProductProfileOptionRequest request, CancellationToken cancellationToken)
+    {
+        await _repository.UpsertProductProfileOptionAsync(request.FieldName, request.Value, request.IsActive, cancellationToken);
+        return await GetProductProfileOptionsAsync(cancellationToken);
+    }
+
+    public async Task<ProductProfileOptionsResponse> DeleteProductProfileOptionAsync(DeleteProductProfileOptionRequest request, CancellationToken cancellationToken)
+    {
+        await _repository.DeleteProductProfileOptionAsync(request.FieldName, request.Value, cancellationToken);
+        return await GetProductProfileOptionsAsync(cancellationToken);
+    }
+
+    public async Task<ProductHierarchyResponse> GetProductHierarchyCatalogAsync(CancellationToken cancellationToken)
+    {
+        var hierarchy = await _repository.GetProductHierarchyCatalogAsync(cancellationToken);
+        var subclasses = await _repository.GetProductSubclassCatalogAsync(cancellationToken);
+        return new ProductHierarchyResponse(
+            hierarchy.OrderBy(item => item.Department, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(item => item.Class, StringComparer.OrdinalIgnoreCase)
+                .Select(item => new ProductHierarchyCatalogDto(item.DptNo, item.ClssNo, item.Department, item.Class, item.ProdGroup, item.IsActive))
+                .ToList(),
+            subclasses.OrderBy(item => item.Department, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(item => item.Class, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(item => item.Subclass, StringComparer.OrdinalIgnoreCase)
+                .Select(item => new ProductHierarchySubclassDto(item.Department, item.Class, item.Subclass, item.IsActive))
+                .ToList());
+    }
+
+    public async Task<ProductHierarchyResponse> UpsertProductHierarchyCatalogAsync(UpsertProductHierarchyRequest request, CancellationToken cancellationToken)
+    {
+        await _repository.UpsertProductHierarchyCatalogAsync(
+            NormalizeProductHierarchy(new ProductHierarchyCatalogRecord(request.DptNo, request.ClssNo, request.Department, request.Class, request.ProdGroup, request.IsActive)),
+            cancellationToken);
+        return await GetProductHierarchyCatalogAsync(cancellationToken);
+    }
+
+    public async Task<ProductHierarchyResponse> DeleteProductHierarchyCatalogAsync(DeleteProductHierarchyRequest request, CancellationToken cancellationToken)
+    {
+        await _repository.DeleteProductHierarchyCatalogAsync(request.DptNo, request.ClssNo, cancellationToken);
+        return await GetProductHierarchyCatalogAsync(cancellationToken);
+    }
+
+    public async Task<ProductProfileImportResponse> ImportProductProfilesAsync(Stream workbookStream, string fileName, CancellationToken cancellationToken)
+    {
+        return await _repository.ExecuteAtomicAsync(async ct =>
+        {
+            if (!fileName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Only .xlsx workbook uploads are supported for Product Profile maintenance.");
+            }
+
+            using var workbook = new XLWorkbook(workbookStream);
+            var sheet1 = workbook.Worksheets.FirstOrDefault(worksheet => string.Equals(worksheet.Name, "Sheet1", StringComparison.OrdinalIgnoreCase))
+                ?? workbook.Worksheet(1);
+            var sheet2 = workbook.Worksheets.FirstOrDefault(worksheet => string.Equals(worksheet.Name, "Sheet2", StringComparison.OrdinalIgnoreCase))
+                ?? (workbook.Worksheets.Count >= 2 ? workbook.Worksheet(2) : null);
+
+            var sheet1HeaderMap = GetHeaderMap(sheet1);
+            ValidateProductProfileHeaders(sheet1HeaderMap);
+            if (sheet2 is null)
+            {
+                throw new InvalidOperationException("The uploaded product profile workbook must include Sheet2 with the Department / Class hierarchy.");
+            }
+
+            var sheet2HeaderMap = GetHeaderMap(sheet2);
+            ValidateProductHierarchyHeaders(sheet2HeaderMap);
+
+            var existingProfiles = (await LoadAllProductProfilesAsync(ct))
+                .ToDictionary(profile => profile.SkuVariant, StringComparer.OrdinalIgnoreCase);
+
+            var hierarchyRows = new Dictionary<string, ProductHierarchyCatalogRecord>(StringComparer.OrdinalIgnoreCase);
+            foreach (var row in sheet2.RowsUsed().Skip(1))
+            {
+                if (row.CellsUsed().All(cell => cell.IsEmpty()))
+                {
+                    continue;
+                }
+
+                var hierarchyRow = ReadProductHierarchyImportRow(row, sheet2HeaderMap);
+                if (!TryNormalizeProductHierarchyImportRow(hierarchyRow, out var normalizedHierarchy, out _))
+                {
+                    continue;
+                }
+
+                hierarchyRows[$"{normalizedHierarchy.DptNo}|{normalizedHierarchy.ClssNo}"] = normalizedHierarchy;
+            }
+
+            using var exceptionWorkbook = new XLWorkbook();
+            var exceptionSheet = exceptionWorkbook.AddWorksheet(sheet1.Name);
+            WriteProductProfileImportHeader(exceptionSheet, includeRemark: true);
+            var exceptionRowIndex = 2;
+            var rowsProcessed = 0;
+            var productsAdded = 0;
+            var productsUpdated = 0;
+            var profiles = new List<ProductProfileMetadata>();
+
+            foreach (var row in sheet1.RowsUsed().Skip(1))
+            {
+                if (row.CellsUsed().All(cell => cell.IsEmpty()))
+                {
+                    continue;
+                }
+
+                rowsProcessed += 1;
+                var importRow = ReadProductProfileImportRow(row, sheet1HeaderMap);
+                if (!TryNormalizeProductProfileImportRow(importRow, out var normalizedProfile, out var error))
+                {
+                    WriteProductProfileExceptionRow(exceptionSheet, exceptionRowIndex++, importRow, error);
+                    continue;
+                }
+
+                if (!hierarchyRows.ContainsKey($"{normalizedProfile.DptNo}|{normalizedProfile.ClssNo}"))
+                {
+                    hierarchyRows[$"{normalizedProfile.DptNo}|{normalizedProfile.ClssNo}"] = new ProductHierarchyCatalogRecord(
+                        normalizedProfile.DptNo,
+                        normalizedProfile.ClssNo,
+                        normalizedProfile.Department,
+                        normalizedProfile.Class,
+                        normalizedProfile.ProdGroup ?? "UNASSIGNED",
+                        true);
+                }
+
+                if (existingProfiles.ContainsKey(normalizedProfile.SkuVariant))
+                {
+                    productsUpdated += 1;
+                }
+                else
+                {
+                    productsAdded += 1;
+                }
+
+                profiles.Add(normalizedProfile);
+            }
+
+            await _repository.ReplaceProductMasterDataAsync(
+                hierarchyRows.Values.OrderBy(item => item.Department, StringComparer.OrdinalIgnoreCase).ThenBy(item => item.Class, StringComparer.OrdinalIgnoreCase).ToList(),
+                profiles,
+                ct);
+
+            string? exceptionWorkbookBase64 = null;
+            string? exceptionFileName = null;
+            if (exceptionRowIndex > 2)
+            {
+                using var exceptionStream = new MemoryStream();
+                exceptionWorkbook.SaveAs(exceptionStream);
+                exceptionWorkbookBase64 = Convert.ToBase64String(exceptionStream.ToArray());
+                exceptionFileName = $"{Path.GetFileNameWithoutExtension(fileName)}-exceptions.xlsx";
+            }
+
+            return new ProductProfileImportResponse(
+                rowsProcessed,
+                productsAdded,
+                productsUpdated,
+                hierarchyRows.Count,
+                "applied",
+                exceptionFileName,
+                exceptionWorkbookBase64);
+        }, cancellationToken);
+    }
+
+    public async Task<(byte[] Content, string FileName)> ExportProductProfilesAsync(CancellationToken cancellationToken)
+    {
+        var profiles = await LoadAllProductProfilesAsync(cancellationToken);
+        var hierarchyRows = await _repository.GetProductHierarchyCatalogAsync(cancellationToken);
+        using var workbook = new XLWorkbook();
+
+        var profileSheet = workbook.AddWorksheet("Sheet1");
+        WriteProductProfileImportHeader(profileSheet);
+        var rowIndex = 2;
+        foreach (var profile in profiles.OrderBy(item => item.Department, StringComparer.OrdinalIgnoreCase)
+                     .ThenBy(item => item.Class, StringComparer.OrdinalIgnoreCase)
+                     .ThenBy(item => item.Subclass, StringComparer.OrdinalIgnoreCase)
+                     .ThenBy(item => item.Description, StringComparer.OrdinalIgnoreCase)
+                     .ThenBy(item => item.SkuVariant, StringComparer.OrdinalIgnoreCase))
+        {
+            WriteProductProfileRow(profileSheet, rowIndex++, ToProductProfileDto(profile));
+        }
+
+        var hierarchySheet = workbook.AddWorksheet("Sheet2");
+        WriteProductHierarchyImportHeader(hierarchySheet);
+        rowIndex = 2;
+        foreach (var hierarchyRow in hierarchyRows.OrderBy(item => item.Department, StringComparer.OrdinalIgnoreCase).ThenBy(item => item.Class, StringComparer.OrdinalIgnoreCase))
+        {
+            WriteProductHierarchyRow(hierarchySheet, rowIndex++, hierarchyRow);
+        }
+
+        profileSheet.Columns().AdjustToContents();
+        hierarchySheet.Columns().AdjustToContents();
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        return (stream.ToArray(), "product-profile-export.xlsx");
     }
 
     public async Task<ImportWorkbookResponse> ImportWorkbookAsync(long scenarioVersionId, Stream workbookStream, string fileName, string userId, CancellationToken cancellationToken)
@@ -1923,6 +2165,345 @@ public sealed class PlanningService : IPlanningService
         sheet.Row(rowIndex).Style.Fill.BackgroundColor = XLColor.LightPink;
     }
 
+    private async Task<IReadOnlyList<ProductProfileMetadata>> LoadAllProductProfilesAsync(CancellationToken cancellationToken)
+    {
+        const int pageSize = 500;
+        var page = 1;
+        var items = new List<ProductProfileMetadata>();
+        while (true)
+        {
+            var (profiles, totalCount) = await _repository.GetProductProfilesAsync(null, page, pageSize, cancellationToken);
+            items.AddRange(profiles);
+            if (items.Count >= totalCount || profiles.Count == 0)
+            {
+                break;
+            }
+
+            page += 1;
+        }
+
+        return items;
+    }
+
+    private static ProductProfileDto ToProductProfileDto(ProductProfileMetadata profile) => new(
+        profile.SkuVariant,
+        profile.Description,
+        profile.Description2,
+        profile.Price,
+        profile.Cost,
+        profile.DptNo,
+        profile.ClssNo,
+        profile.BrandNo,
+        profile.Department,
+        profile.Class,
+        profile.Brand,
+        profile.RevDepartment,
+        profile.RevClass,
+        profile.Subclass,
+        profile.ProdGroup,
+        profile.ProdType,
+        profile.ActiveFlag,
+        profile.OrderFlag,
+        profile.BrandType,
+        profile.LaunchMonth,
+        profile.Gender,
+        profile.Size,
+        profile.Collection,
+        profile.Promo,
+        profile.RamadhanPromo,
+        profile.IsActive);
+
+    private static ProductProfileMetadata NormalizeProductProfile(UpsertProductProfileRequest request) => new(
+        NormalizeRequiredText(request.SkuVariant, null, "SKU Variant"),
+        NormalizeRequiredText(request.Description, request.SkuVariant, "Description"),
+        NormalizeOptionalText(request.Description2),
+        PlanningMath.NormalizeAsp(request.Price),
+        PlanningMath.NormalizeUnitCost(request.Cost),
+        NormalizeRequiredText(request.DptNo, null, "DptNo"),
+        NormalizeRequiredText(request.ClssNo, null, "ClssNo"),
+        NormalizeOptionalText(request.BrandNo),
+        NormalizeRequiredText(request.Department, null, "Department"),
+        NormalizeRequiredText(request.Class, null, "Class"),
+        NormalizeOptionalText(request.Brand),
+        NormalizeOptionalText(request.RevDepartment),
+        NormalizeOptionalText(request.RevClass),
+        NormalizeRequiredText(request.Subclass, null, "Subclass"),
+        NormalizeOptionalText(request.ProdGroup),
+        NormalizeOptionalText(request.ProdType),
+        NormalizeOptionalText(request.ActiveFlag),
+        NormalizeOptionalText(request.OrderFlag),
+        NormalizeOptionalText(request.BrandType),
+        NormalizeOptionalText(request.LaunchMonth),
+        NormalizeOptionalText(request.Gender),
+        NormalizeOptionalText(request.Size),
+        NormalizeOptionalText(request.Collection),
+        NormalizeOptionalText(request.Promo),
+        NormalizeOptionalText(request.RamadhanPromo),
+        request.IsActive);
+
+    private static ProductHierarchyCatalogRecord NormalizeProductHierarchy(ProductHierarchyCatalogRecord record) => new(
+        NormalizeRequiredText(record.DptNo, null, "DptNo"),
+        NormalizeRequiredText(record.ClssNo, null, "ClssNo"),
+        NormalizeRequiredText(record.Department, null, "Department"),
+        NormalizeRequiredText(record.Class, null, "Class"),
+        NormalizeRequiredText(record.ProdGroup, "UNASSIGNED", "Prod Group"),
+        record.IsActive);
+
+    private static void ValidateProductProfileHeaders(IReadOnlyDictionary<string, int> headerMap)
+    {
+        foreach (var header in ProductProfileImportHeaders)
+        {
+            if (!headerMap.ContainsKey(header))
+            {
+                throw new InvalidOperationException($"The product profile workbook is missing the required '{header}' column.");
+            }
+        }
+    }
+
+    private static void ValidateProductHierarchyHeaders(IReadOnlyDictionary<string, int> headerMap)
+    {
+        foreach (var header in ProductHierarchyImportHeaders)
+        {
+            if (!headerMap.ContainsKey(header))
+            {
+                throw new InvalidOperationException($"Sheet2 is missing the required '{header}' column.");
+            }
+        }
+    }
+
+    private static ImportedProductProfileRow ReadProductProfileImportRow(IXLRow row, IReadOnlyDictionary<string, int> headerMap)
+    {
+        string GetValue(string header) => headerMap.TryGetValue(header, out var index) ? row.Cell(index).GetFormattedString().Trim() : string.Empty;
+        return new ImportedProductProfileRow(
+            GetValue("SKU Variant"),
+            GetValue("Description"),
+            GetValue("Description2"),
+            GetValue("Price"),
+            GetValue("Cost"),
+            GetValue("DptNo"),
+            GetValue("ClssNo"),
+            GetValue("BrandNo"),
+            GetValue("Department"),
+            GetValue("Class"),
+            GetValue("Brand"),
+            GetValue("Rev. Dept"),
+            GetValue("Rev. Class"),
+            GetValue("Subclass"),
+            GetValue("Prod Group"),
+            GetValue("Prod Type"),
+            GetValue("Active Flag"),
+            GetValue("Order Flag"),
+            GetValue("Brand Type"),
+            GetValue("Launch Month"),
+            GetValue("Gender"),
+            GetValue("Size"),
+            GetValue("Collection"),
+            GetValue("Promo"),
+            GetValue("Ramadhan Promo"),
+            GetValue(RemarkHeader),
+            GetValue(ExpectedValueHeader));
+    }
+
+    private static ImportedProductHierarchyRow ReadProductHierarchyImportRow(IXLRow row, IReadOnlyDictionary<string, int> headerMap)
+    {
+        string GetValue(string header) => headerMap.TryGetValue(header, out var index) ? row.Cell(index).GetFormattedString().Trim() : string.Empty;
+        return new ImportedProductHierarchyRow(
+            GetValue("DptNo"),
+            GetValue("ClssNo"),
+            GetValue("Dept"),
+            GetValue("Class"),
+            GetValue("Prod Group"));
+    }
+
+    private static bool TryNormalizeProductProfileImportRow(ImportedProductProfileRow row, out ProductProfileMetadata normalized, out string error)
+    {
+        normalized = default!;
+        error = string.Empty;
+
+        if (!TryParseRequiredDecimal(row.Price, out var price))
+        {
+            error = "Price must be numeric.";
+            return false;
+        }
+
+        if (!TryParseRequiredDecimal(row.Cost, out var cost))
+        {
+            error = "Cost must be numeric.";
+            return false;
+        }
+
+        var skuVariant = NormalizeOptionalText(row.SkuVariant);
+        var description = NormalizeOptionalText(row.Description);
+        var dptNo = NormalizeOptionalText(row.DptNo);
+        var clssNo = NormalizeOptionalText(row.ClssNo);
+        var department = NormalizeOptionalText(row.Department);
+        var classLabel = NormalizeOptionalText(row.Class);
+        var subclass = NormalizeOptionalText(row.Subclass);
+        if (skuVariant is null)
+        {
+            error = "SKU Variant is required.";
+            return false;
+        }
+
+        if (description is null)
+        {
+            error = "Description is required.";
+            return false;
+        }
+
+        if (dptNo is null || clssNo is null)
+        {
+            error = "DptNo and ClssNo are required.";
+            return false;
+        }
+
+        if (department is null || classLabel is null || subclass is null)
+        {
+            error = "Department, Class, and Subclass are required.";
+            return false;
+        }
+
+        var activeFlag = NormalizeOptionalText(row.ActiveFlag);
+        var isActive = activeFlag is null ||
+            activeFlag.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+            activeFlag.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+            activeFlag.Equals("y", StringComparison.OrdinalIgnoreCase) ||
+            activeFlag.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+            activeFlag.Equals("active", StringComparison.OrdinalIgnoreCase);
+
+        normalized = new ProductProfileMetadata(
+            skuVariant,
+            description,
+            NormalizeOptionalText(row.Description2),
+            PlanningMath.NormalizeAsp(price),
+            PlanningMath.NormalizeUnitCost(cost),
+            dptNo,
+            clssNo,
+            NormalizeOptionalText(row.BrandNo),
+            department,
+            classLabel,
+            NormalizeOptionalText(row.Brand),
+            NormalizeOptionalText(row.RevDepartment),
+            NormalizeOptionalText(row.RevClass),
+            subclass,
+            NormalizeOptionalText(row.ProdGroup),
+            NormalizeOptionalText(row.ProdType),
+            activeFlag,
+            NormalizeOptionalText(row.OrderFlag),
+            NormalizeOptionalText(row.BrandType),
+            NormalizeOptionalText(row.LaunchMonth),
+            NormalizeOptionalText(row.Gender),
+            NormalizeOptionalText(row.Size),
+            NormalizeOptionalText(row.Collection),
+            NormalizeOptionalText(row.Promo),
+            NormalizeOptionalText(row.RamadhanPromo),
+            isActive);
+        return true;
+    }
+
+    private static bool TryNormalizeProductHierarchyImportRow(ImportedProductHierarchyRow row, out ProductHierarchyCatalogRecord normalized, out string error)
+    {
+        normalized = default!;
+        error = string.Empty;
+        var dptNo = NormalizeOptionalText(row.DptNo);
+        var clssNo = NormalizeOptionalText(row.ClssNo);
+        var department = NormalizeOptionalText(row.Department);
+        var classLabel = NormalizeOptionalText(row.Class);
+        var prodGroup = NormalizeOptionalText(row.ProdGroup) ?? "UNASSIGNED";
+        if (dptNo is null || clssNo is null)
+        {
+            error = "DptNo and ClssNo are required.";
+            return false;
+        }
+
+        if (department is null || classLabel is null)
+        {
+            error = "Dept and Class are required.";
+            return false;
+        }
+
+        normalized = new ProductHierarchyCatalogRecord(dptNo, clssNo, department, classLabel, prodGroup, true);
+        return true;
+    }
+
+    private static bool TryParseRequiredDecimal(string rawValue, out decimal value)
+    {
+        return decimal.TryParse(rawValue, NumberStyles.Number, CultureInfo.InvariantCulture, out value);
+    }
+
+    private static void WriteProductProfileImportHeader(IXLWorksheet sheet, bool includeRemark = false)
+    {
+        var headers = includeRemark ? [..ProductProfileImportHeaders, RemarkHeader] : ProductProfileImportHeaders;
+        for (var index = 0; index < headers.Length; index += 1)
+        {
+            sheet.Cell(1, index + 1).Value = headers[index];
+        }
+    }
+
+    private static void WriteProductHierarchyImportHeader(IXLWorksheet sheet)
+    {
+        for (var index = 0; index < ProductHierarchyImportHeaders.Length; index += 1)
+        {
+            sheet.Cell(1, index + 1).Value = ProductHierarchyImportHeaders[index];
+        }
+    }
+
+    private static void WriteProductProfileRow(IXLWorksheet sheet, int rowIndex, ProductProfileDto profile)
+    {
+        sheet.Cell(rowIndex, 1).Value = profile.SkuVariant;
+        sheet.Cell(rowIndex, 2).Value = profile.Description;
+        sheet.Cell(rowIndex, 3).Value = profile.Description2;
+        sheet.Cell(rowIndex, 4).Value = profile.Price;
+        sheet.Cell(rowIndex, 5).Value = profile.Cost;
+        sheet.Cell(rowIndex, 6).Value = profile.DptNo;
+        sheet.Cell(rowIndex, 7).Value = profile.ClssNo;
+        sheet.Cell(rowIndex, 8).Value = profile.BrandNo;
+        sheet.Cell(rowIndex, 9).Value = profile.Department;
+        sheet.Cell(rowIndex, 10).Value = profile.Class;
+        sheet.Cell(rowIndex, 11).Value = profile.Brand;
+        sheet.Cell(rowIndex, 12).Value = profile.RevDepartment;
+        sheet.Cell(rowIndex, 13).Value = profile.RevClass;
+        sheet.Cell(rowIndex, 14).Value = profile.Subclass;
+        sheet.Cell(rowIndex, 15).Value = profile.ProdGroup;
+        sheet.Cell(rowIndex, 16).Value = profile.ProdType;
+        sheet.Cell(rowIndex, 17).Value = profile.ActiveFlag;
+        sheet.Cell(rowIndex, 18).Value = profile.OrderFlag;
+        sheet.Cell(rowIndex, 19).Value = profile.BrandType;
+        sheet.Cell(rowIndex, 20).Value = profile.LaunchMonth;
+        sheet.Cell(rowIndex, 21).Value = profile.Gender;
+        sheet.Cell(rowIndex, 22).Value = profile.Size;
+        sheet.Cell(rowIndex, 23).Value = profile.Collection;
+        sheet.Cell(rowIndex, 24).Value = profile.Promo;
+        sheet.Cell(rowIndex, 25).Value = profile.RamadhanPromo;
+    }
+
+    private static void WriteProductHierarchyRow(IXLWorksheet sheet, int rowIndex, ProductHierarchyCatalogRecord row)
+    {
+        sheet.Cell(rowIndex, 1).Value = row.DptNo;
+        sheet.Cell(rowIndex, 2).Value = row.ClssNo;
+        sheet.Cell(rowIndex, 3).Value = row.Department;
+        sheet.Cell(rowIndex, 4).Value = row.Class;
+        sheet.Cell(rowIndex, 5).Value = row.ProdGroup;
+    }
+
+    private static void WriteProductProfileExceptionRow(IXLWorksheet sheet, int rowIndex, ImportedProductProfileRow row, string error)
+    {
+        var values = new[]
+        {
+            row.SkuVariant, row.Description, row.Description2, row.Price, row.Cost, row.DptNo, row.ClssNo, row.BrandNo,
+            row.Department, row.Class, row.Brand, row.RevDepartment, row.RevClass, row.Subclass, row.ProdGroup, row.ProdType,
+            row.ActiveFlag, row.OrderFlag, row.BrandType, row.LaunchMonth, row.Gender, row.Size, row.Collection, row.Promo, row.RamadhanPromo,
+            error
+        };
+
+        for (var index = 0; index < values.Length; index += 1)
+        {
+            sheet.Cell(rowIndex, index + 1).Value = values[index];
+        }
+
+        sheet.Row(rowIndex).Style.Fill.BackgroundColor = XLColor.LightPink;
+    }
+
     private readonly record struct ImportedPlanRow(
         string SheetName,
         string Store,
@@ -1965,6 +2546,42 @@ public sealed class PlanningService : IPlanningService
         string Active,
         string Remark,
         string ExpectedValue);
+
+    private readonly record struct ImportedProductProfileRow(
+        string SkuVariant,
+        string Description,
+        string Description2,
+        string Price,
+        string Cost,
+        string DptNo,
+        string ClssNo,
+        string BrandNo,
+        string Department,
+        string Class,
+        string Brand,
+        string RevDepartment,
+        string RevClass,
+        string Subclass,
+        string ProdGroup,
+        string ProdType,
+        string ActiveFlag,
+        string OrderFlag,
+        string BrandType,
+        string LaunchMonth,
+        string Gender,
+        string Size,
+        string Collection,
+        string Promo,
+        string RamadhanPromo,
+        string Remark,
+        string ExpectedValue);
+
+    private readonly record struct ImportedProductHierarchyRow(
+        string DptNo,
+        string ClssNo,
+        string Department,
+        string Class,
+        string ProdGroup);
 
     private readonly record struct NormalizedImportRow(
         string Store,

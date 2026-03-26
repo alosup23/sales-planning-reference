@@ -12,6 +12,11 @@ import type {
   ImportWorkbookResponse,
   LockCellsRequest,
   PlanningInsightResponse,
+  ProductHierarchyResponse,
+  ProductProfile,
+  ProductProfileImportResponse,
+  ProductProfileOptionsResponse,
+  ProductProfileResponse,
   SaveScenarioRequest,
   SaveScenarioResponse,
   StoreProfile,
@@ -21,6 +26,8 @@ import type {
   SplashRequest,
   UpsertStoreProfileOptionRequest,
   UpsertStoreProfileRequest,
+  UpsertProductProfileOptionRequest,
+  UpsertProductProfileRequest,
 } from "./types";
 import { sampleGridData } from "./sampleGridData";
 import { authEnabled, getAccessToken } from "./auth";
@@ -286,4 +293,100 @@ export async function downloadStoreProfileExport(): Promise<void> {
 
   const blob = await response.blob();
   triggerDownload(blob, extractFileName(response.headers.get("content-disposition")) ?? "store-profile-export.xlsx");
+}
+
+export async function getProductProfiles(searchTerm?: string, pageNumber = 1, pageSize = 50): Promise<ProductProfileResponse> {
+  const params = new URLSearchParams({
+    pageNumber: String(pageNumber),
+    pageSize: String(pageSize),
+  });
+  if (searchTerm?.trim()) {
+    params.set("searchTerm", searchTerm.trim());
+  }
+
+  return await fetchJson<ProductProfileResponse>(`${API_BASE_URL}/product-profiles?${params.toString()}`);
+}
+
+export async function postProductProfile(request: UpsertProductProfileRequest): Promise<ProductProfile> {
+  return await fetchJson<ProductProfile>(`${API_BASE_URL}/product-profiles`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function postDeleteProductProfile(skuVariant: string): Promise<void> {
+  await fetchJson(`${API_BASE_URL}/product-profiles/delete`, {
+    method: "POST",
+    body: JSON.stringify({ skuVariant }),
+  });
+}
+
+export async function postInactivateProductProfile(skuVariant: string): Promise<ProductProfile> {
+  return await fetchJson<ProductProfile>(`${API_BASE_URL}/product-profiles/inactivate`, {
+    method: "POST",
+    body: JSON.stringify({ skuVariant }),
+  });
+}
+
+export async function getProductProfileOptions(): Promise<ProductProfileOptionsResponse> {
+  return await fetchJson<ProductProfileOptionsResponse>(`${API_BASE_URL}/product-profile-options`);
+}
+
+export async function postProductProfileOption(request: UpsertProductProfileOptionRequest): Promise<ProductProfileOptionsResponse> {
+  return await fetchJson<ProductProfileOptionsResponse>(`${API_BASE_URL}/product-profile-options`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function postDeleteProductProfileOption(fieldName: string, value: string): Promise<ProductProfileOptionsResponse> {
+  return await fetchJson<ProductProfileOptionsResponse>(`${API_BASE_URL}/product-profile-options/delete`, {
+    method: "POST",
+    body: JSON.stringify({ fieldName, value }),
+  });
+}
+
+export async function getProductHierarchy(): Promise<ProductHierarchyResponse> {
+  return await fetchJson<ProductHierarchyResponse>(`${API_BASE_URL}/product-hierarchy`);
+}
+
+export async function postProductHierarchy(request: { dptNo: string; clssNo: string; department: string; class: string; prodGroup: string; isActive: boolean }): Promise<ProductHierarchyResponse> {
+  return await fetchJson<ProductHierarchyResponse>(`${API_BASE_URL}/product-hierarchy`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function postDeleteProductHierarchy(dptNo: string, clssNo: string): Promise<ProductHierarchyResponse> {
+  return await fetchJson<ProductHierarchyResponse>(`${API_BASE_URL}/product-hierarchy/delete`, {
+    method: "POST",
+    body: JSON.stringify({ dptNo, clssNo }),
+  });
+}
+
+export async function postProductProfileImport(file: File): Promise<ProductProfileImportResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  return await fetchJson<ProductProfileImportResponse>(`${API_BASE_URL}/imports/product-profiles`, {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function downloadProductProfileExport(): Promise<void> {
+  const headers = new Headers();
+  if (authEnabled) {
+    const token = await getAccessToken();
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+  }
+
+  const response = await fetch(`${API_BASE_URL}/exports/product-profiles`, { headers });
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+
+  const blob = await response.blob();
+  triggerDownload(blob, extractFileName(response.headers.get("content-disposition")) ?? "product-profile-export.xlsx");
 }
