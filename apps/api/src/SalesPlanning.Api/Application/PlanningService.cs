@@ -8,6 +8,12 @@ namespace SalesPlanning.Api.Application;
 public sealed class PlanningService : IPlanningService
 {
     private static readonly string[] MonthLabels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    private static readonly string[] ImportHeaders =
+    [
+        "Store", "Department", "Class", "Subclass", "Year", "Month",
+        "Sales Revenue", "Sold Qty", "ASP", "Unit Cost", "Total Costs", "GP", "GP%"
+    ];
+    private const string RemarkHeader = "Remark";
     private readonly IPlanningRepository _repository;
     private readonly ISplashAllocator _splashAllocator;
 
@@ -391,7 +397,7 @@ public sealed class PlanningService : IPlanningService
             var headerMap = GetHeaderMap(worksheet);
             ValidateImportHeaders(headerMap);
             var exceptionSheet = exceptionWorkbook.AddWorksheet(worksheet.Name);
-            WriteImportHeader(exceptionSheet);
+            WriteImportHeader(exceptionSheet, includeRemark: true);
             var exceptionRowIndex = 2;
 
             foreach (var row in worksheet.RowsUsed().Skip(1))
@@ -486,13 +492,13 @@ public sealed class PlanningService : IPlanningService
                 var departmentNode = metadata.ProductNodes[classNode.ParentProductNodeId!.Value];
                 foreach (var monthPeriod in monthPeriods)
                 {
-                    var revenue = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SalesRevenue, subclassNode.StoreId, subclassNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
-                    var quantity = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SoldQuantity, subclassNode.StoreId, subclassNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
-                    var asp = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.AverageSellingPrice, subclassNode.StoreId, subclassNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
-                    var unitCost = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.UnitCost, subclassNode.StoreId, subclassNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
-                    var totalCosts = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.TotalCosts, subclassNode.StoreId, subclassNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
-                    var grossProfit = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.GrossProfit, subclassNode.StoreId, subclassNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
-                    var grossProfitPercent = cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.GrossProfitPercent, subclassNode.StoreId, subclassNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
+                    var quantity = PlanningMath.NormalizeQuantity(cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SoldQuantity, subclassNode.StoreId, subclassNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue);
+                    var asp = PlanningMath.NormalizeAsp(cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.AverageSellingPrice, subclassNode.StoreId, subclassNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue);
+                    var unitCost = PlanningMath.NormalizeUnitCost(cellLookup[new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.UnitCost, subclassNode.StoreId, subclassNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue);
+                    var revenue = PlanningMath.CalculateRevenue(quantity, asp);
+                    var totalCosts = PlanningMath.CalculateTotalCosts(quantity, unitCost);
+                    var grossProfit = PlanningMath.CalculateGrossProfit(quantity, asp, unitCost);
+                    var grossProfitPercent = PlanningMath.CalculateGrossProfitPercent(asp, unitCost);
 
                     sheet.Cell(rowIndex, 1).Value = storeNode.Label;
                     sheet.Cell(rowIndex, 2).Value = departmentNode.Label;
@@ -1189,11 +1195,7 @@ public sealed class PlanningService : IPlanningService
 
     private static void ValidateImportHeaders(IReadOnlyDictionary<string, int> headerMap)
     {
-        foreach (var requiredHeader in new[]
-                 {
-                     "Store", "Department", "Class", "Subclass", "Year", "Month",
-                     "Sales Revenue", "Sold Qty", "ASP", "Unit Cost", "Total Costs", "GP", "GP%"
-                 })
+        foreach (var requiredHeader in ImportHeaders)
         {
             if (!headerMap.ContainsKey(requiredHeader))
             {
@@ -1228,7 +1230,8 @@ public sealed class PlanningService : IPlanningService
             row.Cell(headerMap["Unit Cost"]).GetString().Trim(),
             row.Cell(headerMap["Total Costs"]).GetString().Trim(),
             row.Cell(headerMap["GP"]).GetString().Trim(),
-            row.Cell(headerMap["GP%"]).GetString().Trim());
+            row.Cell(headerMap["GP%"]).GetString().Trim(),
+            headerMap.TryGetValue(RemarkHeader, out var remarkColumn) ? row.Cell(remarkColumn).GetString().Trim() : string.Empty);
     }
 
     private static bool TryNormalizeImportRow(ImportedPlanRow row, out NormalizedImportRow normalized, out string exceptionMessage)
@@ -1354,13 +1357,9 @@ public sealed class PlanningService : IPlanningService
         return true;
     }
 
-    private static void WriteImportHeader(IXLWorksheet sheet)
+    private static void WriteImportHeader(IXLWorksheet sheet, bool includeRemark = false)
     {
-        var headers = new[]
-        {
-            "Store", "Department", "Class", "Subclass", "Year", "Month",
-            "Sales Revenue", "Sold Qty", "ASP", "Unit Cost", "Total Costs", "GP", "GP%"
-        };
+        var headers = includeRemark ? [..ImportHeaders, RemarkHeader] : ImportHeaders;
         for (var index = 0; index < headers.Length; index += 1)
         {
             sheet.Cell(1, index + 1).Value = headers[index];
@@ -1382,6 +1381,7 @@ public sealed class PlanningService : IPlanningService
         sheet.Cell(rowIndex, 11).Value = row.TotalCosts;
         sheet.Cell(rowIndex, 12).Value = row.Gp;
         sheet.Cell(rowIndex, 13).Value = row.GpPercent;
+        sheet.Cell(rowIndex, 14).Value = exceptionMessage;
         sheet.Row(rowIndex).Style.Fill.BackgroundColor = XLColor.LightPink;
     }
 
@@ -1424,7 +1424,8 @@ public sealed class PlanningService : IPlanningService
         string UnitCost,
         string TotalCosts,
         string Gp,
-        string GpPercent);
+        string GpPercent,
+        string Remark);
 
     private readonly record struct NormalizedImportRow(
         string Store,

@@ -27,7 +27,7 @@ async function expandYears(page: import("@playwright/test").Page) {
 
 async function toggleRowCaret(page: import("@playwright/test").Page, rowId: string) {
   const row = page.locator(`.ag-pinned-left-cols-container [row-id="${rowId}"]`);
-  const toggle = row.locator(".ag-group-contracted:not(.ag-hidden), .ag-group-expanded:not(.ag-hidden)").first();
+  const toggle = row.locator(".hierarchy-toggle").first();
   await expect(toggle).toBeVisible();
   await toggle.click();
 }
@@ -41,9 +41,9 @@ async function ensurePinnedRowVisible(page: import("@playwright/test").Page, row
   for (const ancestorRowId of ancestorRowIds) {
     const ancestorRow = page.locator(`.ag-pinned-left-cols-container [row-id="${ancestorRowId}"]`).first();
     if (await ancestorRow.count()) {
-      const contractedToggle = ancestorRow.locator(".ag-group-contracted:not(.ag-hidden)").first();
-      if (await contractedToggle.count()) {
-        await contractedToggle.click();
+      const hierarchyToggle = ancestorRow.locator(".hierarchy-toggle").first();
+      if (await hierarchyToggle.count()) {
+        await hierarchyToggle.click();
       }
     }
 
@@ -69,7 +69,24 @@ async function gridCellText(page: import("@playwright/test").Page, rowId: string
 }
 
 async function gridCellByPinnedText(page: import("@playwright/test").Page, rowText: string, colId: string) {
-  const pinnedRow = page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: rowText }).first();
+  let pinnedRow = page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: rowText }).first();
+  if (await pinnedRow.count() === 0) {
+    for (const ancestorRowId of [storeRootRowId, departmentRootRowId]) {
+      const ancestorRow = page.locator(`.ag-pinned-left-cols-container [row-id="${ancestorRowId}"]`).first();
+      if (await ancestorRow.count()) {
+        const hierarchyToggle = ancestorRow.locator(".hierarchy-toggle").first();
+        if (await hierarchyToggle.count()) {
+          await hierarchyToggle.click();
+        }
+      }
+
+      pinnedRow = page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: rowText }).first();
+      if (await pinnedRow.count()) {
+        break;
+      }
+    }
+  }
+
   await expect(pinnedRow).toBeVisible();
   const rowIndex = await pinnedRow.getAttribute("row-index");
   expect(rowIndex).not.toBeNull();
@@ -222,6 +239,18 @@ test("supports expand and collapse controls for rows and years", async ({ page }
 
   await page.getByRole("button", { name: "Expand Years" }).click();
   await expect(page.locator(".ag-header-group-text", { hasText: "FY26" }).first()).toBeVisible();
+});
+
+test("keeps expanded year groups open after updates", async ({ page }) => {
+  await page.getByRole("button", { name: "Expand Years" }).click();
+  await expect(page.locator(".ag-header-group-text", { hasText: "Jan" }).first()).toBeVisible();
+
+  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
+  await page.getByRole("button", { name: "Expand All" }).click();
+  await editCell(page, storeRowId(101, 2110), "202600:1", "12000");
+  await expectReady(page);
+
+  await expect(page.locator(".ag-header-group-text", { hasText: "Jan" }).first()).toBeVisible();
 });
 
 test("does not pin year total measure columns and keeps caret expansion working in every view", async ({ page }) => {

@@ -112,6 +112,12 @@ public sealed class PlanningServiceTests
         Assert.NotNull(result.ExceptionFileName);
         Assert.Contains(grid.Rows, row => row.Path.SequenceEqual(new[] { "Store B", "Frozen", "Ice Cream", "Vanilla" }));
 
+        using var exceptionStream = new MemoryStream(Convert.FromBase64String(result.ExceptionWorkbookBase64!));
+        using var exceptionWorkbook = new XLWorkbook(exceptionStream);
+        var exceptionSheet = exceptionWorkbook.Worksheet("Store B");
+        Assert.Equal("Remark", exceptionSheet.Cell(1, 14).GetString());
+        Assert.Contains("Sales Revenue does not equal Sold Qty * ASP after normalization.", exceptionSheet.Cell(2, 14).GetString());
+
         var mappings = await _service.GetHierarchyMappingsAsync(CancellationToken.None);
         var frozen = mappings.Departments.Single(department => department.DepartmentLabel == "Frozen");
         Assert.Contains(frozen.Classes, value => value.ClassLabel == "Ice Cream");
@@ -145,6 +151,37 @@ public sealed class PlanningServiceTests
         Assert.True(worksheet.RowsUsed().Count() > 1);
         Assert.Equal("Store A", worksheet.Cell(2, 1).GetString());
         Assert.Equal("Jan", worksheet.Cell(2, 6).GetString());
+    }
+
+    [Fact]
+    public async Task ExportWorkbookAsync_RoundTripsWithoutImportExceptions()
+    {
+        var export = await _service.ExportWorkbookAsync(1, CancellationToken.None);
+
+        using var importStream = new MemoryStream(export.Content);
+        var importResult = await _service.ImportWorkbookAsync(1, importStream, export.FileName, "planner.one", CancellationToken.None);
+
+        Assert.Equal("applied", importResult.Status);
+        Assert.Null(importResult.ExceptionWorkbookBase64);
+        Assert.Null(importResult.ExceptionFileName);
+    }
+
+    [Fact]
+    public async Task ImportWorkbookAsync_IgnoresOptionalRemarkColumn()
+    {
+        using var workbook = new XLWorkbook();
+        var storeSheet = workbook.AddWorksheet("Store B");
+        WriteImportHeader(storeSheet, includeRemark: true);
+        WriteImportRow(storeSheet, 2, "Store B", "Frozen", "Ice Cream", "Vanilla", 2026, "Jan", 100m, 50m, 2m, 1.20m, 60m, 40m, 40m, "ignore this");
+
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        stream.Position = 0;
+
+        var result = await _service.ImportWorkbookAsync(1, stream, "import.xlsx", "planner.one", CancellationToken.None);
+
+        Assert.Null(result.ExceptionWorkbookBase64);
+        Assert.Null(result.ExceptionFileName);
     }
 
     [Fact]
@@ -295,7 +332,7 @@ public sealed class PlanningServiceTests
         Assert.DoesNotContain(grid.Periods, period => period.TimePeriodId == 202700 || period.ParentTimePeriodId == 202700);
     }
 
-    private static void WriteImportHeader(IXLWorksheet sheet)
+    private static void WriteImportHeader(IXLWorksheet sheet, bool includeRemark = false)
     {
         sheet.Cell(1, 1).Value = "Store";
         sheet.Cell(1, 2).Value = "Department";
@@ -310,6 +347,10 @@ public sealed class PlanningServiceTests
         sheet.Cell(1, 11).Value = "Total Costs";
         sheet.Cell(1, 12).Value = "GP";
         sheet.Cell(1, 13).Value = "GP%";
+        if (includeRemark)
+        {
+            sheet.Cell(1, 14).Value = "Remark";
+        }
     }
 
     private static void WriteImportRow(
@@ -327,7 +368,8 @@ public sealed class PlanningServiceTests
         decimal unitCost,
         decimal totalCosts,
         decimal gp,
-        decimal gpPercent)
+        decimal gpPercent,
+        string? remark = null)
     {
         sheet.Cell(rowIndex, 1).Value = store;
         sheet.Cell(rowIndex, 2).Value = department;
@@ -342,5 +384,9 @@ public sealed class PlanningServiceTests
         sheet.Cell(rowIndex, 11).Value = totalCosts;
         sheet.Cell(rowIndex, 12).Value = gp;
         sheet.Cell(rowIndex, 13).Value = gpPercent;
+        if (remark is not null)
+        {
+            sheet.Cell(rowIndex, 14).Value = remark;
+        }
     }
 }

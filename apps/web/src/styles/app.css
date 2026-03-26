@@ -243,6 +243,43 @@ button {
   width: 100%;
 }
 
+.hierarchy-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.hierarchy-toggle,
+.hierarchy-toggle-spacer {
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hierarchy-toggle {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: #44505a;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.hierarchy-toggle:hover {
+  background: rgba(14, 95, 118, 0.08);
+}
+
+.hierarchy-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .measure-value {
   min-width: 0;
   overflow: hidden;

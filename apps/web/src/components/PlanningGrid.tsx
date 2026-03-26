@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   type CellClickedEvent,
   type CellContextMenuEvent,
   type CellEditRequestEvent,
   type CellFocusedEvent,
   ClientSideRowModelModule,
+  type ColumnGroupOpenedEvent,
+  type ColumnResizedEvent,
   CommunityFeaturesModule,
+  type ICellRendererParams,
   type GridApi,
   ModuleRegistry,
   type ColDef,
@@ -98,6 +101,8 @@ export function PlanningGrid({
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const gridRef = useRef<AgGridReact<GridRowView> | null>(null);
   const expandedRowStateRef = useRef<Map<string, boolean>>(new Map());
+  const yearGroupStateRef = useRef<Map<string, boolean>>(new Map());
+  const columnWidthStateRef = useRef<Map<string, number>>(new Map());
   const hasAppliedInitialExpansionRef = useRef(false);
 
   const yearPeriods = useMemo(
@@ -154,7 +159,8 @@ export function PlanningGrid({
         editable: (params) => !showGrowthFactors && (isLeafMonthEditable(params.data) || isTopDownEditable(params.data)),
         valueGetter: (params) => params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.value ?? 0,
         valueFormatter: (params) => formatValue(params, measure),
-        width: showGrowthFactors ? 168 : measure.displayAsPercent ? 92 : 100,
+        initialWidth: columnWidthStateRef.current.get(`${period.timePeriodId}:${measure.measureId}`) ?? (measure.displayAsPercent ? 92 : 100),
+        minWidth: measure.displayAsPercent ? 92 : 100,
         cellRenderer: GrowthCellRenderer,
         cellRendererParams: {
           measure,
@@ -246,6 +252,26 @@ export function PlanningGrid({
 
     hasAppliedInitialExpansionRef.current = true;
   }, [rowData]);
+
+  useEffect(() => {
+    const api = gridRef.current?.api;
+    if (!api) {
+      return;
+    }
+
+    const widthState = [...columnWidthStateRef.current.entries()].map(([colId, width]) => ({ colId, width }));
+    if (widthState.length > 0) {
+      api.applyColumnState({ state: widthState, applyOrder: false });
+    }
+
+    yearPeriods.forEach((year) => {
+      const groupId = `year-${year.timePeriodId}`;
+      const rememberedState = yearGroupStateRef.current.get(groupId);
+      if (rememberedState !== undefined) {
+        api.setColumnGroupOpened(groupId, rememberedState);
+      }
+    });
+  }, [columnDefs, yearPeriods]);
 
   useEffect(() => {
     if (!pendingRevealRow) {
@@ -354,6 +380,26 @@ export function PlanningGrid({
     expandedRowStateRef.current.set(getRowKey(event.node.data), event.node.expanded ?? false);
   };
 
+  const handleColumnGroupOpened = (event: ColumnGroupOpenedEvent<GridRowView>) => {
+    const providedGroup = event.columnGroups?.[0];
+    const groupId = providedGroup?.getGroupId?.();
+    if (!groupId) {
+      return;
+    }
+
+    yearGroupStateRef.current.set(groupId, providedGroup?.isExpanded?.() ?? false);
+  };
+
+  const handleColumnResized = (event: ColumnResizedEvent<GridRowView>) => {
+    if (!event.finished || (event.source !== "uiColumnDragged" && event.source !== "uiColumnResized")) {
+      return;
+    }
+
+    event.columns?.forEach((column) => {
+      columnWidthStateRef.current.set(column.getColId(), column.getActualWidth());
+    });
+  };
+
   const handleCellClicked = (event: CellClickedEvent<GridRowView>) => {
     const clickedElement = event.event?.target instanceof HTMLElement ? event.event.target : null;
     const clickedToggle = clickedElement?.closest(".ag-group-contracted, .ag-group-expanded, .ag-group-contracted-icon, .ag-group-expanded-icon");
@@ -430,7 +476,9 @@ export function PlanningGrid({
 
   const setAllYearGroups = (opened: boolean) => {
     yearPeriods.forEach((year) => {
-      gridRef.current?.api.setColumnGroupOpened(`year-${year.timePeriodId}`, opened);
+      const groupId = `year-${year.timePeriodId}`;
+      yearGroupStateRef.current.set(groupId, opened);
+      gridRef.current?.api.setColumnGroupOpened(groupId, opened);
     });
   };
 
@@ -604,12 +652,18 @@ export function PlanningGrid({
           onCellContextMenu={handleCellContextMenu}
           onCellEditRequest={handleCellEditRequest}
           onRowGroupOpened={handleRowGroupOpened}
+          onColumnGroupOpened={handleColumnGroupOpened}
+          onColumnResized={handleColumnResized}
           autoGroupColumnDef={{
             headerName: "Store / Department / Class / Subclass",
             pinned: "left",
             minWidth: 260,
+            valueGetter: (params) => params.data?.label ?? "",
+            cellRenderer: HierarchyCellRenderer,
             cellRendererParams: {
-              suppressCount: true,
+              onToggleExpandedState: (row: GridRowView, expanded: boolean) => {
+                expandedRowStateRef.current.set(getRowKey(row), expanded);
+              },
             },
           }}
         />
@@ -714,6 +768,49 @@ type GrowthCellRendererProps = {
   showGrowthFactors: boolean;
   onApplyGrowthFactor: (row: GridRow, timePeriodId: number, measureId: number, growthFactor: number, currentValue: number) => Promise<void>;
 };
+
+type HierarchyCellRendererProps = ICellRendererParams<GridRowView> & {
+  onToggleExpandedState: (row: GridRowView, expanded: boolean) => void;
+};
+
+function HierarchyCellRenderer(props: HierarchyCellRendererProps) {
+  const { data, node, onToggleExpandedState, value } = props;
+  const canExpand = Boolean(node.group && data);
+  const depth = Math.max(node.level ?? 0, 0);
+
+  const handleToggle = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (!canExpand || !data) {
+      return;
+    }
+
+    const nextExpanded = !(node.expanded ?? false);
+    node.setExpanded(nextExpanded);
+    onToggleExpandedState(data, nextExpanded);
+    node.setSelected(true, true);
+  };
+
+  return (
+    <div className="hierarchy-cell" style={{ paddingLeft: `${depth * 14}px` }}>
+      {canExpand ? (
+        <button
+          type="button"
+          className="hierarchy-toggle"
+          aria-label={`${node.expanded ? "Collapse" : "Expand"} ${value ?? data?.label ?? "row"}`}
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={handleToggle}
+        >
+          {node.expanded ? "▾" : "▸"}
+        </button>
+      ) : (
+        <span className="hierarchy-toggle-spacer" aria-hidden="true" />
+      )}
+      <span className="hierarchy-label">{String(value ?? data?.label ?? "")}</span>
+    </div>
+  );
+}
 
 function GrowthCellRenderer(props: GrowthCellRendererProps) {
   const { data, measure, period, showGrowthFactors, onApplyGrowthFactor } = props;
