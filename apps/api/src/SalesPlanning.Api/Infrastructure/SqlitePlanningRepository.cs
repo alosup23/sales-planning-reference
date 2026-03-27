@@ -309,7 +309,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         return audits;
     }
 
-    public async Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, CancellationToken cancellationToken)
+    public async Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -321,8 +321,10 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             .Where(cell => cell.Coordinate.ScenarioVersionId == scenarioVersionId)
             .ToList();
 
+        var expandedNodeSet = expandedProductNodeIds?.ToHashSet() ?? [];
+
         var visibleNodes = productNodes.Values
-            .Where(node => node.Level == 0 || selectedStoreId is null || node.StoreId == selectedStoreId.Value)
+            .Where(node => ShouldIncludeGridNode(node, selectedStoreId, expandedNodeSet, productNodes, expandAllBranches))
             .ToList();
 
         var rows = visibleNodes
@@ -384,6 +386,38 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             .ToList();
 
         return new GridSliceResponse(scenarioVersionId, measures, periods, rows);
+    }
+
+    private static bool ShouldIncludeGridNode(
+        ProductNode node,
+        long? selectedStoreId,
+        IReadOnlySet<long> expandedProductNodeIds,
+        IReadOnlyDictionary<long, ProductNode> productNodes,
+        bool expandAllBranches)
+    {
+        if (node.Level == 0)
+        {
+            return true;
+        }
+
+        if (selectedStoreId is not null && node.StoreId != selectedStoreId.Value)
+        {
+            return false;
+        }
+
+        if (expandAllBranches)
+        {
+            return true;
+        }
+
+        if (node.Level <= 1)
+        {
+            return true;
+        }
+
+        return node.ParentProductNodeId is long parentProductNodeId
+               && expandedProductNodeIds.Contains(parentProductNodeId)
+               && productNodes.ContainsKey(parentProductNodeId);
     }
 
     public async Task<ProductNode> AddRowAsync(AddRowRequest request, CancellationToken cancellationToken)

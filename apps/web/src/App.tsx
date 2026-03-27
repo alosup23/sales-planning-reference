@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ApiRequestError,
   downloadProductProfileExport,
   downloadStoreProfileExport,
   downloadBase64Workbook,
@@ -83,19 +84,22 @@ export default function App() {
   const [productSearchTerm, setProductSearchTerm] = useState("");
   const [productPageNumber, setProductPageNumber] = useState(1);
   const [selectedPlanningStoreId, setSelectedPlanningStoreId] = useState<number | null>(null);
+  const [expandedBranchNodeIds, setExpandedBranchNodeIds] = useState<number[]>([]);
+  const [expandAllBranches, setExpandAllBranches] = useState(false);
 
   useEffect(() => {
     void preloadPlanningGrid();
   }, []);
 
   const gridQuery = useQuery({
-    queryKey: ["grid-slice", 1, selectedPlanningStoreId],
-    queryFn: () => getGridSlice(selectedPlanningStoreId),
-    enabled: selectedPlanningStoreId !== null,
+    queryKey: ["grid-slice", 1, selectedPlanningStoreId, expandedBranchNodeIds.join(","), expandAllBranches ? "all" : "branch"],
+    queryFn: () => getGridSlice(selectedPlanningStoreId, expandedBranchNodeIds, expandAllBranches),
+    enabled: (activeView === "planning-store" || activeView === "planning-department") && selectedPlanningStoreId !== null,
   });
   const hierarchyQuery = useQuery({
     queryKey: ["hierarchy-mappings"],
     queryFn: getHierarchyMappings,
+    enabled: activeView === "hierarchy",
   });
   const storeProfileQuery = useQuery({
     queryKey: ["store-profiles"],
@@ -104,6 +108,7 @@ export default function App() {
   const storeProfileOptionsQuery = useQuery({
     queryKey: ["store-profile-options"],
     queryFn: getStoreProfileOptions,
+    enabled: activeView === "store-profile",
   });
   const productProfileQuery = useQuery({
     queryKey: ["product-profiles", productSearchTerm, productPageNumber],
@@ -133,6 +138,11 @@ export default function App() {
 
     setSelectedPlanningStoreId(storeProfileQuery.data.stores[0].storeId);
   }, [selectedPlanningStoreId, storeProfileQuery.data]);
+
+  useEffect(() => {
+    setExpandedBranchNodeIds([]);
+    setExpandAllBranches(false);
+  }, [selectedPlanningStoreId, activeView, departmentLayout]);
 
   useEffect(() => {
     if (selectedYearId || !gridQuery.data) {
@@ -502,7 +512,8 @@ export default function App() {
     deleteProductHierarchyMutation.isPending;
 
   const statusText = useMemo(() => {
-    if (gridQuery.isLoading || hierarchyQuery.isLoading || storeProfileQuery.isLoading || storeProfileOptionsQuery.isLoading || (activeView === "product-profile" && (productProfileQuery.isLoading || productProfileOptionsQuery.isLoading || productHierarchyQuery.isLoading))) {
+    const planningViewActive = activeView === "planning-store" || activeView === "planning-department";
+    if ((planningViewActive && (gridQuery.isLoading || gridQuery.isFetching)) || storeProfileQuery.isLoading || (activeView === "hierarchy" && hierarchyQuery.isLoading) || (activeView === "store-profile" && storeProfileOptionsQuery.isLoading) || (activeView === "product-profile" && (productProfileQuery.isLoading || productProfileOptionsQuery.isLoading || productHierarchyQuery.isLoading))) {
       return "Loading planning slice...";
     }
 
@@ -510,7 +521,30 @@ export default function App() {
       return "Applying changes...";
     }
 
-    if (gridQuery.isError || hierarchyQuery.isError || storeProfileQuery.isError || storeProfileOptionsQuery.isError || (activeView === "product-profile" && (productProfileQuery.isError || productProfileOptionsQuery.isError || productHierarchyQuery.isError))) {
+    const activeError =
+      (planningViewActive ? gridQuery.error : null) ??
+      storeProfileQuery.error ??
+      (activeView === "hierarchy" ? hierarchyQuery.error : null) ??
+      (activeView === "store-profile" ? storeProfileOptionsQuery.error : null) ??
+      (activeView === "product-profile" ? (productProfileQuery.error ?? productProfileOptionsQuery.error ?? productHierarchyQuery.error) : null);
+
+    if (activeError) {
+      if (activeError instanceof ApiRequestError) {
+        if (activeError.code === "auth" || activeError.status === 401 || activeError.status === 403) {
+          return "Microsoft 365 session expired or not authorized. Sign in again.";
+        }
+
+        if (activeError.code === "timeout" || activeError.status === 504) {
+          return "Planning data took too long to load. Try expanding fewer branches or refresh.";
+        }
+
+        if (activeError.code === "network") {
+          return "Unable to reach the planning API.";
+        }
+
+        return activeError.message;
+      }
+
       return "API unavailable.";
     }
 
@@ -533,7 +567,7 @@ export default function App() {
         : activeView === "product-profile"
           ? "Product profile maintenance ready."
       : "Multi-year planning grid ready.";
-  }, [activeView, gridQuery.isError, gridQuery.isLoading, hasUnsavedChanges, hierarchyQuery.isError, hierarchyQuery.isLoading, isMutating, lastError, lastSavedAt, productHierarchyQuery.isError, productHierarchyQuery.isLoading, productProfileOptionsQuery.isError, productProfileOptionsQuery.isLoading, productProfileQuery.isError, productProfileQuery.isLoading, storeProfileOptionsQuery.isError, storeProfileOptionsQuery.isLoading, storeProfileQuery.isError, storeProfileQuery.isLoading]);
+  }, [activeView, gridQuery.error, gridQuery.isFetching, gridQuery.isLoading, hasUnsavedChanges, hierarchyQuery.error, hierarchyQuery.isLoading, isMutating, lastError, lastSavedAt, productHierarchyQuery.error, productHierarchyQuery.isLoading, productProfileOptionsQuery.error, productProfileOptionsQuery.isLoading, productProfileQuery.error, productProfileQuery.isLoading, storeProfileOptionsQuery.error, storeProfileOptionsQuery.isLoading, storeProfileQuery.error, storeProfileQuery.isLoading]);
 
   const storeViewData = useMemo(
     () => (gridQuery.data ? buildStoreView(gridQuery.data) : null),
@@ -543,10 +577,15 @@ export default function App() {
     () => (gridQuery.data ? buildDepartmentView(gridQuery.data, departmentLayout) : null),
     [departmentLayout, gridQuery.data],
   );
+  const activeGridData = activeView === "planning-department" ? departmentViewData : storeViewData;
 
+  const planningReady = (activeView !== "planning-store" && activeView !== "planning-department")
+    || (selectedPlanningStoreId !== null && !!gridQuery.data && !!storeViewData && !!departmentViewData);
+  const hierarchyReady = activeView !== "hierarchy" || !!hierarchyQuery.data;
+  const storeProfileReady = activeView !== "store-profile" || !!storeProfileOptionsQuery.data;
   const productMaintenanceReady = activeView !== "product-profile" || (productProfileQuery.data && productProfileOptionsQuery.data && productHierarchyQuery.data);
 
-    if (!selectedPlanningStoreId || !gridQuery.data || !hierarchyQuery.data || !storeProfileQuery.data || !storeProfileOptionsQuery.data || !productMaintenanceReady || !storeViewData || !departmentViewData) {
+  if (!storeProfileQuery.data || !planningReady || !hierarchyReady || !storeProfileReady || !productMaintenanceReady) {
     return (
       <main className="app-shell">
         <section className="hero">
@@ -557,19 +596,23 @@ export default function App() {
     );
   }
 
-  const activeGridData = activeView === "planning-department" ? departmentViewData : storeViewData;
-  const yearPeriods = gridQuery.data.periods.filter((period) => period.grain === "year");
-  const measureLookup = new Map(gridQuery.data.measures.map((measure) => [measure.measureId, measure]));
+  const planningData = gridQuery.data ?? null;
+  const yearPeriods = planningData?.periods.filter((period) => period.grain === "year") ?? [];
+  const measureLookup = new Map((planningData?.measures ?? []).map((measure) => [measure.measureId, measure]));
 
   const handleCellEdit = async (row: GridRow, timePeriodId: number, measureId: number, newValue: number) => {
+    if (!planningData) {
+      return;
+    }
+
     const measureCell = row.cells[timePeriodId]?.measures[measureId];
-    const period = gridQuery.data.periods.find((item) => item.timePeriodId === timePeriodId);
+    const period = planningData.periods.find((item) => item.timePeriodId === timePeriodId);
     const isLeafMonth = row.isLeaf && period?.grain === "month";
     const scopeRoots = row.splashRoots ?? [];
 
     if (isLeafMonth && row.bindingProductNodeId) {
       await editMutation.mutateAsync({
-        scenarioVersionId: gridQuery.data.scenarioVersionId,
+        scenarioVersionId: planningData.scenarioVersionId,
         measureId,
         comment: "Grid edit",
         cells: [
@@ -592,7 +635,7 @@ export default function App() {
     }
 
     await splashMutation.mutateAsync({
-      scenarioVersionId: gridQuery.data.scenarioVersionId,
+      scenarioVersionId: planningData.scenarioVersionId,
       measureId,
       sourceCell: {
         storeId: scopeRoots[0].storeId,
@@ -603,12 +646,16 @@ export default function App() {
       method: period?.grain === "year" ? "seasonality_profile" : "existing_plan",
       roundingScale: measureLookup.get(measureId)?.decimalPlaces ?? 0,
       comment: "Grid top-down edit",
-      manualWeights: period?.grain === "year" ? buildSeasonalityWeights(gridQuery.data, timePeriodId) : undefined,
+      manualWeights: period?.grain === "year" ? buildSeasonalityWeights(planningData, timePeriodId) : undefined,
       scopeRoots,
     });
   };
 
   const handleToggleLock = async (row: GridRow, timePeriodId: number, measureId: number, locked: boolean) => {
+    if (!planningData) {
+      return;
+    }
+
     const scopeRoots = row.splashRoots ?? [];
     if (scopeRoots.length === 0) {
       setLastError("This row cannot be locked in the current view.");
@@ -616,7 +663,7 @@ export default function App() {
     }
 
     await lockMutation.mutateAsync({
-      scenarioVersionId: gridQuery.data.scenarioVersionId,
+      scenarioVersionId: planningData.scenarioVersionId,
       measureId,
       locked,
       reason: locked ? "Manager review hold" : "Released",
@@ -629,6 +676,10 @@ export default function App() {
   };
 
   const handleSplashYear = async (row: GridRow, yearTimePeriodId: number, measureId: number) => {
+    if (!planningData) {
+      return;
+    }
+
     const scopeRoots = row.splashRoots ?? [];
     if (scopeRoots.length === 0) {
       setLastError("This row cannot be splashed in the current view.");
@@ -637,7 +688,7 @@ export default function App() {
 
     const totalValue = row.cells[yearTimePeriodId]?.measures[measureId]?.value ?? 0;
     await splashMutation.mutateAsync({
-      scenarioVersionId: gridQuery.data.scenarioVersionId,
+      scenarioVersionId: planningData.scenarioVersionId,
       measureId,
       sourceCell: {
         storeId: scopeRoots[0].storeId,
@@ -648,12 +699,16 @@ export default function App() {
       method: "seasonality_profile",
       roundingScale: measureLookup.get(measureId)?.decimalPlaces ?? 0,
       comment: "Spread annual value across months",
-      manualWeights: buildSeasonalityWeights(gridQuery.data, yearTimePeriodId),
+      manualWeights: buildSeasonalityWeights(planningData, yearTimePeriodId),
       scopeRoots,
     });
   };
 
   const handleAddRow = async (level: "store" | "department" | "class" | "subclass", parentRow: GridRow | null) => {
+    if (!planningData) {
+      return;
+    }
+
     const label = window.prompt(`New ${level} name`);
     if (!label) {
       return;
@@ -663,7 +718,7 @@ export default function App() {
     let clusterLabel: string | null = null;
     let regionLabel: string | null = null;
     if (level === "store") {
-      const stores = storeViewData.rows.filter((row) => row.structureRole === "store");
+      const stores = (storeViewData ?? activeGridData)?.rows.filter((row) => row.structureRole === "store") ?? [];
       const defaultStore = stores[0]?.label ?? "";
       const copyFromLabel = window.prompt("Copy hierarchy and data from store", defaultStore);
       if (!copyFromLabel) {
@@ -682,7 +737,7 @@ export default function App() {
     }
 
     const createdRow = await addRowMutation.mutateAsync({
-      scenarioVersionId: gridQuery.data.scenarioVersionId,
+      scenarioVersionId: planningData.scenarioVersionId,
       level,
       parentProductNodeId: level === "store" ? null : parentRow?.bindingProductNodeId ?? null,
       label,
@@ -699,7 +754,36 @@ export default function App() {
     setPendingRevealRow(createdRow);
   };
 
+  const ensureBranchLoaded = (row: GridRow) => {
+    if (row.isLeaf || row.structureRole === "virtual" || !row.bindingProductNodeId) {
+      return;
+    }
+
+    if (expandAllBranches) {
+      return;
+    }
+
+    setExpandedBranchNodeIds((current) => (
+      current.includes(row.bindingProductNodeId!)
+        ? current
+        : [...current, row.bindingProductNodeId!].sort((left, right) => left - right)
+    ));
+  };
+
+  const handleExpandAllBranches = () => {
+    setExpandAllBranches(true);
+  };
+
+  const handleCollapseAllBranches = () => {
+    setExpandAllBranches(false);
+    setExpandedBranchNodeIds([]);
+  };
+
   const handleDeleteRow = async (row: GridRow | null) => {
+    if (!planningData) {
+      return;
+    }
+
     if (!row?.bindingProductNodeId) {
       setLastError("Select a Store, Department, or Class row to delete.");
       return;
@@ -710,12 +794,16 @@ export default function App() {
     }
 
     await deleteRowMutation.mutateAsync({
-      scenarioVersionId: gridQuery.data.scenarioVersionId,
+      scenarioVersionId: planningData.scenarioVersionId,
       productNodeId: row.bindingProductNodeId,
     });
   };
 
   const handleDeleteYear = async (yearTimePeriodId: number | null) => {
+    if (!planningData) {
+      return;
+    }
+
     if (!yearTimePeriodId) {
       setLastError("Select a year to delete.");
       return;
@@ -727,12 +815,16 @@ export default function App() {
     }
 
     await deleteYearMutation.mutateAsync({
-      scenarioVersionId: gridQuery.data.scenarioVersionId,
+      scenarioVersionId: planningData.scenarioVersionId,
       yearTimePeriodId,
     });
   };
 
   const handleGenerateNextYear = async (yearTimePeriodId: number | null) => {
+    if (!planningData) {
+      return;
+    }
+
     if (!yearTimePeriodId) {
       setLastError("Select an active year to generate the following year.");
       return;
@@ -744,21 +836,29 @@ export default function App() {
     }
 
     await generateNextYearMutation.mutateAsync({
-      scenarioVersionId: gridQuery.data.scenarioVersionId,
+      scenarioVersionId: planningData.scenarioVersionId,
       sourceYearTimePeriodId: yearTimePeriodId,
     });
   };
 
   const handleImportWorkbook = async (file: File) => {
+    if (!planningData) {
+      return;
+    }
+
     await importMutation.mutateAsync({
       file,
-      scenarioVersionId: gridQuery.data.scenarioVersionId,
+      scenarioVersionId: planningData.scenarioVersionId,
     });
   };
 
   const handleApplyGrowthFactor = async (row: GridRow, timePeriodId: number, measureId: number, growthFactor: number, currentValue: number) => {
+    if (!planningData) {
+      return;
+    }
+
     const scopeRoots = row.splashRoots ?? [];
-    const isLeafMonth = row.isLeaf && gridQuery.data.periods.some((period) => period.timePeriodId === timePeriodId && period.grain === "month");
+    const isLeafMonth = row.isLeaf && planningData.periods.some((period) => period.timePeriodId === timePeriodId && period.grain === "month");
     const sourceStoreId = isLeafMonth ? (row.bindingStoreId ?? row.storeId) : (scopeRoots[0]?.storeId ?? row.storeId);
     const sourceProductNodeId = isLeafMonth ? (row.bindingProductNodeId ?? row.productNodeId) : (scopeRoots[0]?.productNodeId ?? row.productNodeId);
 
@@ -768,7 +868,7 @@ export default function App() {
     }
 
     await growthFactorMutation.mutateAsync({
-      scenarioVersionId: gridQuery.data.scenarioVersionId,
+      scenarioVersionId: planningData.scenarioVersionId,
       measureId,
       sourceCell: {
         storeId: sourceStoreId,
@@ -990,7 +1090,7 @@ export default function App() {
 
       {activeView === "hierarchy" ? (
         <HierarchyMaintenanceSheet
-          departments={hierarchyQuery.data.departments}
+          departments={hierarchyQuery.data!.departments}
           onAddDepartment={handleAddHierarchyDepartment}
           onAddClass={handleAddHierarchyClass}
           onAddSubclass={handleAddHierarchySubclass}
@@ -998,7 +1098,7 @@ export default function App() {
       ) : activeView === "store-profile" ? (
         <StoreProfileMaintenanceSheet
           stores={storeProfileQuery.data.stores}
-          options={storeProfileOptionsQuery.data.options}
+          options={storeProfileOptionsQuery.data!.options}
           onSave={handleSaveStoreProfile}
           onDelete={handleDeleteStoreProfile}
           onInactivate={handleInactivateStoreProfile}
@@ -1050,7 +1150,7 @@ export default function App() {
             }
           >
             <PlanningGrid
-              data={activeGridData}
+              data={activeGridData!}
               selectedYearId={selectedYearId}
               onSelectedYearChange={setSelectedYearId}
               onSelectionContextChange={setInsightScope}
@@ -1061,6 +1161,10 @@ export default function App() {
               onAddRow={handleAddRow}
               onDeleteRow={handleDeleteRow}
               onImportWorkbook={handleImportWorkbook}
+              onEnsureBranchLoaded={ensureBranchLoaded}
+              onExpandAllBranches={handleExpandAllBranches}
+              onCollapseAllBranches={handleCollapseAllBranches}
+              expandAllBranches={expandAllBranches}
               sheetLabel={activeView === "planning-store" ? "Planning - by Store" : "Planning - by Department"}
               pendingRevealRow={pendingRevealRow}
               onRevealHandled={() => setPendingRevealRow(null)}
@@ -1275,7 +1379,9 @@ function buildDepartmentView(data: GridSliceResponse, layout: DepartmentLayout):
         path: ["Department Total", departmentLabel, classLabel],
         structureRole: "class",
         rows: groupedClassRows,
-        splashRoots: groupedClassRows.map(toSplashRoot),
+      splashRoots: groupedClassRows.map(toSplashRoot),
+        bindingStoreId: groupedClassRows.length === 1 ? groupedClassRows[0].bindingStoreId ?? groupedClassRows[0].storeId : null,
+        bindingProductNodeId: groupedClassRows.length === 1 ? groupedClassRows[0].bindingProductNodeId ?? groupedClassRows[0].productNodeId : null,
       }));
 
       for (const classRow of [...groupedClassRows].sort((left, right) => {
@@ -1356,6 +1462,8 @@ function createSyntheticRow({
   structureRole,
   rows,
   splashRoots,
+  bindingStoreId = null,
+  bindingProductNodeId = null,
 }: {
   data: GridSliceResponse;
   storeId: number;
@@ -1365,6 +1473,8 @@ function createSyntheticRow({
   structureRole: NonNullable<GridRow["structureRole"]>;
   rows: GridRow[];
   splashRoots: Array<{ storeId: number; productNodeId: number }>;
+  bindingStoreId?: number | null;
+  bindingProductNodeId?: number | null;
 }): GridRow {
   return {
     storeId,
@@ -1383,8 +1493,8 @@ function createSyntheticRow({
     effectiveFromTimePeriodId: null,
     effectiveToTimePeriodId: null,
     structureRole,
-    bindingStoreId: null,
-    bindingProductNodeId: null,
+    bindingStoreId,
+    bindingProductNodeId,
     splashRoots,
     cells: sumCells(rows, data),
   };

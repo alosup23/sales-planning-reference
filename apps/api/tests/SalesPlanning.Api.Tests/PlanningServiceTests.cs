@@ -20,7 +20,7 @@ public sealed class PlanningServiceTests
     [Fact]
     public async Task GetGridSliceAsync_ReturnsExpandedMeasureSetAndMultiYearShape()
     {
-        var grid = await _service.GetGridSliceAsync(1, null, CancellationToken.None);
+        var grid = await _service.GetGridSliceAsync(1, null, new[] { 2110L }, false, CancellationToken.None);
 
         Assert.Equal(7, grid.Measures.Count);
         Assert.Contains(grid.Measures, measure => measure.MeasureId == PlanningMeasures.GrossProfitPercent && measure.DisplayAsPercent);
@@ -105,7 +105,9 @@ public sealed class PlanningServiceTests
         stream.Position = 0;
 
         var result = await _service.ImportWorkbookAsync(1, stream, "import.xlsx", "planner.one", CancellationToken.None);
-        var grid = await _service.GetGridSliceAsync(1, null, CancellationToken.None);
+        var importedClass = await _repository.FindProductNodeByPathAsync(new[] { "Store B", "Frozen", "Ice Cream" }, CancellationToken.None);
+        Assert.NotNull(importedClass);
+        var grid = await _service.GetGridSliceAsync(1, 102, new[] { importedClass!.ProductNodeId }, false, CancellationToken.None);
 
         Assert.Equal(2, result.RowsProcessed);
         Assert.NotNull(result.ExceptionWorkbookBase64);
@@ -332,7 +334,7 @@ public sealed class PlanningServiceTests
     public async Task DeleteYearAsync_RemovesYearFromGrid()
     {
         var result = await _service.DeleteYearAsync(new DeleteYearRequest(1, 202700), CancellationToken.None);
-        var grid = await _service.GetGridSliceAsync(1, null, CancellationToken.None);
+        var grid = await _service.GetGridSliceAsync(1, null, null, false, CancellationToken.None);
 
         Assert.True(result.DeletedCellCount > 0);
         Assert.DoesNotContain(grid.Periods, period => period.TimePeriodId == 202700 || period.ParentTimePeriodId == 202700);

@@ -1,4 +1,4 @@
-import { EventType, PublicClientApplication, type AuthenticationResult, type Configuration } from "@azure/msal-browser";
+import { EventType, InteractionRequiredAuthError, PublicClientApplication, type AuthenticationResult, type Configuration } from "@azure/msal-browser";
 
 const authMode = import.meta.env.VITE_AUTH_MODE ?? "entra";
 
@@ -6,8 +6,9 @@ export const authEnabled = authMode !== "disabled";
 export const loginRequest = {
   scopes: ["User.Read"],
 };
+const configuredApiScope = import.meta.env.VITE_ENTRA_API_SCOPE?.trim();
 export const apiRequest = {
-  scopes: ["User.Read"],
+  scopes: configuredApiScope ? [configuredApiScope] : ["User.Read"],
 };
 
 const redirectUri =
@@ -69,10 +70,18 @@ export async function getAccessToken(): Promise<string | null> {
     return null;
   }
 
-  const result = await msalInstance.acquireTokenSilent({
-    ...apiRequest,
-    account,
-  });
+  try {
+    const result = await msalInstance.acquireTokenSilent({
+      ...apiRequest,
+      account,
+    });
 
-  return result.accessToken || null;
+    return result.accessToken || null;
+  } catch (error) {
+    if (error instanceof InteractionRequiredAuthError) {
+      throw new Error("Session expired. Sign in again.");
+    }
+
+    throw error;
+  }
 }

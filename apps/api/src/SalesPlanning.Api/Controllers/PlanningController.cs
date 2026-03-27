@@ -21,9 +21,17 @@ public sealed class PlanningController : ControllerBase
     }
 
     [HttpGet("grid-slices")]
-    public Task<GridSliceResponse> GetGridSlice([FromQuery] long scenarioVersionId = 1, [FromQuery] long? selectedStoreId = null, CancellationToken cancellationToken = default)
+    public Task<GridSliceResponse> GetGridSlice([FromQuery] long scenarioVersionId = 1, [FromQuery] long? selectedStoreId = null, [FromQuery] string? expandedProductNodeIds = null, [FromQuery] bool expandAllBranches = false, CancellationToken cancellationToken = default)
     {
-        return _planningService.GetGridSliceAsync(scenarioVersionId, selectedStoreId, cancellationToken);
+        var expandedNodes = expandedProductNodeIds?
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(static value => long.TryParse(value, out var parsed) ? parsed : (long?)null)
+            .Where(static value => value.HasValue)
+            .Select(static value => value!.Value)
+            .Distinct()
+            .ToArray();
+
+        return _planningService.GetGridSliceAsync(scenarioVersionId, selectedStoreId, expandedNodes, expandAllBranches, cancellationToken);
     }
 
     [HttpPost("cell-edits")]

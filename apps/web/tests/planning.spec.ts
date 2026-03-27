@@ -29,6 +29,11 @@ async function selectWorkspace(page: import("@playwright/test").Page, value: "pl
   await page.locator(".view-menu-bar select").first().selectOption(value);
 }
 
+async function selectStoreScope(page: import("@playwright/test").Page, storeId: string) {
+  await page.locator(".view-menu-bar .year-picker").filter({ hasText: "Store Scope" }).locator("select").selectOption(storeId);
+  await expectReady(page);
+}
+
 async function selectDepartmentLayout(page: import("@playwright/test").Page, value: "department-store-class" | "department-class-store") {
   await page.locator(".view-menu-bar .year-picker").filter({ hasText: "Layout" }).locator("select").selectOption(value);
 }
@@ -107,6 +112,21 @@ async function editCell(page: import("@playwright/test").Page, rowId: string, co
   await expect(editor).toBeVisible();
   await editor.fill(nextValue);
   await editor.press("Enter");
+}
+
+async function expandStorePath(page: import("@playwright/test").Page, storeNodeId: number, departmentNodeId?: number, classNodeId?: number) {
+  await toggleRowCaret(page, storeRowId(101, storeNodeId));
+  await expectReady(page);
+
+  if (departmentNodeId) {
+    await toggleRowCaret(page, storeRowId(101, departmentNodeId));
+    await expectReady(page);
+  }
+
+  if (classNodeId) {
+    await toggleRowCaret(page, storeRowId(101, classNodeId));
+    await expectReady(page);
+  }
 }
 
 async function acceptPrompts(page: import("@playwright/test").Page, responses: string[]) {
@@ -241,14 +261,27 @@ test("loads with collapsed years, readable measure labels, and only stores visib
 });
 
 test("supports expand and collapse controls for rows and years", async ({ page }) => {
-  const pinnedRow = page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2110)}"]`);
-  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
-  await page.getByRole("button", { name: "Collapse All" }).click();
-  await expect(pinnedRow).toHaveCount(0);
+  const departmentRow = page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2100)}"]`);
+  const classRow = page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2110)}"]`);
 
-  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
-  await page.getByRole("button", { name: "Expand All" }).click();
-  await expect(pinnedRow).toHaveCount(1);
+  await expect(departmentRow).toHaveCount(0);
+  await expect(classRow).toHaveCount(0);
+
+  await toggleRowCaret(page, storeRowId(101, 2000));
+  await expectReady(page);
+  await expect(departmentRow).toHaveCount(1);
+
+  await toggleRowCaret(page, storeRowId(101, 2100));
+  await expectReady(page);
+  await expect(classRow).toHaveCount(1);
+
+  await toggleRowCaret(page, storeRowId(101, 2100));
+  await expectReady(page);
+  await expect(classRow).toHaveCount(0);
+
+  await toggleRowCaret(page, storeRowId(101, 2000));
+  await expectReady(page);
+  await expect(departmentRow).toHaveCount(0);
 
   await page.getByRole("button", { name: "Expand Years" }).click();
   await expect(page.locator(".ag-header-group-text", { hasText: "FY26" }).first()).toBeVisible();
@@ -312,8 +345,7 @@ test("renders the correct department hierarchy order in both layouts and applies
 });
 
 test("editing a visible Sales Revenue leaf month persists the updated value", async ({ page }) => {
-  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
-  await page.getByRole("button", { name: "Expand All" }).click();
+  await expandStorePath(page, 2000, 2100, 2110);
   await expandYears(page);
   const monthRevenueCol = "202601:1";
   const before = await gridCellText(page, storeRowId(101, 2111), monthRevenueCol);
@@ -404,8 +436,10 @@ test("imports a workbook in the new store-sheet format", async ({ page }) => {
   });
   await expectReady(page);
   await expect(page.locator(".status-card")).not.toContainText("Failed to fetch");
-  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2000)}"]`).click({ button: "right" });
+  await selectStoreScope(page, "102");
+  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
   await page.getByRole("button", { name: "Expand All" }).click();
+  await expectReady(page);
   await page.getByRole("button", { name: "Expand Years" }).click();
 
   const importedRow = page.getByText("Vanilla", { exact: true }).last();

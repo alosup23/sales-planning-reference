@@ -42,6 +42,10 @@ type PlanningGridProps = {
   onAddRow: (level: "store" | "department" | "class" | "subclass", parentRow: GridRow | null) => Promise<void>;
   onDeleteRow: (row: GridRow | null) => Promise<void>;
   onImportWorkbook: (file: File) => Promise<void>;
+  onEnsureBranchLoaded: (row: GridRow) => void;
+  onExpandAllBranches: () => void;
+  onCollapseAllBranches: () => void;
+  expandAllBranches: boolean;
   sheetLabel: string;
   pendingRevealRow: AddRowResponse | null;
   onRevealHandled: () => void;
@@ -90,6 +94,10 @@ export function PlanningGrid({
   onAddRow,
   onDeleteRow,
   onImportWorkbook,
+  onEnsureBranchLoaded,
+  onExpandAllBranches,
+  onCollapseAllBranches,
+  expandAllBranches,
   sheetLabel,
   pendingRevealRow,
   onRevealHandled,
@@ -264,7 +272,9 @@ export function PlanningGrid({
 
       const rowKey = getRowKey(node.data);
       const rememberedState = expandedRowStateRef.current.get(rowKey);
-      const nextExpanded = rememberedState ?? (!hasAppliedInitialExpansionRef.current && (node.level ?? 0) < 1);
+      const nextExpanded = expandAllBranches
+        ? true
+        : rememberedState ?? (!hasAppliedInitialExpansionRef.current && (node.level ?? 0) < 1);
 
       if (nextExpanded !== undefined) {
         node.setExpanded(nextExpanded);
@@ -273,7 +283,7 @@ export function PlanningGrid({
     });
 
     hasAppliedInitialExpansionRef.current = true;
-  }, [rowData]);
+  }, [expandAllBranches, rowData]);
 
   useEffect(() => {
     const api = gridRef.current?.api;
@@ -472,6 +482,7 @@ export function PlanningGrid({
       return;
     }
 
+    onEnsureBranchLoaded(row);
     expandedRowStateRef.current.set(getRowKey(row), true);
     gridRef.current?.api.getRowNode(getRowKey(row))?.setExpanded(true);
   };
@@ -486,6 +497,12 @@ export function PlanningGrid({
   };
 
   const setAllRowExpansion = (expanded: boolean) => {
+    if (expanded) {
+      onExpandAllBranches();
+    } else {
+      onCollapseAllBranches();
+    }
+
     gridRef.current?.api.forEachNode((node) => {
       if (!node.group || !node.data) {
         return;
@@ -687,6 +704,7 @@ export function PlanningGrid({
             }),
             cellRenderer: HierarchyCellRenderer,
             cellRendererParams: {
+              onEnsureBranchLoaded,
               onToggleExpandedState: (row: GridRowView, expanded: boolean) => {
                 expandedRowStateRef.current.set(getRowKey(row), expanded);
               },
@@ -865,11 +883,12 @@ type GrowthCellRendererProps = {
 };
 
 type HierarchyCellRendererProps = ICellRendererParams<GridRowView> & {
+  onEnsureBranchLoaded: (row: GridRowView) => void;
   onToggleExpandedState: (row: GridRowView, expanded: boolean) => void;
 };
 
 function HierarchyCellRenderer(props: HierarchyCellRendererProps) {
-  const { data, node, onToggleExpandedState, value } = props;
+  const { data, node, onEnsureBranchLoaded, onToggleExpandedState, value } = props;
   const canExpand = Boolean(node.group && data);
   const depth = Math.max(node.level ?? 0, 0);
 
@@ -882,6 +901,9 @@ function HierarchyCellRenderer(props: HierarchyCellRendererProps) {
     }
 
     const nextExpanded = !(node.expanded ?? false);
+    if (nextExpanded) {
+      onEnsureBranchLoaded(data);
+    }
     node.setExpanded(nextExpanded);
     onToggleExpandedState(data, nextExpanded);
     node.setSelected(true, true);

@@ -34,6 +34,19 @@ import { authEnabled, getAccessToken } from "./auth";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 const ENABLE_SAMPLE_FALLBACK = import.meta.env.VITE_ENABLE_SAMPLE_FALLBACK === "true";
+const REQUEST_TIMEOUT_MS = 20000;
+
+export class ApiRequestError extends Error {
+  status?: number;
+  code?: string;
+
+  constructor(message: string, status?: number, code?: string) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.code = code;
+  }
+}
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers ?? {});
@@ -42,38 +55,67 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
 
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
   if (authEnabled) {
-    const token = await getAccessToken();
-    if (token) {
-      headers.set("Authorization", `Bearer ${token}`);
+    try {
+      const token = await getAccessToken();
+      if (token) {
+        headers.set("Authorization", `Bearer ${token}`);
+      }
+    } catch (error) {
+      window.clearTimeout(timeoutId);
+      const message = error instanceof Error ? error.message : "Session expired. Sign in again.";
+      throw new ApiRequestError(message, 401, "auth");
     }
   }
 
-  const response = await fetch(url, {
-    headers,
-    ...init,
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers,
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    window.clearTimeout(timeoutId);
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiRequestError("Planning request timed out while loading data.", 504, "timeout");
+    }
+
+    throw new ApiRequestError("Unable to reach the planning API.", undefined, "network");
+  }
+
+  window.clearTimeout(timeoutId);
 
   if (!response.ok) {
     const problem = await response.json().catch(() => null);
     const detail = typeof problem?.detail === "string" ? problem.detail : `${response.status} ${response.statusText}`;
-    throw new Error(detail);
+    const code = response.status === 401 || response.status === 403 ? "auth" : undefined;
+    throw new ApiRequestError(detail, response.status, code);
   }
 
   return (await response.json()) as T;
 }
 
-export async function getGridSlice(selectedStoreId?: number | null): Promise<GridSliceResponse> {
+export async function getGridSlice(selectedStoreId?: number | null, expandedProductNodeIds?: number[], expandAllBranches = false): Promise<GridSliceResponse> {
   try {
     const params = new URLSearchParams({ scenarioVersionId: "1" });
     if (selectedStoreId) {
       params.set("selectedStoreId", String(selectedStoreId));
     }
+    if (expandedProductNodeIds?.length) {
+      params.set("expandedProductNodeIds", expandedProductNodeIds.join(","));
+    }
+    if (expandAllBranches) {
+      params.set("expandAllBranches", "true");
+    }
 
     return await fetchJson<GridSliceResponse>(`${API_BASE_URL}/grid-slices?${params.toString()}`);
-  } catch {
+  } catch (error) {
     if (!ENABLE_SAMPLE_FALLBACK) {
-      throw new Error("Planning API unavailable.");
+      throw error;
     }
 
     return sampleGridData;

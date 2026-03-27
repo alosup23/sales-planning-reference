@@ -10,6 +10,8 @@ const localDotnetRoot = path.join(workspaceRoot, ".dotnet8");
 const dotnetCommand = fs.existsSync(path.join(localDotnetRoot, "dotnet"))
   ? `"${path.join(localDotnetRoot, "dotnet")}"`
   : "dotnet";
+const apiProjectPath = path.join(workspaceRoot, "apps/api/src/SalesPlanning.Api/SalesPlanning.Api.csproj");
+const apiAssemblyPath = path.join(workspaceRoot, "apps/api/src/SalesPlanning.Api/bin/Debug/net8.0/SalesPlanning.Api.dll");
 const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const manualServers = process.env.PLAYWRIGHT_MANUAL_SERVERS === "true";
 
@@ -29,7 +31,7 @@ export default defineConfig({
   },
   webServer: manualServers ? undefined : [
     {
-      command: `ASPNETCORE_URLS=http://127.0.0.1:5081 PlanningSecurityMode=disabled EnableTestReset=true DOTNET_ROOT="${localDotnetRoot}" DOTNET_CLI_HOME="${dotnetHome}" DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 ${dotnetCommand} run --no-build`,
+      command: `DOTNET_ROOT="${localDotnetRoot}" DOTNET_CLI_HOME="${dotnetHome}" DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 ${dotnetCommand} build "${apiProjectPath}" && ASPNETCORE_URLS=http://127.0.0.1:5081 PlanningSecurityMode=disabled EnableTestReset=true DOTNET_ROOT="${localDotnetRoot}" DOTNET_CLI_HOME="${dotnetHome}" DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 ${dotnetCommand} exec "${apiAssemblyPath}"`,
       cwd: path.join(workspaceRoot, "apps/api/src/SalesPlanning.Api"),
       url: "http://127.0.0.1:5081/api/v1/grid-slices?scenarioVersionId=1&measureId=1",
       reuseExistingServer: true,
