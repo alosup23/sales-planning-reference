@@ -36,8 +36,8 @@
         "Handler": "SalesPlanning.Api",
         "Runtime": "dotnet8",
         "CodeUri": "",
-        "MemorySize": 1024,
-        "Timeout": 30,
+        "MemorySize": 2048,
+        "Timeout": 120,
         "Role": {
           "Fn::Sub": "arn:aws:iam::${AWS::AccountId}:role/sales-planning-demo-lambda-exec"
         },

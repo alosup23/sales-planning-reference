@@ -35,7 +35,7 @@ import { authEnabled, getAccessToken } from "./auth";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 const ENABLE_SAMPLE_FALLBACK = import.meta.env.VITE_ENABLE_SAMPLE_FALLBACK === "true";
-const REQUEST_TIMEOUT_MS = 20000;
+const REQUEST_TIMEOUT_MS = 120000;
 
 export class ApiRequestError extends Error {
   status?: number;

@@ -1492,24 +1492,29 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 countCommand.Transaction = transaction;
                 countCommand.CommandText = "select count(*) from product_nodes;";
                 var existingCount = Convert.ToInt32(await countCommand.ExecuteScalarAsync(cancellationToken));
+                var needsSeed = existingCount == 0;
                 if (existingCount == 0)
                 {
                     await SeedAsync(connection, transaction, cancellationToken);
                 }
-            }
 
-            await EnsureSupportedTimePeriodsAsync(connection, transaction, cancellationToken);
-            await EnsureGrowthFactorColumnAsync(connection, transaction, cancellationToken);
-            await EnsureStoreProfileColumnsAsync(connection, transaction, cancellationToken);
-            var productNodes = await LoadProductNodesAsync(connection, transaction, cancellationToken);
-            var timePeriods = await LoadTimePeriodsAsync(connection, transaction, cancellationToken);
-            await EnsureSupportedMeasureCellsAsync(connection, transaction, productNodes.Values, timePeriods.Values, cancellationToken);
-            await EnsureQuantitySeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
-            await EnsureAspSeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
-            await EnsureExtendedMeasureSeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
-            await EnsureStoreProfileOptionSeedAsync(connection, transaction, cancellationToken);
-            await EnsureProductProfileSeedAsync(connection, transaction, cancellationToken);
-            await EnsureProductProfileOptionSeedAsync(connection, transaction, cancellationToken);
+                await EnsureSupportedTimePeriodsAsync(connection, transaction, cancellationToken);
+                await EnsureGrowthFactorColumnAsync(connection, transaction, cancellationToken);
+                await EnsureStoreProfileColumnsAsync(connection, transaction, cancellationToken);
+
+                if (needsSeed)
+                {
+                    var productNodes = await LoadProductNodesAsync(connection, transaction, cancellationToken);
+                    var timePeriods = await LoadTimePeriodsAsync(connection, transaction, cancellationToken);
+                    await EnsureSupportedMeasureCellsAsync(connection, transaction, productNodes.Values, timePeriods.Values, cancellationToken);
+                    await EnsureQuantitySeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
+                    await EnsureAspSeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
+                    await EnsureExtendedMeasureSeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
+                    await EnsureStoreProfileOptionSeedAsync(connection, transaction, cancellationToken);
+                    await EnsureProductProfileSeedAsync(connection, transaction, cancellationToken);
+                    await EnsureProductProfileOptionSeedAsync(connection, transaction, cancellationToken);
+                }
+            }
 
             await transaction.CommitAsync(cancellationToken);
             _initialized = true;
