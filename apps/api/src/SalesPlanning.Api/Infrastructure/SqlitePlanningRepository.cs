@@ -317,15 +317,23 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         var timePeriods = await LoadTimePeriodsAsync(connection, null, cancellationToken);
         var stores = await LoadStoreMetadataAsync(connection, null, cancellationToken);
         var hierarchyMappings = await LoadHierarchyMappingsAsync(connection, null, cancellationToken);
-        var scenarioCells = (await LoadCellsAsync(connection, null, cancellationToken))
-            .Where(cell => cell.Coordinate.ScenarioVersionId == scenarioVersionId)
-            .ToList();
 
         var expandedNodeSet = expandedProductNodeIds?.ToHashSet() ?? [];
 
         var visibleNodes = productNodes.Values
             .Where(node => ShouldIncludeGridNode(node, selectedStoreId, expandedNodeSet, productNodes, expandAllBranches))
             .ToList();
+
+        var visibleNodeIds = visibleNodes
+            .Select(node => node.ProductNodeId)
+            .ToArray();
+
+        var scenarioCells = await LoadScenarioCellsForNodesAsync(
+            connection,
+            null,
+            scenarioVersionId,
+            visibleNodeIds,
+            cancellationToken);
 
         var rows = visibleNodes
             .OrderBy(node => node.Path.Length)
@@ -1703,6 +1711,58 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                    cell_kind
             from planning_cells;
             """;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            result.Add(ReadPlanningCell(reader));
+        }
+
+        return result;
+    }
+
+    private static async Task<List<PlanningCell>> LoadScenarioCellsForNodesAsync(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        long scenarioVersionId,
+        IReadOnlyList<long> productNodeIds,
+        CancellationToken cancellationToken)
+    {
+        if (productNodeIds.Count == 0)
+        {
+            return [];
+        }
+
+        var parameterNames = productNodeIds.Select((_, index) => $"$productNodeId{index}").ToArray();
+        var result = new List<PlanningCell>();
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"""
+            select scenario_version_id,
+                   measure_id,
+                   store_id,
+                   product_node_id,
+                   time_period_id,
+                   input_value,
+                   override_value,
+                   is_system_generated_override,
+                   derived_value,
+                   effective_value,
+                   growth_factor,
+                   is_locked,
+                   lock_reason,
+                   locked_by,
+                   row_version,
+                   cell_kind
+            from planning_cells
+            where scenario_version_id = $scenarioVersionId
+              and product_node_id in ({string.Join(", ", parameterNames)});
+            """;
+        command.Parameters.AddWithValue("$scenarioVersionId", scenarioVersionId);
+        for (var index = 0; index < productNodeIds.Count; index += 1)
+        {
+            command.Parameters.AddWithValue(parameterNames[index], productNodeIds[index]);
+        }
+
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
