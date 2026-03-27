@@ -74,20 +74,6 @@ if (authEnabled)
                 ValidateLifetime = true,
                 NameClaimType = "name"
             };
-            options.Events = new JwtBearerEvents
-            {
-                OnTokenValidated = context =>
-                {
-                    var principal = context.Principal;
-                    var tenantClaim = principal?.FindFirst("tid")?.Value;
-                    if (!string.Equals(tenantClaim, entraTenantId, StringComparison.OrdinalIgnoreCase))
-                    {
-                        context.Fail("Token was not issued for the configured Microsoft 365 tenant.");
-                        return Task.CompletedTask;
-                    }
-                    return Task.CompletedTask;
-                }
-            };
         });
     builder.Services.AddAuthorization();
 }
