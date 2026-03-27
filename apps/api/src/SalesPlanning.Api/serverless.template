@@ -25,7 +25,7 @@
     },
     "EntraApiAudience": {
       "Type": "String",
-      "Default": ""
+      "Default": "api://557f0c81-0531-4616-b62e-0b69eb7cb86f"
     }
   },
   "Resources": {

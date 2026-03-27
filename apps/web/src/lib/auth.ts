@@ -1,14 +1,17 @@
 import { EventType, InteractionRequiredAuthError, PublicClientApplication, type AuthenticationResult, type Configuration } from "@azure/msal-browser";
 
 const authMode = import.meta.env.VITE_AUTH_MODE ?? "entra";
+const clientId = import.meta.env.VITE_ENTRA_CLIENT_ID ?? "557f0c81-0531-4616-b62e-0b69eb7cb86f";
+const defaultApiScope = `api://${clientId}/SalesPlanning.Access`;
 
 export const authEnabled = authMode !== "disabled";
-export const loginRequest = {
-  scopes: ["User.Read"],
-};
 const configuredApiScope = import.meta.env.VITE_ENTRA_API_SCOPE?.trim();
+const apiScope = configuredApiScope || defaultApiScope;
+export const loginRequest = {
+  scopes: Array.from(new Set(["User.Read", apiScope])),
+};
 export const apiRequest = {
-  scopes: configuredApiScope ? [configuredApiScope] : ["User.Read"],
+  scopes: [apiScope],
 };
 
 const redirectUri =
@@ -21,7 +24,7 @@ const postLogoutRedirectUri =
 
 const msalConfig: Configuration = {
   auth: {
-    clientId: import.meta.env.VITE_ENTRA_CLIENT_ID ?? "557f0c81-0531-4616-b62e-0b69eb7cb86f",
+    clientId,
     authority: `https://login.microsoftonline.com/${import.meta.env.VITE_ENTRA_TENANT_ID ?? "76ad236c-6db1-4d3d-9901-996450816c3c"}`,
     redirectUri,
     postLogoutRedirectUri,

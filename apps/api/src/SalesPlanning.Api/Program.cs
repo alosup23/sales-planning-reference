@@ -19,7 +19,7 @@ var corsAllowedOrigins = (builder.Configuration["CorsAllowedOrigins"] ?? "http:/
     .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 var entraTenantId = builder.Configuration["EntraTenantId"] ?? "76ad236c-6db1-4d3d-9901-996450816c3c";
 var entraClientId = builder.Configuration["EntraClientId"] ?? "557f0c81-0531-4616-b62e-0b69eb7cb86f";
-var entraApiAudience = builder.Configuration["EntraApiAudience"];
+var entraApiAudience = builder.Configuration["EntraApiAudience"] ?? $"api://{entraClientId}";
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -69,8 +69,8 @@ if (authEnabled)
                     $"https://login.microsoftonline.com/{entraTenantId}/v2.0",
                     $"https://sts.windows.net/{entraTenantId}/"
                 ],
-                ValidateAudience = !string.IsNullOrWhiteSpace(entraApiAudience),
-                ValidAudience = string.IsNullOrWhiteSpace(entraApiAudience) ? null : entraApiAudience,
+                ValidateAudience = true,
+                ValidAudience = entraApiAudience,
                 ValidateLifetime = true,
                 NameClaimType = "name"
             };
@@ -85,19 +85,6 @@ if (authEnabled)
                         context.Fail("Token was not issued for the configured Microsoft 365 tenant.");
                         return Task.CompletedTask;
                     }
-
-                    if (!string.IsNullOrWhiteSpace(entraApiAudience))
-                    {
-                        var appClaim = principal?.FindFirst("azp")?.Value
-                            ?? principal?.FindFirst("appid")?.Value
-                            ?? principal?.FindFirst("aud")?.Value;
-
-                        if (!string.Equals(appClaim, entraClientId, StringComparison.OrdinalIgnoreCase))
-                        {
-                            context.Fail("Token was not issued for the configured Microsoft 365 application.");
-                        }
-                    }
-
                     return Task.CompletedTask;
                 }
             };
