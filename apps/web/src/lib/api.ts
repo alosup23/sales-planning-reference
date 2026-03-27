@@ -11,6 +11,7 @@ import type {
   HierarchyMappingResponse,
   ImportWorkbookResponse,
   LockCellsRequest,
+  PlanningStoreScopeResponse,
   PlanningInsightResponse,
   ProductHierarchyResponse,
   ProductProfile,
@@ -96,7 +97,11 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     throw new ApiRequestError(detail, response.status, code);
   }
 
-  return (await response.json()) as T;
+  try {
+    return (await response.json()) as T;
+  } catch {
+    throw new ApiRequestError("The planning API returned an invalid response.", response.status, "invalid-response");
+  }
 }
 
 export async function getGridSlice(selectedStoreId?: number | null, expandedProductNodeIds?: number[], expandAllBranches = false): Promise<GridSliceResponse> {
@@ -120,6 +125,10 @@ export async function getGridSlice(selectedStoreId?: number | null, expandedProd
 
     return sampleGridData;
   }
+}
+
+export async function getPlanningStoreScopes(): Promise<PlanningStoreScopeResponse> {
+  return await fetchJson<PlanningStoreScopeResponse>(`${API_BASE_URL}/planning-store-scopes`);
 }
 
 export async function postEdit(request: EditCellsRequest): Promise<void> {

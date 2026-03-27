@@ -8,6 +8,7 @@ import {
   downloadWorkbookExport,
   getGridSlice,
   getHierarchyMappings,
+  getPlanningStoreScopes,
   getPlanningInsights,
   getProductHierarchy,
   getProductProfileOptions,
@@ -53,6 +54,7 @@ import type {
   GridMeasure,
   GridRow,
   GridSliceResponse,
+  PlanningStoreScope,
   PlanningInsightResponse,
   ProductHierarchyCatalog,
   ProductProfile,
@@ -96,6 +98,11 @@ export default function App() {
     queryFn: () => getGridSlice(selectedPlanningStoreId, expandedBranchNodeIds, expandAllBranches),
     enabled: (activeView === "planning-store" || activeView === "planning-department") && selectedPlanningStoreId !== null,
   });
+  const planningStoreScopeQuery = useQuery({
+    queryKey: ["planning-store-scopes"],
+    queryFn: getPlanningStoreScopes,
+    enabled: activeView === "planning-store" || activeView === "planning-department",
+  });
   const hierarchyQuery = useQuery({
     queryKey: ["hierarchy-mappings"],
     queryFn: getHierarchyMappings,
@@ -104,6 +111,7 @@ export default function App() {
   const storeProfileQuery = useQuery({
     queryKey: ["store-profiles"],
     queryFn: getStoreProfiles,
+    enabled: activeView === "store-profile",
   });
   const storeProfileOptionsQuery = useQuery({
     queryKey: ["store-profile-options"],
@@ -132,12 +140,13 @@ export default function App() {
   });
 
   useEffect(() => {
-    if (selectedPlanningStoreId || !storeProfileQuery.data?.stores.length) {
+    if (selectedPlanningStoreId || !planningStoreScopeQuery.data?.stores.length) {
       return;
     }
 
-    setSelectedPlanningStoreId(storeProfileQuery.data.stores[0].storeId);
-  }, [selectedPlanningStoreId, storeProfileQuery.data]);
+    const firstActiveStore = planningStoreScopeQuery.data.stores.find((store) => store.isActive) ?? planningStoreScopeQuery.data.stores[0];
+    setSelectedPlanningStoreId(firstActiveStore.storeId);
+  }, [selectedPlanningStoreId, planningStoreScopeQuery.data]);
 
   useEffect(() => {
     setExpandedBranchNodeIds([]);
@@ -156,6 +165,7 @@ export default function App() {
   const refresh = async () => {
     await Promise.all([
       queryClient.refetchQueries({ queryKey: ["grid-slice", 1], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["planning-store-scopes"], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["hierarchy-mappings"], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["store-profiles"], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["store-profile-options"], type: "active" }),
@@ -513,7 +523,11 @@ export default function App() {
 
   const statusText = useMemo(() => {
     const planningViewActive = activeView === "planning-store" || activeView === "planning-department";
-    if ((planningViewActive && (gridQuery.isLoading || gridQuery.isFetching)) || storeProfileQuery.isLoading || (activeView === "hierarchy" && hierarchyQuery.isLoading) || (activeView === "store-profile" && storeProfileOptionsQuery.isLoading) || (activeView === "product-profile" && (productProfileQuery.isLoading || productProfileOptionsQuery.isLoading || productHierarchyQuery.isLoading))) {
+    if ((planningViewActive && (planningStoreScopeQuery.isLoading || gridQuery.isLoading || gridQuery.isFetching))
+      || (activeView === "store-profile" && storeProfileQuery.isLoading)
+      || (activeView === "hierarchy" && hierarchyQuery.isLoading)
+      || (activeView === "store-profile" && storeProfileOptionsQuery.isLoading)
+      || (activeView === "product-profile" && (productProfileQuery.isLoading || productProfileOptionsQuery.isLoading || productHierarchyQuery.isLoading))) {
       return "Loading planning slice...";
     }
 
@@ -522,8 +536,9 @@ export default function App() {
     }
 
     const activeError =
+      (planningViewActive ? planningStoreScopeQuery.error : null) ??
       (planningViewActive ? gridQuery.error : null) ??
-      storeProfileQuery.error ??
+      (activeView === "store-profile" ? storeProfileQuery.error : null) ??
       (activeView === "hierarchy" ? hierarchyQuery.error : null) ??
       (activeView === "store-profile" ? storeProfileOptionsQuery.error : null) ??
       (activeView === "product-profile" ? (productProfileQuery.error ?? productProfileOptionsQuery.error ?? productHierarchyQuery.error) : null);
@@ -545,7 +560,7 @@ export default function App() {
         return activeError.message;
       }
 
-      return "API unavailable.";
+      return activeError instanceof Error ? activeError.message : "API unavailable.";
     }
 
     if (lastError) {
@@ -567,7 +582,7 @@ export default function App() {
         : activeView === "product-profile"
           ? "Product profile maintenance ready."
       : "Multi-year planning grid ready.";
-  }, [activeView, gridQuery.error, gridQuery.isFetching, gridQuery.isLoading, hasUnsavedChanges, hierarchyQuery.error, hierarchyQuery.isLoading, isMutating, lastError, lastSavedAt, productHierarchyQuery.error, productHierarchyQuery.isLoading, productProfileOptionsQuery.error, productProfileOptionsQuery.isLoading, productProfileQuery.error, productProfileQuery.isLoading, storeProfileOptionsQuery.error, storeProfileOptionsQuery.isLoading, storeProfileQuery.error, storeProfileQuery.isLoading]);
+  }, [activeView, gridQuery.error, gridQuery.isFetching, gridQuery.isLoading, hasUnsavedChanges, hierarchyQuery.error, hierarchyQuery.isLoading, isMutating, lastError, lastSavedAt, planningStoreScopeQuery.error, planningStoreScopeQuery.isLoading, productHierarchyQuery.error, productHierarchyQuery.isLoading, productProfileOptionsQuery.error, productProfileOptionsQuery.isLoading, productProfileQuery.error, productProfileQuery.isLoading, storeProfileOptionsQuery.error, storeProfileOptionsQuery.isLoading, storeProfileQuery.error, storeProfileQuery.isLoading]);
 
   const storeViewData = useMemo(
     () => (gridQuery.data ? buildStoreView(gridQuery.data) : null),
@@ -580,12 +595,12 @@ export default function App() {
   const activeGridData = activeView === "planning-department" ? departmentViewData : storeViewData;
 
   const planningReady = (activeView !== "planning-store" && activeView !== "planning-department")
-    || (selectedPlanningStoreId !== null && !!gridQuery.data && !!storeViewData && !!departmentViewData);
+    || (!!planningStoreScopeQuery.data && selectedPlanningStoreId !== null && !!gridQuery.data && !!storeViewData && !!departmentViewData);
   const hierarchyReady = activeView !== "hierarchy" || !!hierarchyQuery.data;
-  const storeProfileReady = activeView !== "store-profile" || !!storeProfileOptionsQuery.data;
+  const storeProfileReady = activeView !== "store-profile" || (!!storeProfileQuery.data && !!storeProfileOptionsQuery.data);
   const productMaintenanceReady = activeView !== "product-profile" || (productProfileQuery.data && productProfileOptionsQuery.data && productHierarchyQuery.data);
 
-  if (!storeProfileQuery.data || !planningReady || !hierarchyReady || !storeProfileReady || !productMaintenanceReady) {
+  if (!planningReady || !hierarchyReady || !storeProfileReady || !productMaintenanceReady) {
     return (
       <main className="app-shell">
         <section className="hero">
@@ -1037,7 +1052,7 @@ export default function App() {
           <label className="year-picker">
             <span>Store Scope</span>
             <select value={selectedPlanningStoreId ?? ""} onChange={(event) => setSelectedPlanningStoreId(Number(event.target.value) || null)}>
-              {storeProfileQuery.data.stores.map((store) => (
+              {(planningStoreScopeQuery.data?.stores ?? []).map((store: PlanningStoreScope) => (
                 <option key={store.storeId} value={store.storeId}>
                   {store.branchName}
                 </option>
@@ -1097,7 +1112,7 @@ export default function App() {
         />
       ) : activeView === "store-profile" ? (
         <StoreProfileMaintenanceSheet
-          stores={storeProfileQuery.data.stores}
+          stores={storeProfileQuery.data!.stores}
           options={storeProfileOptionsQuery.data!.options}
           onSave={handleSaveStoreProfile}
           onDelete={handleDeleteStoreProfile}

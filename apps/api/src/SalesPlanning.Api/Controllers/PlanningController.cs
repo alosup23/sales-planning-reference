@@ -134,6 +134,12 @@ public sealed class PlanningController : ControllerBase
         return _planningService.SaveScenarioAsync(request, GetRequiredUserId(), cancellationToken);
     }
 
+    [HttpGet("planning-store-scopes")]
+    public Task<PlanningStoreScopeResponse> GetPlanningStoreScopes(CancellationToken cancellationToken)
+    {
+        return _planningService.GetPlanningStoreScopesAsync(cancellationToken);
+    }
+
     [HttpGet("store-profiles")]
     public Task<StoreProfileResponse> GetStoreProfiles(CancellationToken cancellationToken)
     {

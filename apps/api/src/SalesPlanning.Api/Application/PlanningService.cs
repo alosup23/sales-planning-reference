@@ -387,6 +387,23 @@ public sealed class PlanningService : IPlanningService
         return new SaveScenarioResponse("saved", request.Mode, DateTimeOffset.UtcNow);
     }
 
+    public async Task<PlanningStoreScopeResponse> GetPlanningStoreScopesAsync(CancellationToken cancellationToken)
+    {
+        var stores = await _repository.GetStoresAsync(cancellationToken);
+        return new PlanningStoreScopeResponse(
+            stores
+                .OrderByDescending(store => store.IsActive)
+                .ThenBy(store => store.StoreLabel, StringComparer.OrdinalIgnoreCase)
+                .Select(store => new PlanningStoreScopeDto(
+                    store.StoreId,
+                    store.StoreLabel,
+                    store.StoreCode,
+                    store.ClusterLabel,
+                    store.RegionLabel,
+                    store.IsActive))
+                .ToList());
+    }
+
     public async Task<StoreProfileResponse> GetStoreProfilesAsync(CancellationToken cancellationToken)
     {
         var stores = await _repository.GetStoresAsync(cancellationToken);

@@ -27,6 +27,17 @@ public sealed record StoreProfileDto(
 public sealed record StoreProfileResponse(
     IReadOnlyList<StoreProfileDto> Stores);
 
+public sealed record PlanningStoreScopeDto(
+    long StoreId,
+    string BranchName,
+    string? StoreCode,
+    string ClusterLabel,
+    string RegionLabel,
+    bool IsActive);
+
+public sealed record PlanningStoreScopeResponse(
+    IReadOnlyList<PlanningStoreScopeDto> Stores);
+
 public sealed record UpsertStoreProfileRequest(
     long ScenarioVersionId,
     long? StoreId,

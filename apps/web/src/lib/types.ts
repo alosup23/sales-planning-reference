@@ -251,6 +251,19 @@ export type StoreProfileResponse = {
   stores: StoreProfile[];
 };
 
+export type PlanningStoreScope = {
+  storeId: number;
+  branchName: string;
+  storeCode?: string | null;
+  clusterLabel: string;
+  regionLabel: string;
+  isActive: boolean;
+};
+
+export type PlanningStoreScopeResponse = {
+  stores: PlanningStoreScope[];
+};
+
 export type UpsertStoreProfileRequest = {
   scenarioVersionId: number;
   storeId?: number | null;
