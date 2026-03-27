@@ -1304,6 +1304,12 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             }
 
             await using var connection = await OpenConnectionAsync(cancellationToken);
+            if (await HasInitializedSchemaAsync(connection, cancellationToken))
+            {
+                _initialized = true;
+                return;
+            }
+
             await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
             await using (var command = connection.CreateCommand())
             {
@@ -1523,6 +1529,26 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         {
             _gate.Release();
         }
+    }
+
+    private static async Task<bool> HasInitializedSchemaAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select count(*)
+            from sqlite_master
+            where type = 'table'
+              and name in (
+                  'product_nodes',
+                  'time_periods',
+                  'planning_cells',
+                  'store_metadata',
+                  'product_profiles',
+                  'product_hierarchy_catalog',
+                  'product_subclass_catalog');
+            """;
+        var existingCount = Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));
+        return existingCount == 7;
     }
 
     private async Task<SqliteConnection> OpenConnectionAsync(CancellationToken cancellationToken)
