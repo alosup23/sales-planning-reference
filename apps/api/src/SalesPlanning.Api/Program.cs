@@ -80,14 +80,22 @@ if (authEnabled)
                 {
                     var principal = context.Principal;
                     var tenantClaim = principal?.FindFirst("tid")?.Value;
-                    var appClaim = principal?.FindFirst("azp")?.Value
-                        ?? principal?.FindFirst("appid")?.Value
-                        ?? principal?.FindFirst("aud")?.Value;
-
-                    if (!string.Equals(tenantClaim, entraTenantId, StringComparison.OrdinalIgnoreCase) ||
-                        !string.Equals(appClaim, entraClientId, StringComparison.OrdinalIgnoreCase))
+                    if (!string.Equals(tenantClaim, entraTenantId, StringComparison.OrdinalIgnoreCase))
                     {
-                        context.Fail("Token was not issued for the configured Microsoft 365 application.");
+                        context.Fail("Token was not issued for the configured Microsoft 365 tenant.");
+                        return Task.CompletedTask;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(entraApiAudience))
+                    {
+                        var appClaim = principal?.FindFirst("azp")?.Value
+                            ?? principal?.FindFirst("appid")?.Value
+                            ?? principal?.FindFirst("aud")?.Value;
+
+                        if (!string.Equals(appClaim, entraClientId, StringComparison.OrdinalIgnoreCase))
+                        {
+                            context.Fail("Token was not issued for the configured Microsoft 365 application.");
+                        }
                     }
 
                     return Task.CompletedTask;
