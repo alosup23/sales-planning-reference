@@ -68,7 +68,10 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     } catch (error) {
       window.clearTimeout(timeoutId);
       const message = error instanceof Error ? error.message : "Session expired. Sign in again.";
-      throw new ApiRequestError(message, 401, "auth");
+      const code = message.includes("Refreshing Microsoft 365 session") || message.includes("Redirecting to Microsoft 365 sign-in")
+        ? "auth-redirect"
+        : "auth";
+      throw new ApiRequestError(message, 401, code);
     }
   }
 

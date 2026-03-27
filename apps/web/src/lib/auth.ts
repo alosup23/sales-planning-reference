@@ -67,7 +67,8 @@ export async function getAccessToken(): Promise<string | null> {
 
   const account = msalInstance.getActiveAccount() ?? msalInstance.getAllAccounts()[0] ?? null;
   if (!account) {
-    return null;
+    await msalInstance.loginRedirect(loginRequest);
+    throw new Error("Redirecting to Microsoft 365 sign-in...");
   }
 
   try {
@@ -79,7 +80,11 @@ export async function getAccessToken(): Promise<string | null> {
     return result.accessToken || null;
   } catch (error) {
     if (error instanceof InteractionRequiredAuthError) {
-      throw new Error("Session expired. Sign in again.");
+      await msalInstance.acquireTokenRedirect({
+        ...apiRequest,
+        account,
+      });
+      throw new Error("Refreshing Microsoft 365 session...");
     }
 
     throw error;

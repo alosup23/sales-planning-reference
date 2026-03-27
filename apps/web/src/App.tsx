@@ -545,6 +545,10 @@ export default function App() {
 
     if (activeError) {
       if (activeError instanceof ApiRequestError) {
+        if (activeError.code === "auth-redirect") {
+          return activeError.message;
+        }
+
         if (activeError.code === "auth" || activeError.status === 401 || activeError.status === 403) {
           return "Microsoft 365 session expired or not authorized. Sign in again.";
         }
