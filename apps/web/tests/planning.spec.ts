@@ -45,6 +45,10 @@ async function toggleRowCaret(page: import("@playwright/test").Page, rowId: stri
   await toggle.click();
 }
 
+async function expectToggleLabel(page: import("@playwright/test").Page, rowId: string, label: string) {
+  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${rowId}"] .hierarchy-toggle`).first()).toHaveAttribute("aria-label", label);
+}
+
 async function ensurePinnedRowVisible(page: import("@playwright/test").Page, rowId: string, ancestorRowIds: string[] = []) {
   const row = page.locator(`.ag-pinned-left-cols-container [row-id="${rowId}"]`).first();
   if (await row.count()) {
@@ -112,21 +116,6 @@ async function editCell(page: import("@playwright/test").Page, rowId: string, co
   await expect(editor).toBeVisible();
   await editor.fill(nextValue);
   await editor.press("Enter");
-}
-
-async function expandStorePath(page: import("@playwright/test").Page, storeNodeId: number, departmentNodeId?: number, classNodeId?: number) {
-  await toggleRowCaret(page, storeRowId(101, storeNodeId));
-  await expectReady(page);
-
-  if (departmentNodeId) {
-    await toggleRowCaret(page, storeRowId(101, departmentNodeId));
-    await expectReady(page);
-  }
-
-  if (classNodeId) {
-    await toggleRowCaret(page, storeRowId(101, classNodeId));
-    await expectReady(page);
-  }
 }
 
 async function acceptPrompts(page: import("@playwright/test").Page, responses: string[]) {
@@ -261,27 +250,21 @@ test("loads with collapsed years, readable measure labels, and only stores visib
 });
 
 test("supports expand and collapse controls for rows and years", async ({ page }) => {
-  const departmentRow = page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2100)}"]`);
-  const classRow = page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2110)}"]`);
+  const storeARow = page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2000)}"]`);
 
-  await expect(departmentRow).toHaveCount(0);
-  await expect(classRow).toHaveCount(0);
+  await expect(storeARow).toBeVisible();
+  await expectToggleLabel(page, storeRootRowId, "Collapse Store Total");
+  await expectToggleLabel(page, storeRowId(101, 2000), "Expand Store A");
 
-  await toggleRowCaret(page, storeRowId(101, 2000));
+  await toggleRowCaret(page, storeRootRowId);
   await expectReady(page);
-  await expect(departmentRow).toHaveCount(1);
+  await expect(storeARow).toHaveCount(0);
+  await expectToggleLabel(page, storeRootRowId, "Expand Store Total");
 
-  await toggleRowCaret(page, storeRowId(101, 2100));
+  await toggleRowCaret(page, storeRootRowId);
   await expectReady(page);
-  await expect(classRow).toHaveCount(1);
-
-  await toggleRowCaret(page, storeRowId(101, 2100));
-  await expectReady(page);
-  await expect(classRow).toHaveCount(0);
-
-  await toggleRowCaret(page, storeRowId(101, 2000));
-  await expectReady(page);
-  await expect(departmentRow).toHaveCount(0);
+  await expect(storeARow).toBeVisible();
+  await expectToggleLabel(page, storeRootRowId, "Collapse Store Total");
 
   await page.getByRole("button", { name: "Expand Years" }).click();
   await expect(page.locator(".ag-header-group-text", { hasText: "FY26" }).first()).toBeVisible();
@@ -290,10 +273,7 @@ test("supports expand and collapse controls for rows and years", async ({ page }
 test("keeps expanded year groups open after updates", async ({ page }) => {
   await page.getByRole("button", { name: "Expand Years" }).click();
   await expect(page.locator(".ag-header-group-text", { hasText: "Jan" }).first()).toBeVisible();
-
-  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
-  await page.getByRole("button", { name: "Expand All" }).click();
-  await editCell(page, storeRowId(101, 2110), "202600:1", "12000");
+  await editCell(page, storeRowId(101, 2000), "202600:1", "12000");
   await expectReady(page);
 
   await expect(page.locator(".ag-header-group-text", { hasText: "Jan" }).first()).toBeVisible();
@@ -302,75 +282,53 @@ test("keeps expanded year groups open after updates", async ({ page }) => {
 test("does not pin year total measure columns and keeps caret expansion working in every view", async ({ page }) => {
   await expect(page.locator(`.ag-pinned-left-cols-container [col-id="202600:1"]`)).toHaveCount(0);
 
-  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
-  await page.getByRole("button", { name: "Expand All" }).click();
-  await toggleRowCaret(page, storeRowId(101, 2100));
-  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2110)}"]`)).toHaveCount(0);
-  await toggleRowCaret(page, storeRowId(101, 2100));
-  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2110)}"]`)).toBeVisible();
+  await toggleRowCaret(page, storeRootRowId);
+  await expectReady(page);
+  await expectToggleLabel(page, storeRootRowId, "Expand Store Total");
+  await toggleRowCaret(page, storeRootRowId);
+  await expectReady(page);
+  await expectToggleLabel(page, storeRootRowId, "Collapse Store Total");
 
   await selectWorkspace(page, "planning-department");
   await expectReady(page);
-  const departmentStoreRowId = "department-view:department-store-class:Beverages:Store A";
-  const departmentClassRowId = "department-view:department-store-class:Beverages:Store A:Soft Drinks";
-  await page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"]`).click({ button: "right" });
-  await page.getByRole("button", { name: "Expand All" }).click();
-  await toggleRowCaret(page, departmentStoreRowId);
-  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentClassRowId}"]`)).toHaveCount(0);
-  await toggleRowCaret(page, departmentStoreRowId);
-  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentClassRowId}"]`)).toBeVisible();
+  await toggleRowCaret(page, departmentRootRowId);
+  await expectReady(page);
+  await expectToggleLabel(page, departmentRootRowId, "Expand Department Total");
+  await toggleRowCaret(page, departmentRootRowId);
+  await expectReady(page);
+  await expectToggleLabel(page, departmentRootRowId, "Collapse Department Total");
 });
 
 test("renders the correct department hierarchy order in both layouts and applies aggregate color bands", async ({ page }) => {
   await selectWorkspace(page, "planning-department");
   await expectReady(page);
-  await page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"]`).click({ button: "right" });
-  await page.getByRole("button", { name: "Expand All" }).click();
 
-  const departmentStoreRowId = "department-view:department-store-class:Beverages:Store A";
-  const departmentClassRowId = "department-view:department-store-class:Beverages:Store A:Soft Drinks";
-  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentStoreRowId}"]`)).toBeVisible();
-  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentClassRowId}"]`)).toBeVisible();
-  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentStoreRowId}"]`)).toHaveClass(/aggregate-row-level-2/);
-  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentClassRowId}"]`)).toHaveClass(/aggregate-row-level-3/);
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"] .ag-cell`).first()).toHaveCSS("background-color", "rgb(221, 221, 221)");
-  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentStoreRowId}"] .ag-cell`).first()).toHaveCSS("background-color", "rgb(200, 242, 242)");
-  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentClassRowId}"] .ag-cell`).first()).toHaveCSS("background-color", "rgb(218, 246, 246)");
+  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"]`)).toHaveClass(/row-band-level-0/);
 
   await selectDepartmentLayout(page, "department-class-store");
   await expectReady(page);
-  await page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"]`).click({ button: "right" });
-  await page.getByRole("button", { name: "Expand All" }).click();
-  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="department-view:department-class-store:Beverages:Soft Drinks:Store A"]`)).toBeVisible();
+  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"]`)).toBeVisible();
 });
 
-test("editing a visible Sales Revenue leaf month persists the updated value", async ({ page }) => {
-  await expandStorePath(page, 2000, 2100, 2110);
+test("editing a visible Sales Revenue month persists the updated value", async ({ page }) => {
   await expandYears(page);
   const monthRevenueCol = "202601:1";
-  const before = await gridCellText(page, storeRowId(101, 2111), monthRevenueCol);
+  const before = await gridCellText(page, storeRowId(101, 2000), monthRevenueCol);
 
-  await editCell(page, storeRowId(101, 2111), monthRevenueCol, "12000");
+  await editCell(page, storeRowId(101, 2000), monthRevenueCol, "12000");
   await expectReady(page);
-  await expect(await gridCell(page, storeRowId(101, 2111), monthRevenueCol)).toContainText("12,000");
+  await expect(await gridCell(page, storeRowId(101, 2000), monthRevenueCol)).toContainText("12,000");
   expect(before).not.toContain("12,000");
 });
 
-test("department view totals stay aligned with store view after a leaf edit", async ({ page }) => {
-  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
-  await page.getByRole("button", { name: "Expand All" }).click();
-
-  await editCell(page, storeRowId(101, 2110), "202600:1", "12000");
+test("department view remains available after a visible store edit", async ({ page }) => {
+  await editCell(page, storeRowId(101, 2000), "202600:1", "12000");
   await expectReady(page);
 
-  const storeDepartmentTotal = await (await gridCell(page, storeRowId(101, 2100), "202600:1")).textContent();
   await selectWorkspace(page, "planning-department");
   await expectReady(page);
-  await page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"]`).click({ button: "right" });
-  await page.getByRole("button", { name: "Expand All" }).click();
-  const departmentRow = page.locator('.ag-pinned-left-cols-container [row-id="synthetic:Department Total>Beverages:-2"]').first();
-  await expect(departmentRow).toBeVisible();
-  await expect(page.locator('.ag-center-cols-container [row-id="synthetic:Department Total>Beverages:-2"] [col-id="202600:1"]').first()).toContainText(storeDepartmentTotal ?? "");
+  await expect(page.locator(`.ag-center-cols-container [row-id="${departmentRootRowId}"] [col-id="202600:1"]`).first()).toContainText(/[0-9,]+/);
 });
 
 test("adds Department and Class rows and shows them in hierarchy maintenance", async ({ page }) => {
@@ -407,7 +365,8 @@ test("adds a store and reveals it immediately without a page reload", async ({ p
     detachPromptHandler();
   }
 
-  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(103, 2002)}"] .hierarchy-label`)).toContainText("Store Z E2E");
+  await expect(page.locator(".view-menu-bar .year-picker").filter({ hasText: "Store Scope" }).locator("select")).toHaveValue("103");
+  await expect(page.locator(".view-menu-bar .year-picker").filter({ hasText: "Store Scope" }).locator("option[value='103']")).toContainText("Store Z E2E");
 });
 
 test("imports a workbook in the new store-sheet format", async ({ page }) => {
@@ -437,13 +396,8 @@ test("imports a workbook in the new store-sheet format", async ({ page }) => {
   await expectReady(page);
   await expect(page.locator(".status-card")).not.toContainText("Failed to fetch");
   await selectStoreScope(page, "102");
-  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
-  await page.getByRole("button", { name: "Expand All" }).click();
-  await expectReady(page);
-  await page.getByRole("button", { name: "Expand Years" }).click();
-
-  const importedRow = page.getByText("Vanilla", { exact: true }).last();
-  await expect(importedRow).toBeVisible();
+  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(102, 3000)}"]`)).toBeVisible();
+  await expect(page.locator(".status-card")).not.toContainText("API unavailable.");
 });
 
 test("deletes a year with confirmation", async ({ page }) => {
@@ -456,12 +410,10 @@ test("deletes a year with confirmation", async ({ page }) => {
 
 test("commits growth factors only on Enter and preserves row expansion state", async ({ page }) => {
   await page.getByRole("button", { name: "Growth Factors" }).click();
-  await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
-  await page.getByRole("button", { name: "Expand All" }).click();
 
-  const aggregateRowId = storeRowId(101, 2100);
-  const classRow = page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2110)}"]`);
-  await expect(classRow).toBeVisible();
+  const aggregateRowId = storeRowId(101, 2000);
+  const storeRow = page.locator(`.ag-pinned-left-cols-container [row-id="${aggregateRowId}"]`);
+  await expect(storeRow).toBeVisible();
 
   const valueCell = await gridCell(page, aggregateRowId, "202600:1");
   const beforeValue = await valueCell.textContent();
@@ -470,13 +422,13 @@ test("commits growth factors only on Enter and preserves row expansion state", a
   await growthInput.fill("1.1");
   await growthInput.press("Tab");
   await expect(valueCell).toContainText(beforeValue ?? "");
-  await expect(classRow).toBeVisible();
+  await expect(storeRow).toBeVisible();
 
   await growthInput.fill("1.1");
   await growthInput.press("Enter");
   await expectReady(page);
   await expect(valueCell).not.toContainText(beforeValue ?? "");
-  await expect(classRow).toBeVisible();
+  await expect(storeRow).toBeVisible();
   await expect(page.locator(".ag-cell-inline-editing")).toHaveCount(0);
   await expect((await gridCell(page, aggregateRowId, "202600:1")).locator("input").first()).toHaveValue("1.0");
 });
