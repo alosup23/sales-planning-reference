@@ -14,7 +14,7 @@ public interface IPlanningRepository
     Task AppendAuditAsync(PlanningActionAudit audit, CancellationToken cancellationToken);
     Task<long> GetNextActionIdAsync(CancellationToken cancellationToken);
     Task<IReadOnlyList<PlanningActionAudit>> GetAuditAsync(long scenarioVersionId, long measureId, long storeId, long productNodeId, CancellationToken cancellationToken);
-    Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, CancellationToken cancellationToken);
+    Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, string? selectedDepartmentLabel, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, CancellationToken cancellationToken);
     Task<ProductNode> AddRowAsync(AddRowRequest request, CancellationToken cancellationToken);
     Task<int> DeleteRowAsync(long scenarioVersionId, long productNodeId, CancellationToken cancellationToken);
     Task<int> DeleteYearAsync(long scenarioVersionId, long yearTimePeriodId, CancellationToken cancellationToken);

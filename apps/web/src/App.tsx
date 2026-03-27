@@ -86,6 +86,7 @@ export default function App() {
   const [productSearchTerm, setProductSearchTerm] = useState("");
   const [productPageNumber, setProductPageNumber] = useState(1);
   const [selectedPlanningStoreId, setSelectedPlanningStoreId] = useState<number | null>(null);
+  const [selectedDepartmentLabel, setSelectedDepartmentLabel] = useState<string | null>(null);
   const [expandedBranchNodeIds, setExpandedBranchNodeIds] = useState<number[]>([]);
   const [expandAllBranches, setExpandAllBranches] = useState(false);
 
@@ -94,9 +95,14 @@ export default function App() {
   }, []);
 
   const gridQuery = useQuery({
-    queryKey: ["grid-slice", 1, selectedPlanningStoreId, expandedBranchNodeIds.join(","), expandAllBranches ? "all" : "branch"],
-    queryFn: () => getGridSlice(selectedPlanningStoreId, expandedBranchNodeIds, expandAllBranches),
-    enabled: (activeView === "planning-store" || activeView === "planning-department") && selectedPlanningStoreId !== null,
+    queryKey: ["grid-slice", 1, activeView, selectedPlanningStoreId, selectedDepartmentLabel, expandedBranchNodeIds.join(","), expandAllBranches ? "all" : "branch"],
+    queryFn: () => getGridSlice({
+      selectedStoreId: activeView === "planning-store" ? selectedPlanningStoreId : null,
+      selectedDepartmentLabel: activeView === "planning-department" ? selectedDepartmentLabel : null,
+      expandedProductNodeIds: activeView === "planning-store" ? expandedBranchNodeIds : [],
+      expandAllBranches,
+    }),
+    enabled: activeView === "planning-store" ? selectedPlanningStoreId !== null : activeView === "planning-department",
   });
   const planningStoreScopeQuery = useQuery({
     queryKey: ["planning-store-scopes"],
@@ -150,8 +156,12 @@ export default function App() {
 
   useEffect(() => {
     setExpandedBranchNodeIds([]);
+  }, [selectedPlanningStoreId, selectedDepartmentLabel]);
+
+  useEffect(() => {
+    setExpandedBranchNodeIds([]);
     setExpandAllBranches(false);
-  }, [selectedPlanningStoreId, activeView, departmentLayout]);
+  }, [activeView, departmentLayout]);
 
   useEffect(() => {
     if (selectedYearId || !gridQuery.data) {
@@ -598,8 +608,24 @@ export default function App() {
   );
   const activeGridData = activeView === "planning-department" ? departmentViewData : storeViewData;
 
+  useEffect(() => {
+    if (activeView !== "planning-department" || selectedDepartmentLabel || !departmentViewData) {
+      return;
+    }
+
+    const firstDepartment = departmentViewData.rows.find((row) => row.structureRole === "department" && row.level === 1);
+    if (firstDepartment) {
+      setSelectedDepartmentLabel(firstDepartment.label);
+      setExpandAllBranches(true);
+    }
+  }, [activeView, departmentViewData, selectedDepartmentLabel]);
+
   const planningReady = (activeView !== "planning-store" && activeView !== "planning-department")
-    || (!!planningStoreScopeQuery.data && selectedPlanningStoreId !== null && !!gridQuery.data && !!storeViewData && !!departmentViewData);
+    || (!!planningStoreScopeQuery.data
+      && (activeView !== "planning-store" || selectedPlanningStoreId !== null)
+      && !!gridQuery.data
+      && !!storeViewData
+      && !!departmentViewData);
   const hierarchyReady = activeView !== "hierarchy" || !!hierarchyQuery.data;
   const storeProfileReady = activeView !== "store-profile" || (!!storeProfileQuery.data && !!storeProfileOptionsQuery.data);
   const productMaintenanceReady = activeView !== "product-profile" || (productProfileQuery.data && productProfileOptionsQuery.data && productHierarchyQuery.data);
@@ -771,6 +797,23 @@ export default function App() {
     }
 
     setPendingRevealRow(createdRow);
+  };
+
+  const handleScopeRowClick = (row: GridRow) => {
+    if (activeView === "planning-store" && row.structureRole === "store" && row.level === 1) {
+      if (row.storeId !== selectedPlanningStoreId || !expandAllBranches) {
+        setSelectedPlanningStoreId(row.storeId);
+        setExpandAllBranches(true);
+      }
+      return;
+    }
+
+    if (activeView === "planning-department" && row.structureRole === "department" && row.level === 1) {
+      if (row.label !== selectedDepartmentLabel || !expandAllBranches) {
+        setSelectedDepartmentLabel(row.label);
+        setExpandAllBranches(true);
+      }
+    }
   };
 
   const ensureBranchLoaded = (row: GridRow) => {
@@ -1052,7 +1095,7 @@ export default function App() {
             <option value="product-profile">Product Profile Maintenance</option>
           </select>
         </label>
-        {(activeView === "planning-store" || activeView === "planning-department") ? (
+        {activeView === "planning-store" ? (
           <label className="year-picker">
             <span>Store Scope</span>
             <select value={selectedPlanningStoreId ?? ""} onChange={(event) => setSelectedPlanningStoreId(Number(event.target.value) || null)}>
@@ -1061,6 +1104,20 @@ export default function App() {
                   {store.branchName}
                 </option>
               ))}
+            </select>
+          </label>
+        ) : null}
+        {activeView === "planning-department" ? (
+          <label className="year-picker">
+            <span>Department Scope</span>
+            <select value={selectedDepartmentLabel ?? ""} onChange={(event) => setSelectedDepartmentLabel(event.target.value || null)}>
+              {(departmentViewData?.rows ?? [])
+                .filter((row) => row.structureRole === "department" && row.level === 1)
+                .map((row) => (
+                  <option key={row.label} value={row.label}>
+                    {row.label}
+                  </option>
+                ))}
             </select>
           </label>
         ) : null}
@@ -1184,6 +1241,7 @@ export default function App() {
               onExpandAllBranches={handleExpandAllBranches}
               onCollapseAllBranches={handleCollapseAllBranches}
               expandAllBranches={expandAllBranches}
+              onScopeRowClick={handleScopeRowClick}
               sheetLabel={activeView === "planning-store" ? "Planning - by Store" : "Planning - by Department"}
               pendingRevealRow={pendingRevealRow}
               onRevealHandled={() => setPendingRevealRow(null)}

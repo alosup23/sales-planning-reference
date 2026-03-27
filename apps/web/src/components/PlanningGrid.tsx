@@ -46,6 +46,7 @@ type PlanningGridProps = {
   onExpandAllBranches: () => void;
   onCollapseAllBranches: () => void;
   expandAllBranches: boolean;
+  onScopeRowClick?: (row: GridRow) => void;
   sheetLabel: string;
   pendingRevealRow: AddRowResponse | null;
   onRevealHandled: () => void;
@@ -98,6 +99,7 @@ export function PlanningGrid({
   onExpandAllBranches,
   onCollapseAllBranches,
   expandAllBranches,
+  onScopeRowClick,
   sheetLabel,
   pendingRevealRow,
   onRevealHandled,
@@ -458,6 +460,9 @@ export function PlanningGrid({
 
   const handleRowClicked = (event: RowClickedEvent<GridRowView>) => {
     syncSelectedRow(event.data);
+    if (event.data) {
+      onScopeRowClick?.(event.data);
+    }
   };
 
   const handleCellFocused = (event: CellFocusedEvent<GridRowView>) => {

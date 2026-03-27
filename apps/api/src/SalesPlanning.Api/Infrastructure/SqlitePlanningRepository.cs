@@ -309,7 +309,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         return audits;
     }
 
-    public async Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, CancellationToken cancellationToken)
+    public async Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, string? selectedDepartmentLabel, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -321,7 +321,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         var expandedNodeSet = expandedProductNodeIds?.ToHashSet() ?? [];
 
         var visibleNodes = productNodes.Values
-            .Where(node => ShouldIncludeGridNode(node, selectedStoreId, expandedNodeSet, productNodes, expandAllBranches))
+            .Where(node => ShouldIncludeGridNode(node, selectedStoreId, selectedDepartmentLabel, expandedNodeSet, productNodes, expandAllBranches))
             .ToList();
 
         var visibleNodeIds = visibleNodes
@@ -399,12 +399,28 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
     private static bool ShouldIncludeGridNode(
         ProductNode node,
         long? selectedStoreId,
+        string? selectedDepartmentLabel,
         IReadOnlySet<long> expandedProductNodeIds,
         IReadOnlyDictionary<long, ProductNode> productNodes,
         bool expandAllBranches)
     {
         if (node.Level == 0)
         {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(selectedDepartmentLabel))
+        {
+            if (node.Level == 1)
+            {
+                return true;
+            }
+
+            if (!string.Equals(GetDepartmentLabel(node), selectedDepartmentLabel, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
             return true;
         }
 
@@ -426,6 +442,16 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         return node.ParentProductNodeId is long parentProductNodeId
                && expandedProductNodeIds.Contains(parentProductNodeId)
                && productNodes.ContainsKey(parentProductNodeId);
+    }
+
+    private static string GetDepartmentLabel(ProductNode node)
+    {
+        if (node.Level <= 1)
+        {
+            return node.Label;
+        }
+
+        return node.Path.ElementAtOrDefault(1) ?? node.Label;
     }
 
     public async Task<ProductNode> AddRowAsync(AddRowRequest request, CancellationToken cancellationToken)

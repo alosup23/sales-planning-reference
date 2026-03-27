@@ -95,8 +95,8 @@ public sealed class S3BackedSqlitePlanningRepository : IPlanningRepository
     public Task<IReadOnlyList<PlanningActionAudit>> GetAuditAsync(long scenarioVersionId, long measureId, long storeId, long productNodeId, CancellationToken cancellationToken) =>
         WithReadAsync((ct) => _innerRepository.GetAuditAsync(scenarioVersionId, measureId, storeId, productNodeId, ct), cancellationToken);
 
-    public Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, CancellationToken cancellationToken) =>
-        WithReadAsync((ct) => _innerRepository.GetGridSliceAsync(scenarioVersionId, selectedStoreId, expandedProductNodeIds, expandAllBranches, ct), cancellationToken);
+    public Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, string? selectedDepartmentLabel, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, CancellationToken cancellationToken) =>
+        WithReadAsync((ct) => _innerRepository.GetGridSliceAsync(scenarioVersionId, selectedStoreId, selectedDepartmentLabel, expandedProductNodeIds, expandAllBranches, ct), cancellationToken);
 
     public Task<ProductNode> AddRowAsync(AddRowRequest request, CancellationToken cancellationToken) =>
         WithMutationAsync((ct) => _innerRepository.AddRowAsync(request, ct), cancellationToken);

@@ -21,7 +21,7 @@ public sealed class PlanningController : ControllerBase
     }
 
     [HttpGet("grid-slices")]
-    public Task<GridSliceResponse> GetGridSlice([FromQuery] long scenarioVersionId = 1, [FromQuery] long? selectedStoreId = null, [FromQuery] string? expandedProductNodeIds = null, [FromQuery] bool expandAllBranches = false, CancellationToken cancellationToken = default)
+    public Task<GridSliceResponse> GetGridSlice([FromQuery] long scenarioVersionId = 1, [FromQuery] long? selectedStoreId = null, [FromQuery] string? selectedDepartmentLabel = null, [FromQuery] string? expandedProductNodeIds = null, [FromQuery] bool expandAllBranches = false, CancellationToken cancellationToken = default)
     {
         var expandedNodes = expandedProductNodeIds?
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -31,7 +31,7 @@ public sealed class PlanningController : ControllerBase
             .Distinct()
             .ToArray();
 
-        return _planningService.GetGridSliceAsync(scenarioVersionId, selectedStoreId, expandedNodes, expandAllBranches, cancellationToken);
+        return _planningService.GetGridSliceAsync(scenarioVersionId, selectedStoreId, selectedDepartmentLabel, expandedNodes, expandAllBranches, cancellationToken);
     }
 
     [HttpPost("cell-edits")]

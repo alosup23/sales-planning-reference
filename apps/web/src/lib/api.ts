@@ -107,16 +107,26 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   }
 }
 
-export async function getGridSlice(selectedStoreId?: number | null, expandedProductNodeIds?: number[], expandAllBranches = false): Promise<GridSliceResponse> {
+export async function getGridSlice(
+  options?: {
+    selectedStoreId?: number | null;
+    selectedDepartmentLabel?: string | null;
+    expandedProductNodeIds?: number[];
+    expandAllBranches?: boolean;
+  },
+): Promise<GridSliceResponse> {
   try {
     const params = new URLSearchParams({ scenarioVersionId: "1" });
-    if (selectedStoreId) {
-      params.set("selectedStoreId", String(selectedStoreId));
+    if (options?.selectedStoreId) {
+      params.set("selectedStoreId", String(options.selectedStoreId));
     }
-    if (expandedProductNodeIds?.length) {
-      params.set("expandedProductNodeIds", expandedProductNodeIds.join(","));
+    if (options?.selectedDepartmentLabel) {
+      params.set("selectedDepartmentLabel", options.selectedDepartmentLabel);
     }
-    if (expandAllBranches) {
+    if (options?.expandedProductNodeIds?.length) {
+      params.set("expandedProductNodeIds", options.expandedProductNodeIds.join(","));
+    }
+    if (options?.expandAllBranches) {
       params.set("expandAllBranches", "true");
     }
 
