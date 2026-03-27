@@ -616,7 +616,6 @@ export default function App() {
     const firstDepartment = departmentViewData.rows.find((row) => row.structureRole === "department" && row.level === 1);
     if (firstDepartment) {
       setSelectedDepartmentLabel(firstDepartment.label);
-      setExpandAllBranches(true);
     }
   }, [activeView, departmentViewData, selectedDepartmentLabel]);
 
@@ -809,9 +808,8 @@ export default function App() {
     }
 
     if (activeView === "planning-department" && row.structureRole === "department" && row.level === 1) {
-      if (row.label !== selectedDepartmentLabel || !expandAllBranches) {
+      if (row.label !== selectedDepartmentLabel) {
         setSelectedDepartmentLabel(row.label);
-        setExpandAllBranches(true);
       }
     }
   };

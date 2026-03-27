@@ -421,7 +421,19 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 return false;
             }
 
-            return true;
+            if (node.Level <= 2)
+            {
+                return true;
+            }
+
+            if (expandAllBranches)
+            {
+                return true;
+            }
+
+            return node.ParentProductNodeId is long departmentParentProductNodeId
+                   && expandedProductNodeIds.Contains(departmentParentProductNodeId)
+                   && productNodes.ContainsKey(departmentParentProductNodeId);
         }
 
         if (selectedStoreId is not null && node.StoreId != selectedStoreId.Value)
