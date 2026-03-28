@@ -1265,31 +1265,22 @@ export default function App() {
       return;
     }
 
-    const branchAlreadyLoaded = (activeGridData?.rows ?? []).some((candidate) =>
-      candidate.level === row.level + 1
-      && row.path.every((segment, index) => candidate.path[index] === segment));
+    const aggregateExpansionNodeIds = activeView === "planning-department" && row.level > 0 && !row.bindingProductNodeId
+      ? [...new Set(
+        row.splashRoots
+          ?.map((scopeRoot) => scopeRoot.productNodeId)
+          .filter((productNodeId): productNodeId is number => Number.isFinite(productNodeId) && productNodeId > 0) ?? [],
+      )].sort((left, right) => left - right)
+      : [];
 
-    if (branchAlreadyLoaded || !planningData) {
-      return;
-    }
-
-    if (
-      activeView === "planning-department"
-      && departmentLayout === "department-class-store"
-      && row.structureRole === "department"
-      && row.level === 1
-      && !selectedDepartmentLabel
-    ) {
+    if (aggregateExpansionNodeIds.length > 0) {
       const branchNodeId = row.productNodeId;
-      const expansionNodeIds = row.splashRoots
-        ?.map((scopeRoot) => scopeRoot.productNodeId)
-        .filter((productNodeId): productNodeId is number => Number.isFinite(productNodeId) && productNodeId > 0) ?? [];
-
-      const nextExpandedNodeIds = [...new Set([...expandedBranchNodeIds, ...expansionNodeIds])].sort((left, right) => left - right);
-      if (nextExpandedNodeIds.length === expandedBranchNodeIds.length || loadingBranchNodeIdsRef.current.has(branchNodeId)) {
+      const allAggregateBranchesLoaded = aggregateExpansionNodeIds.every((productNodeId) => expandedBranchNodeIds.includes(productNodeId));
+      if (allAggregateBranchesLoaded || loadingBranchNodeIdsRef.current.has(branchNodeId)) {
         return;
       }
 
+      const nextExpandedNodeIds = [...new Set([...expandedBranchNodeIds, ...aggregateExpansionNodeIds])].sort((left, right) => left - right);
       loadingBranchNodeIdsRef.current.add(branchNodeId);
       void getGridSlice({
         selectedDepartmentLabel,
@@ -1307,6 +1298,14 @@ export default function App() {
         .finally(() => {
           loadingBranchNodeIdsRef.current.delete(branchNodeId);
         });
+      return;
+    }
+
+    const branchAlreadyLoaded = (activeGridData?.rows ?? []).some((candidate) =>
+      candidate.level === row.level + 1
+      && row.path.every((segment, index) => candidate.path[index] === segment));
+
+    if (branchAlreadyLoaded || !planningData) {
       return;
     }
 
@@ -1355,10 +1354,9 @@ export default function App() {
 
     if (
       activeView === "planning-department"
-      && departmentLayout === "department-class-store"
-      && row.structureRole === "department"
-      && row.level === 1
-      && !selectedDepartmentLabel
+      && row.level > 0
+      && !row.bindingProductNodeId
+      && (row.splashRoots?.length ?? 0) > 0
     ) {
       return true;
     }
@@ -1987,6 +1985,7 @@ export default function App() {
               expandAllBranches={expandAllBranches}
               onScopeRowClick={handleScopeRowClick}
               sheetLabel={activeView === "planning-store" ? "Planning - by Store" : "Planning - by Department"}
+              expansionStateKey={activeView === "planning-department" ? departmentLayout : activeView}
               pendingRevealRow={pendingRevealRow}
               onRevealHandled={() => setPendingRevealRow(null)}
             />

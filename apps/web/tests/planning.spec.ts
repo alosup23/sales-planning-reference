@@ -313,23 +313,32 @@ test("renders the correct department hierarchy order in both layouts and applies
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"]`)).toHaveClass(/row-band-level-0/);
   await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Beverages" }).first()).toBeVisible();
   await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store A" })).toHaveCount(0);
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store B" })).toHaveCount(0);
   await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Soft Drinks" })).toHaveCount(0);
 
   await toggleRowCaretByLabel(page, "Beverages");
   await expectReady(page);
   await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store A" }).first()).toBeVisible();
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store B" }).first()).toBeVisible();
   await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Soft Drinks" })).toHaveCount(0);
 
   await selectDepartmentLayout(page, "department-class-store");
   await expectReady(page);
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"]`)).toBeVisible();
   await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store A" })).toHaveCount(0);
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store B" })).toHaveCount(0);
   await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Soft Drinks" })).toHaveCount(0);
 
   await toggleRowCaretByLabel(page, "Beverages");
   await expectReady(page);
   await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Soft Drinks" }).first()).toBeVisible();
   await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: /^Store A$/ })).toHaveCount(0);
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: /^Store B$/ })).toHaveCount(0);
+
+  await toggleRowCaretByLabel(page, "Soft Drinks");
+  await expectReady(page);
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store A" }).first()).toBeVisible();
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store B" }).first()).toBeVisible();
 });
 
 test("editing a visible Sales Revenue month persists the updated value", async ({ page }) => {

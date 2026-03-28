@@ -52,6 +52,7 @@ type PlanningGridProps = {
   expandAllBranches: boolean;
   onScopeRowClick?: (row: GridRow) => void;
   sheetLabel: string;
+  expansionStateKey?: string;
   pendingRevealRow: AddRowResponse | null;
   onRevealHandled: () => void;
 };
@@ -109,6 +110,7 @@ export function PlanningGrid({
   expandAllBranches,
   onScopeRowClick,
   sheetLabel,
+  expansionStateKey,
   pendingRevealRow,
   onRevealHandled,
 }: PlanningGridProps) {
@@ -127,7 +129,7 @@ export function PlanningGrid({
   useEffect(() => {
     hasAppliedInitialExpansionRef.current = false;
     expandedRowStateRef.current.clear();
-  }, [sheetLabel]);
+  }, [sheetLabel, expansionStateKey]);
 
   const yearPeriods = useMemo(
     () => data.periods.filter((period) => period.grain === "year"),
