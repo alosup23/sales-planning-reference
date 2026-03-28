@@ -16,7 +16,9 @@ internal static class PostgresTableDefinitions
             ["store_id", "store_label", "cluster_label", "region_label", "lifecycle_state", "ramp_profile_code",
              "effective_from_time_period_id", "effective_to_time_period_id", "store_code", "state", "latitude", "longitude",
              "opening_date", "sssg", "sales_type", "status", "storey", "building_status", "gta", "nta", "rsom", "dm",
-             "rental", "is_active"],
+             "rental", "store_cluster_role", "store_capacity_sqft", "store_format_tier", "catchment_type",
+             "demographic_segment", "climate_zone", "fulfilment_enabled", "online_fulfilment_node",
+             "store_opening_season", "store_closure_date", "refurbishment_date", "store_priority", "is_active"],
             ["store_id"]),
         new("product_nodes",
             ["product_node_id", "store_id", "parent_product_node_id", "label", "level", "path_json", "is_leaf",
@@ -47,7 +49,12 @@ internal static class PostgresTableDefinitions
             ["sku_variant", "description", "description2", "price", "cost", "dpt_no", "clss_no", "brand_no",
              "department", "class", "brand", "rev_department", "rev_class", "subclass", "prod_group", "prod_type",
              "active_flag", "order_flag", "brand_type", "launch_month", "gender", "size", "collection", "promo",
-             "ramadhan_promo", "is_active"],
+             "ramadhan_promo", "supplier", "lifecycle_stage", "age_stage", "gender_target", "material", "pack_size",
+             "size_range", "colour_family", "kvi_flag", "markdown_eligible", "markdown_floor_price",
+             "minimum_margin_pct", "price_ladder_group", "good_better_best_tier", "season_code", "event_code",
+             "launch_date", "end_of_life_date", "substitute_group", "companion_group", "replenishment_type",
+             "lead_time_days", "moq", "case_pack", "starting_inventory", "projected_stock_on_hand",
+             "sell_through_target_pct", "weeks_of_cover_target", "is_active"],
             ["sku_variant"]),
         new("product_profile_options",
             ["field_name", "option_value", "is_active"],
@@ -67,7 +74,32 @@ internal static class PostgresTableDefinitions
         new("hierarchy_subclasses_v2",
             ["department_label", "class_label", "subclass_label", "lifecycle_state", "ramp_profile_code",
              "effective_from_time_period_id", "effective_to_time_period_id"],
-            ["department_label", "class_label", "subclass_label"])
+            ["department_label", "class_label", "subclass_label"]),
+        new("inventory_profiles",
+            ["inventory_profile_id", "store_code", "product_code", "starting_inventory", "inbound_qty", "reserved_qty",
+             "projected_stock_on_hand", "safety_stock", "weeks_of_cover_target", "sell_through_target_pct", "is_active"],
+            ["inventory_profile_id"]),
+        new("pricing_policies",
+            ["pricing_policy_id", "department", "class_label", "subclass", "brand", "price_ladder_group", "min_price",
+             "max_price", "markdown_floor_price", "minimum_margin_pct", "kvi_flag", "markdown_eligible", "is_active"],
+            ["pricing_policy_id"]),
+        new("seasonality_event_profiles",
+            ["seasonality_event_profile_id", "department", "class_label", "subclass", "season_code", "event_code",
+             "month", "weight", "promo_window", "peak_flag", "is_active"],
+            ["seasonality_event_profile_id"]),
+        new("vendor_supply_profiles",
+            ["vendor_supply_profile_id", "supplier", "brand", "lead_time_days", "moq", "case_pack",
+             "replenishment_type", "payment_terms", "is_active"],
+            ["vendor_supply_profile_id"]),
+        new("planning_command_batches",
+            ["command_batch_id", "scenario_version_id", "user_id", "command_kind", "command_scope_json", "is_undone",
+             "superseded_by_batch_id", "created_at"],
+            ["command_batch_id"]),
+        new("planning_command_cell_deltas",
+            ["command_delta_id", "command_batch_id", "scenario_version_id", "measure_id", "store_id", "product_node_id",
+             "time_period_id", "old_input_value", "new_input_value", "old_override_value", "new_override_value",
+             "old_effective_value", "new_effective_value", "old_is_locked", "new_is_locked", "change_kind"],
+            ["command_delta_id"])
     ];
 
     public static readonly IReadOnlyList<string> FullSnapshotDeleteOrder =
@@ -82,6 +114,12 @@ internal static class PostgresTableDefinitions
         "product_profiles",
         "product_subclass_catalog",
         "product_hierarchy_catalog",
+        "vendor_supply_profiles",
+        "seasonality_event_profiles",
+        "pricing_policies",
+        "inventory_profiles",
+        "planning_command_cell_deltas",
+        "planning_command_batches",
         "hierarchy_subclasses_v2",
         "hierarchy_classes_v2",
         "hierarchy_departments_v2",
@@ -184,6 +222,18 @@ internal static class PostgresTableDefinitions
             rsom text null,
             dm text null,
             rental real null,
+            store_cluster_role text null,
+            store_capacity_sqft real null,
+            store_format_tier text null,
+            catchment_type text null,
+            demographic_segment text null,
+            climate_zone text null,
+            fulfilment_enabled integer not null default 0,
+            online_fulfilment_node integer not null default 0,
+            store_opening_season text null,
+            store_closure_date text null,
+            refurbishment_date text null,
+            store_priority text null,
             is_active integer not null default 1
         );
         create table if not exists store_profile_options (
@@ -218,6 +268,34 @@ internal static class PostgresTableDefinitions
             collection text null,
             promo text null,
             ramadhan_promo text null,
+            supplier text null,
+            lifecycle_stage text null,
+            age_stage text null,
+            gender_target text null,
+            material text null,
+            pack_size text null,
+            size_range text null,
+            colour_family text null,
+            kvi_flag integer not null default 0,
+            markdown_eligible integer not null default 1,
+            markdown_floor_price real null,
+            minimum_margin_pct real null,
+            price_ladder_group text null,
+            good_better_best_tier text null,
+            season_code text null,
+            event_code text null,
+            launch_date text null,
+            end_of_life_date text null,
+            substitute_group text null,
+            companion_group text null,
+            replenishment_type text null,
+            lead_time_days integer null,
+            moq integer null,
+            case_pack integer null,
+            starting_inventory real null,
+            projected_stock_on_hand real null,
+            sell_through_target_pct real null,
+            weeks_of_cover_target real null,
             is_active integer not null default 1
         );
         create table if not exists product_profile_options (
@@ -268,8 +346,94 @@ internal static class PostgresTableDefinitions
             effective_to_time_period_id integer null,
             primary key (department_label, class_label, subclass_label)
         );
+        create table if not exists inventory_profiles (
+            inventory_profile_id integer primary key,
+            store_code text not null,
+            product_code text not null,
+            starting_inventory real not null,
+            inbound_qty real null,
+            reserved_qty real null,
+            projected_stock_on_hand real null,
+            safety_stock real null,
+            weeks_of_cover_target real null,
+            sell_through_target_pct real null,
+            is_active integer not null default 1
+        );
+        create table if not exists pricing_policies (
+            pricing_policy_id integer primary key,
+            department text null,
+            class_label text null,
+            subclass text null,
+            brand text null,
+            price_ladder_group text null,
+            min_price real null,
+            max_price real null,
+            markdown_floor_price real null,
+            minimum_margin_pct real null,
+            kvi_flag integer not null default 0,
+            markdown_eligible integer not null default 1,
+            is_active integer not null default 1
+        );
+        create table if not exists seasonality_event_profiles (
+            seasonality_event_profile_id integer primary key,
+            department text null,
+            class_label text null,
+            subclass text null,
+            season_code text null,
+            event_code text null,
+            month integer not null,
+            weight real not null,
+            promo_window text null,
+            peak_flag integer not null default 0,
+            is_active integer not null default 1
+        );
+        create table if not exists vendor_supply_profiles (
+            vendor_supply_profile_id integer primary key,
+            supplier text not null,
+            brand text null,
+            lead_time_days integer null,
+            moq integer null,
+            case_pack integer null,
+            replenishment_type text null,
+            payment_terms text null,
+            is_active integer not null default 1
+        );
+        create table if not exists planning_command_batches (
+            command_batch_id integer primary key,
+            scenario_version_id integer not null,
+            user_id text not null,
+            command_kind text not null,
+            command_scope_json text null,
+            is_undone integer not null default 0,
+            superseded_by_batch_id integer null,
+            created_at text not null
+        );
+        create table if not exists planning_command_cell_deltas (
+            command_delta_id integer primary key,
+            command_batch_id integer not null,
+            scenario_version_id integer not null,
+            measure_id integer not null,
+            store_id integer not null,
+            product_node_id integer not null,
+            time_period_id integer not null,
+            old_input_value real null,
+            new_input_value real null,
+            old_override_value real null,
+            new_override_value real null,
+            old_effective_value real not null,
+            new_effective_value real not null,
+            old_is_locked integer not null default 0,
+            new_is_locked integer not null default 0,
+            change_kind text not null
+        );
         create index if not exists idx_planning_cells_scenario_measure on planning_cells (scenario_version_id, measure_id);
         create index if not exists idx_audit_deltas_lookup on audit_deltas (scenario_version_id, measure_id, store_id, product_node_id);
+        create index if not exists idx_inventory_profiles_lookup on inventory_profiles (store_code, product_code);
+        create index if not exists idx_pricing_policies_lookup on pricing_policies (department, class_label, subclass, brand, price_ladder_group);
+        create index if not exists idx_seasonality_profiles_lookup on seasonality_event_profiles (department, class_label, subclass, season_code, event_code, month);
+        create index if not exists idx_vendor_supply_profiles_lookup on vendor_supply_profiles (supplier, brand);
+        create index if not exists idx_command_batches_lookup on planning_command_batches (scenario_version_id, user_id, created_at);
+        create index if not exists idx_command_deltas_lookup on planning_command_cell_deltas (command_batch_id, scenario_version_id, measure_id, store_id, product_node_id, time_period_id);
         """;
 
     public static PostgresTableDefinition Get(string tableName) =>
