@@ -257,6 +257,118 @@ public sealed class PlanningController : ControllerBase
         return _planningService.UpsertProductHierarchyCatalogAsync(request, cancellationToken);
     }
 
+    [HttpGet("inventory-profiles")]
+    public Task<InventoryProfileResponse> GetInventoryProfiles(
+        [FromQuery] string? searchTerm,
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 200,
+        CancellationToken cancellationToken = default)
+    {
+        return _planningService.GetInventoryProfilesAsync(searchTerm, pageNumber, pageSize, cancellationToken);
+    }
+
+    [HttpPost("inventory-profiles")]
+    public Task<InventoryProfileDto> UpsertInventoryProfile([FromBody] UpsertInventoryProfileRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.UpsertInventoryProfileAsync(request, cancellationToken);
+    }
+
+    [HttpPost("inventory-profiles/delete")]
+    public Task DeleteInventoryProfile([FromBody] DeleteInventoryProfileRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.DeleteInventoryProfileAsync(request, cancellationToken);
+    }
+
+    [HttpPost("inventory-profiles/inactivate")]
+    public Task<InventoryProfileDto> InactivateInventoryProfile([FromBody] InactivateInventoryProfileRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.InactivateInventoryProfileAsync(request, cancellationToken);
+    }
+
+    [HttpGet("pricing-policies")]
+    public Task<PricingPolicyResponse> GetPricingPolicies(
+        [FromQuery] string? searchTerm,
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 200,
+        CancellationToken cancellationToken = default)
+    {
+        return _planningService.GetPricingPoliciesAsync(searchTerm, pageNumber, pageSize, cancellationToken);
+    }
+
+    [HttpPost("pricing-policies")]
+    public Task<PricingPolicyDto> UpsertPricingPolicy([FromBody] UpsertPricingPolicyRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.UpsertPricingPolicyAsync(request, cancellationToken);
+    }
+
+    [HttpPost("pricing-policies/delete")]
+    public Task DeletePricingPolicy([FromBody] DeletePricingPolicyRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.DeletePricingPolicyAsync(request, cancellationToken);
+    }
+
+    [HttpPost("pricing-policies/inactivate")]
+    public Task<PricingPolicyDto> InactivatePricingPolicy([FromBody] InactivatePricingPolicyRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.InactivatePricingPolicyAsync(request, cancellationToken);
+    }
+
+    [HttpGet("seasonality-event-profiles")]
+    public Task<SeasonalityEventProfileResponse> GetSeasonalityEventProfiles(
+        [FromQuery] string? searchTerm,
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 200,
+        CancellationToken cancellationToken = default)
+    {
+        return _planningService.GetSeasonalityEventProfilesAsync(searchTerm, pageNumber, pageSize, cancellationToken);
+    }
+
+    [HttpPost("seasonality-event-profiles")]
+    public Task<SeasonalityEventProfileDto> UpsertSeasonalityEventProfile([FromBody] UpsertSeasonalityEventProfileRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.UpsertSeasonalityEventProfileAsync(request, cancellationToken);
+    }
+
+    [HttpPost("seasonality-event-profiles/delete")]
+    public Task DeleteSeasonalityEventProfile([FromBody] DeleteSeasonalityEventProfileRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.DeleteSeasonalityEventProfileAsync(request, cancellationToken);
+    }
+
+    [HttpPost("seasonality-event-profiles/inactivate")]
+    public Task<SeasonalityEventProfileDto> InactivateSeasonalityEventProfile([FromBody] InactivateSeasonalityEventProfileRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.InactivateSeasonalityEventProfileAsync(request, cancellationToken);
+    }
+
+    [HttpGet("vendor-supply-profiles")]
+    public Task<VendorSupplyProfileResponse> GetVendorSupplyProfiles(
+        [FromQuery] string? searchTerm,
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 200,
+        CancellationToken cancellationToken = default)
+    {
+        return _planningService.GetVendorSupplyProfilesAsync(searchTerm, pageNumber, pageSize, cancellationToken);
+    }
+
+    [HttpPost("vendor-supply-profiles")]
+    public Task<VendorSupplyProfileDto> UpsertVendorSupplyProfile([FromBody] UpsertVendorSupplyProfileRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.UpsertVendorSupplyProfileAsync(request, cancellationToken);
+    }
+
+    [HttpPost("vendor-supply-profiles/delete")]
+    public Task DeleteVendorSupplyProfile([FromBody] DeleteVendorSupplyProfileRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.DeleteVendorSupplyProfileAsync(request, cancellationToken);
+    }
+
+    [HttpPost("vendor-supply-profiles/inactivate")]
+    public Task<VendorSupplyProfileDto> InactivateVendorSupplyProfile([FromBody] InactivateVendorSupplyProfileRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.InactivateVendorSupplyProfileAsync(request, cancellationToken);
+    }
+
     [HttpPost("product-hierarchy/delete")]
     public Task<ProductHierarchyResponse> DeleteProductHierarchy([FromBody] DeleteProductHierarchyRequest request, CancellationToken cancellationToken)
     {

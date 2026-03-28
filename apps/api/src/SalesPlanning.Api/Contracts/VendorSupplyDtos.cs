@@ -31,6 +31,8 @@ public sealed record UpsertVendorSupplyProfileRequest(
 
 public sealed record DeleteVendorSupplyProfileRequest(long VendorSupplyProfileId);
 
+public sealed record InactivateVendorSupplyProfileRequest(long VendorSupplyProfileId);
+
 public sealed record VendorSupplyProfileImportResponse(
     int RowsProcessed,
     int RecordsAdded,

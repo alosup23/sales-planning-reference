@@ -167,6 +167,66 @@ public sealed class S3BackedSqlitePlanningRepository : IPlanningRepository
     public Task ReplaceProductMasterDataAsync(IReadOnlyList<ProductHierarchyCatalogRecord> hierarchyRows, IReadOnlyList<ProductProfileMetadata> profiles, CancellationToken cancellationToken) =>
         WithMutationAsync((ct) => _innerRepository.ReplaceProductMasterDataAsync(hierarchyRows, profiles, ct), cancellationToken);
 
+    public Task<(IReadOnlyList<InventoryProfileRecord> Profiles, int TotalCount)> GetInventoryProfilesAsync(string? searchTerm, int pageNumber, int pageSize, CancellationToken cancellationToken) =>
+        WithReadAsync((ct) => _innerRepository.GetInventoryProfilesAsync(searchTerm, pageNumber, pageSize, ct), cancellationToken);
+
+    public Task<InventoryProfileRecord> GetInventoryProfileByIdAsync(long inventoryProfileId, CancellationToken cancellationToken) =>
+        WithReadAsync((ct) => _innerRepository.GetInventoryProfileByIdAsync(inventoryProfileId, ct), cancellationToken);
+
+    public Task<InventoryProfileRecord> UpsertInventoryProfileAsync(InventoryProfileRecord profile, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.UpsertInventoryProfileAsync(profile, ct), cancellationToken);
+
+    public Task DeleteInventoryProfileAsync(long inventoryProfileId, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.DeleteInventoryProfileAsync(inventoryProfileId, ct), cancellationToken);
+
+    public Task InactivateInventoryProfileAsync(long inventoryProfileId, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.InactivateInventoryProfileAsync(inventoryProfileId, ct), cancellationToken);
+
+    public Task<(IReadOnlyList<PricingPolicyRecord> Policies, int TotalCount)> GetPricingPoliciesAsync(string? searchTerm, int pageNumber, int pageSize, CancellationToken cancellationToken) =>
+        WithReadAsync((ct) => _innerRepository.GetPricingPoliciesAsync(searchTerm, pageNumber, pageSize, ct), cancellationToken);
+
+    public Task<PricingPolicyRecord> GetPricingPolicyByIdAsync(long pricingPolicyId, CancellationToken cancellationToken) =>
+        WithReadAsync((ct) => _innerRepository.GetPricingPolicyByIdAsync(pricingPolicyId, ct), cancellationToken);
+
+    public Task<PricingPolicyRecord> UpsertPricingPolicyAsync(PricingPolicyRecord policy, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.UpsertPricingPolicyAsync(policy, ct), cancellationToken);
+
+    public Task DeletePricingPolicyAsync(long pricingPolicyId, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.DeletePricingPolicyAsync(pricingPolicyId, ct), cancellationToken);
+
+    public Task InactivatePricingPolicyAsync(long pricingPolicyId, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.InactivatePricingPolicyAsync(pricingPolicyId, ct), cancellationToken);
+
+    public Task<(IReadOnlyList<SeasonalityEventProfileRecord> Profiles, int TotalCount)> GetSeasonalityEventProfilesAsync(string? searchTerm, int pageNumber, int pageSize, CancellationToken cancellationToken) =>
+        WithReadAsync((ct) => _innerRepository.GetSeasonalityEventProfilesAsync(searchTerm, pageNumber, pageSize, ct), cancellationToken);
+
+    public Task<SeasonalityEventProfileRecord> GetSeasonalityEventProfileByIdAsync(long seasonalityEventProfileId, CancellationToken cancellationToken) =>
+        WithReadAsync((ct) => _innerRepository.GetSeasonalityEventProfileByIdAsync(seasonalityEventProfileId, ct), cancellationToken);
+
+    public Task<SeasonalityEventProfileRecord> UpsertSeasonalityEventProfileAsync(SeasonalityEventProfileRecord profile, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.UpsertSeasonalityEventProfileAsync(profile, ct), cancellationToken);
+
+    public Task DeleteSeasonalityEventProfileAsync(long seasonalityEventProfileId, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.DeleteSeasonalityEventProfileAsync(seasonalityEventProfileId, ct), cancellationToken);
+
+    public Task InactivateSeasonalityEventProfileAsync(long seasonalityEventProfileId, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.InactivateSeasonalityEventProfileAsync(seasonalityEventProfileId, ct), cancellationToken);
+
+    public Task<(IReadOnlyList<VendorSupplyProfileRecord> Profiles, int TotalCount)> GetVendorSupplyProfilesAsync(string? searchTerm, int pageNumber, int pageSize, CancellationToken cancellationToken) =>
+        WithReadAsync((ct) => _innerRepository.GetVendorSupplyProfilesAsync(searchTerm, pageNumber, pageSize, ct), cancellationToken);
+
+    public Task<VendorSupplyProfileRecord> GetVendorSupplyProfileByIdAsync(long vendorSupplyProfileId, CancellationToken cancellationToken) =>
+        WithReadAsync((ct) => _innerRepository.GetVendorSupplyProfileByIdAsync(vendorSupplyProfileId, ct), cancellationToken);
+
+    public Task<VendorSupplyProfileRecord> UpsertVendorSupplyProfileAsync(VendorSupplyProfileRecord profile, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.UpsertVendorSupplyProfileAsync(profile, ct), cancellationToken);
+
+    public Task DeleteVendorSupplyProfileAsync(long vendorSupplyProfileId, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.DeleteVendorSupplyProfileAsync(vendorSupplyProfileId, ct), cancellationToken);
+
+    public Task InactivateVendorSupplyProfileAsync(long vendorSupplyProfileId, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.InactivateVendorSupplyProfileAsync(vendorSupplyProfileId, ct), cancellationToken);
+
     public Task RebuildPlanningFromMasterDataAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken) =>
         WithMutationAsync((ct) => _innerRepository.RebuildPlanningFromMasterDataAsync(scenarioVersionId, fiscalYear, ct), cancellationToken);
 

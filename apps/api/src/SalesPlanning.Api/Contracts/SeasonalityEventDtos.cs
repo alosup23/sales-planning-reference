@@ -35,6 +35,8 @@ public sealed record UpsertSeasonalityEventProfileRequest(
 
 public sealed record DeleteSeasonalityEventProfileRequest(long SeasonalityEventProfileId);
 
+public sealed record InactivateSeasonalityEventProfileRequest(long SeasonalityEventProfileId);
+
 public sealed record SeasonalityEventProfileImportResponse(
     int RowsProcessed,
     int RecordsAdded,

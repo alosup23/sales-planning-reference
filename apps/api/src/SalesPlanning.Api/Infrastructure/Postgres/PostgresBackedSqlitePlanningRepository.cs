@@ -33,6 +33,10 @@ public sealed class PostgresBackedSqlitePlanningRepository : IPlanningRepository
         "hierarchy_classes_v2",
         "hierarchy_subclasses_v2"
     ];
+    private static readonly string[] InventoryMutationTables = ["inventory_profiles"];
+    private static readonly string[] PricingMutationTables = ["pricing_policies"];
+    private static readonly string[] SeasonalityMutationTables = ["seasonality_event_profiles"];
+    private static readonly string[] VendorMutationTables = ["vendor_supply_profiles"];
     private static readonly string[] ProductNodeMutationTables = ["product_nodes", "planning_cells", "hierarchy_categories", "hierarchy_subcategories", "hierarchy_departments_v2", "hierarchy_classes_v2", "hierarchy_subclasses_v2"];
     private static readonly string[] TimePeriodMutationTables = ["time_periods", "planning_cells"];
 
@@ -261,6 +265,102 @@ public sealed class PostgresBackedSqlitePlanningRepository : IPlanningRepository
         WithMutationAsync(
             ct => _innerRepository.ReplaceProductMasterDataAsync(hierarchyRows, profiles, ct),
             plan => plan.QueueTableReplace(ProductMutationTables),
+            cancellationToken);
+
+    public Task<(IReadOnlyList<InventoryProfileRecord> Profiles, int TotalCount)> GetInventoryProfilesAsync(string? searchTerm, int pageNumber, int pageSize, CancellationToken cancellationToken) =>
+        WithReadAsync(ct => _innerRepository.GetInventoryProfilesAsync(searchTerm, pageNumber, pageSize, ct), cancellationToken);
+
+    public Task<InventoryProfileRecord> GetInventoryProfileByIdAsync(long inventoryProfileId, CancellationToken cancellationToken) =>
+        WithReadAsync(ct => _innerRepository.GetInventoryProfileByIdAsync(inventoryProfileId, ct), cancellationToken);
+
+    public Task<InventoryProfileRecord> UpsertInventoryProfileAsync(InventoryProfileRecord profile, CancellationToken cancellationToken) =>
+        WithMutationAsync(
+            ct => _innerRepository.UpsertInventoryProfileAsync(profile, ct),
+            plan => plan.QueueTableReplace(InventoryMutationTables),
+            cancellationToken);
+
+    public Task DeleteInventoryProfileAsync(long inventoryProfileId, CancellationToken cancellationToken) =>
+        WithMutationAsync(
+            ct => _innerRepository.DeleteInventoryProfileAsync(inventoryProfileId, ct),
+            plan => plan.QueueTableReplace(InventoryMutationTables),
+            cancellationToken);
+
+    public Task InactivateInventoryProfileAsync(long inventoryProfileId, CancellationToken cancellationToken) =>
+        WithMutationAsync(
+            ct => _innerRepository.InactivateInventoryProfileAsync(inventoryProfileId, ct),
+            plan => plan.QueueTableReplace(InventoryMutationTables),
+            cancellationToken);
+
+    public Task<(IReadOnlyList<PricingPolicyRecord> Policies, int TotalCount)> GetPricingPoliciesAsync(string? searchTerm, int pageNumber, int pageSize, CancellationToken cancellationToken) =>
+        WithReadAsync(ct => _innerRepository.GetPricingPoliciesAsync(searchTerm, pageNumber, pageSize, ct), cancellationToken);
+
+    public Task<PricingPolicyRecord> GetPricingPolicyByIdAsync(long pricingPolicyId, CancellationToken cancellationToken) =>
+        WithReadAsync(ct => _innerRepository.GetPricingPolicyByIdAsync(pricingPolicyId, ct), cancellationToken);
+
+    public Task<PricingPolicyRecord> UpsertPricingPolicyAsync(PricingPolicyRecord policy, CancellationToken cancellationToken) =>
+        WithMutationAsync(
+            ct => _innerRepository.UpsertPricingPolicyAsync(policy, ct),
+            plan => plan.QueueTableReplace(PricingMutationTables),
+            cancellationToken);
+
+    public Task DeletePricingPolicyAsync(long pricingPolicyId, CancellationToken cancellationToken) =>
+        WithMutationAsync(
+            ct => _innerRepository.DeletePricingPolicyAsync(pricingPolicyId, ct),
+            plan => plan.QueueTableReplace(PricingMutationTables),
+            cancellationToken);
+
+    public Task InactivatePricingPolicyAsync(long pricingPolicyId, CancellationToken cancellationToken) =>
+        WithMutationAsync(
+            ct => _innerRepository.InactivatePricingPolicyAsync(pricingPolicyId, ct),
+            plan => plan.QueueTableReplace(PricingMutationTables),
+            cancellationToken);
+
+    public Task<(IReadOnlyList<SeasonalityEventProfileRecord> Profiles, int TotalCount)> GetSeasonalityEventProfilesAsync(string? searchTerm, int pageNumber, int pageSize, CancellationToken cancellationToken) =>
+        WithReadAsync(ct => _innerRepository.GetSeasonalityEventProfilesAsync(searchTerm, pageNumber, pageSize, ct), cancellationToken);
+
+    public Task<SeasonalityEventProfileRecord> GetSeasonalityEventProfileByIdAsync(long seasonalityEventProfileId, CancellationToken cancellationToken) =>
+        WithReadAsync(ct => _innerRepository.GetSeasonalityEventProfileByIdAsync(seasonalityEventProfileId, ct), cancellationToken);
+
+    public Task<SeasonalityEventProfileRecord> UpsertSeasonalityEventProfileAsync(SeasonalityEventProfileRecord profile, CancellationToken cancellationToken) =>
+        WithMutationAsync(
+            ct => _innerRepository.UpsertSeasonalityEventProfileAsync(profile, ct),
+            plan => plan.QueueTableReplace(SeasonalityMutationTables),
+            cancellationToken);
+
+    public Task DeleteSeasonalityEventProfileAsync(long seasonalityEventProfileId, CancellationToken cancellationToken) =>
+        WithMutationAsync(
+            ct => _innerRepository.DeleteSeasonalityEventProfileAsync(seasonalityEventProfileId, ct),
+            plan => plan.QueueTableReplace(SeasonalityMutationTables),
+            cancellationToken);
+
+    public Task InactivateSeasonalityEventProfileAsync(long seasonalityEventProfileId, CancellationToken cancellationToken) =>
+        WithMutationAsync(
+            ct => _innerRepository.InactivateSeasonalityEventProfileAsync(seasonalityEventProfileId, ct),
+            plan => plan.QueueTableReplace(SeasonalityMutationTables),
+            cancellationToken);
+
+    public Task<(IReadOnlyList<VendorSupplyProfileRecord> Profiles, int TotalCount)> GetVendorSupplyProfilesAsync(string? searchTerm, int pageNumber, int pageSize, CancellationToken cancellationToken) =>
+        WithReadAsync(ct => _innerRepository.GetVendorSupplyProfilesAsync(searchTerm, pageNumber, pageSize, ct), cancellationToken);
+
+    public Task<VendorSupplyProfileRecord> GetVendorSupplyProfileByIdAsync(long vendorSupplyProfileId, CancellationToken cancellationToken) =>
+        WithReadAsync(ct => _innerRepository.GetVendorSupplyProfileByIdAsync(vendorSupplyProfileId, ct), cancellationToken);
+
+    public Task<VendorSupplyProfileRecord> UpsertVendorSupplyProfileAsync(VendorSupplyProfileRecord profile, CancellationToken cancellationToken) =>
+        WithMutationAsync(
+            ct => _innerRepository.UpsertVendorSupplyProfileAsync(profile, ct),
+            plan => plan.QueueTableReplace(VendorMutationTables),
+            cancellationToken);
+
+    public Task DeleteVendorSupplyProfileAsync(long vendorSupplyProfileId, CancellationToken cancellationToken) =>
+        WithMutationAsync(
+            ct => _innerRepository.DeleteVendorSupplyProfileAsync(vendorSupplyProfileId, ct),
+            plan => plan.QueueTableReplace(VendorMutationTables),
+            cancellationToken);
+
+    public Task InactivateVendorSupplyProfileAsync(long vendorSupplyProfileId, CancellationToken cancellationToken) =>
+        WithMutationAsync(
+            ct => _innerRepository.InactivateVendorSupplyProfileAsync(vendorSupplyProfileId, ct),
+            plan => plan.QueueTableReplace(VendorMutationTables),
             cancellationToken);
 
     public Task RebuildPlanningFromMasterDataAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken) =>

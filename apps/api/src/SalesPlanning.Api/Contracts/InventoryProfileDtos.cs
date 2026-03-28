@@ -35,6 +35,8 @@ public sealed record UpsertInventoryProfileRequest(
 
 public sealed record DeleteInventoryProfileRequest(long InventoryProfileId);
 
+public sealed record InactivateInventoryProfileRequest(long InventoryProfileId);
+
 public sealed record InventoryProfileImportResponse(
     int RowsProcessed,
     int RecordsAdded,

@@ -39,6 +39,8 @@ public sealed record UpsertPricingPolicyRequest(
 
 public sealed record DeletePricingPolicyRequest(long PricingPolicyId);
 
+public sealed record InactivatePricingPolicyRequest(long PricingPolicyId);
+
 public sealed record PricingPolicyImportResponse(
     int RowsProcessed,
     int RecordsAdded,

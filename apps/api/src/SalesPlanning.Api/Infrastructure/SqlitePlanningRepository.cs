@@ -8,7 +8,7 @@ using SQLitePCL;
 
 namespace SalesPlanning.Api.Infrastructure;
 
-public sealed class SqlitePlanningRepository : IPlanningRepository
+public sealed partial class SqlitePlanningRepository : IPlanningRepository
 {
     private static readonly IReadOnlyList<long> SupportedMeasureIds = PlanningMeasures.SupportedMeasureIds;
 
@@ -1304,6 +1304,10 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                          "audit_deltas",
                          "audits",
                          "planning_cells",
+                         "vendor_supply_profiles",
+                         "seasonality_event_profiles",
+                         "pricing_policies",
+                         "inventory_profiles",
                          "product_subclass_catalog",
                          "product_hierarchy_catalog",
                          "product_profile_options",
@@ -1350,12 +1354,6 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             }
 
             await using var connection = await OpenConnectionAsync(cancellationToken);
-            if (await HasInitializedSchemaAsync(connection, cancellationToken))
-            {
-                _initialized = true;
-                return;
-            }
-
             await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
             await using (var command = connection.CreateCommand())
             {
@@ -1449,6 +1447,18 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                         rsom text null,
                         dm text null,
                         rental real null,
+                        store_cluster_role text null,
+                        store_capacity_sqft real null,
+                        store_format_tier text null,
+                        catchment_type text null,
+                        demographic_segment text null,
+                        climate_zone text null,
+                        fulfilment_enabled integer not null default 0,
+                        online_fulfilment_node integer not null default 0,
+                        store_opening_season text null,
+                        store_closure_date text null,
+                        refurbishment_date text null,
+                        store_priority text null,
                         is_active integer not null default 1
                     );
                     create table if not exists store_profile_options (
@@ -1483,6 +1493,34 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                         collection text null,
                         promo text null,
                         ramadhan_promo text null,
+                        supplier text null,
+                        lifecycle_stage text null,
+                        age_stage text null,
+                        gender_target text null,
+                        material text null,
+                        pack_size text null,
+                        size_range text null,
+                        colour_family text null,
+                        kvi_flag integer not null default 0,
+                        markdown_eligible integer not null default 1,
+                        markdown_floor_price real null,
+                        minimum_margin_pct real null,
+                        price_ladder_group text null,
+                        good_better_best_tier text null,
+                        season_code text null,
+                        event_code text null,
+                        launch_date text null,
+                        end_of_life_date text null,
+                        substitute_group text null,
+                        companion_group text null,
+                        replenishment_type text null,
+                        lead_time_days integer null,
+                        moq integer null,
+                        case_pack integer null,
+                        starting_inventory real null,
+                        projected_stock_on_hand real null,
+                        sell_through_target_pct real null,
+                        weeks_of_cover_target real null,
                         is_active integer not null default 1
                     );
                     create table if not exists product_profile_options (
@@ -1539,6 +1577,8 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 await command.ExecuteNonQueryAsync(cancellationToken);
             }
 
+            await EnsureAdditionalMasterDataTablesAsync(connection, transaction, cancellationToken);
+
             await using (var countCommand = connection.CreateCommand())
             {
                 countCommand.Transaction = transaction;
@@ -1553,6 +1593,7 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 await EnsureSupportedTimePeriodsAsync(connection, transaction, cancellationToken);
                 await EnsureGrowthFactorColumnAsync(connection, transaction, cancellationToken);
                 await EnsureStoreProfileColumnsAsync(connection, transaction, cancellationToken);
+                await EnsureProductProfileColumnsAsync(connection, transaction, cancellationToken);
 
                 if (needsSeed)
                 {
@@ -1664,6 +1705,18 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                    rsom,
                    dm,
                    rental,
+                   store_cluster_role,
+                   store_capacity_sqft,
+                   store_format_tier,
+                   catchment_type,
+                   demographic_segment,
+                   climate_zone,
+                   fulfilment_enabled,
+                   online_fulfilment_node,
+                   store_opening_season,
+                   store_closure_date,
+                   refurbishment_date,
+                   store_priority,
                    is_active
             from store_metadata;
             """;
@@ -1694,7 +1747,19 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 reader.IsDBNull(20) ? null : reader.GetString(20),
                 reader.IsDBNull(21) ? null : reader.GetString(21),
                 reader.IsDBNull(22) ? null : Convert.ToDecimal(reader.GetDouble(22), CultureInfo.InvariantCulture),
-                !reader.IsDBNull(23) && reader.GetInt64(23) == 1);
+                !reader.IsDBNull(35) && reader.GetInt64(35) == 1,
+                reader.IsDBNull(23) ? null : reader.GetString(23),
+                reader.IsDBNull(24) ? null : Convert.ToDecimal(reader.GetDouble(24), CultureInfo.InvariantCulture),
+                reader.IsDBNull(25) ? null : reader.GetString(25),
+                reader.IsDBNull(26) ? null : reader.GetString(26),
+                reader.IsDBNull(27) ? null : reader.GetString(27),
+                reader.IsDBNull(28) ? null : reader.GetString(28),
+                !reader.IsDBNull(29) && reader.GetInt64(29) == 1,
+                !reader.IsDBNull(30) && reader.GetInt64(30) == 1,
+                reader.IsDBNull(31) ? null : reader.GetString(31),
+                reader.IsDBNull(32) ? null : reader.GetString(32),
+                reader.IsDBNull(33) ? null : reader.GetString(33),
+                reader.IsDBNull(34) ? null : reader.GetString(34));
             result[metadata.StoreId] = metadata;
         }
 
@@ -1996,6 +2061,18 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 rsom,
                 dm,
                 rental,
+                store_cluster_role,
+                store_capacity_sqft,
+                store_format_tier,
+                catchment_type,
+                demographic_segment,
+                climate_zone,
+                fulfilment_enabled,
+                online_fulfilment_node,
+                store_opening_season,
+                store_closure_date,
+                refurbishment_date,
+                store_priority,
                 is_active)
             values (
                 $storeId,
@@ -2021,6 +2098,18 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 $rsom,
                 $dm,
                 $rental,
+                $storeClusterRole,
+                $storeCapacitySqFt,
+                $storeFormatTier,
+                $catchmentType,
+                $demographicSegment,
+                $climateZone,
+                $fulfilmentEnabled,
+                $onlineFulfilmentNode,
+                $storeOpeningSeason,
+                $storeClosureDate,
+                $refurbishmentDate,
+                $storePriority,
                 $isActive)
             on conflict (store_id)
             do update set
@@ -2046,6 +2135,18 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 rsom = excluded.rsom,
                 dm = excluded.dm,
                 rental = excluded.rental,
+                store_cluster_role = excluded.store_cluster_role,
+                store_capacity_sqft = excluded.store_capacity_sqft,
+                store_format_tier = excluded.store_format_tier,
+                catchment_type = excluded.catchment_type,
+                demographic_segment = excluded.demographic_segment,
+                climate_zone = excluded.climate_zone,
+                fulfilment_enabled = excluded.fulfilment_enabled,
+                online_fulfilment_node = excluded.online_fulfilment_node,
+                store_opening_season = excluded.store_opening_season,
+                store_closure_date = excluded.store_closure_date,
+                refurbishment_date = excluded.refurbishment_date,
+                store_priority = excluded.store_priority,
                 is_active = excluded.is_active;
             """;
         command.Parameters.AddWithValue("$storeId", metadata.StoreId);
@@ -2071,6 +2172,18 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         command.Parameters.AddWithValue("$rsom", (object?)metadata.Rsom ?? DBNull.Value);
         command.Parameters.AddWithValue("$dm", (object?)metadata.Dm ?? DBNull.Value);
         command.Parameters.AddWithValue("$rental", (object?)metadata.Rental ?? DBNull.Value);
+        command.Parameters.AddWithValue("$storeClusterRole", (object?)metadata.StoreClusterRole ?? DBNull.Value);
+        command.Parameters.AddWithValue("$storeCapacitySqFt", (object?)metadata.StoreCapacitySqFt ?? DBNull.Value);
+        command.Parameters.AddWithValue("$storeFormatTier", (object?)metadata.StoreFormatTier ?? DBNull.Value);
+        command.Parameters.AddWithValue("$catchmentType", (object?)metadata.CatchmentType ?? DBNull.Value);
+        command.Parameters.AddWithValue("$demographicSegment", (object?)metadata.DemographicSegment ?? DBNull.Value);
+        command.Parameters.AddWithValue("$climateZone", (object?)metadata.ClimateZone ?? DBNull.Value);
+        command.Parameters.AddWithValue("$fulfilmentEnabled", metadata.FulfilmentEnabled ? 1 : 0);
+        command.Parameters.AddWithValue("$onlineFulfilmentNode", metadata.OnlineFulfilmentNode ? 1 : 0);
+        command.Parameters.AddWithValue("$storeOpeningSeason", (object?)metadata.StoreOpeningSeason ?? DBNull.Value);
+        command.Parameters.AddWithValue("$storeClosureDate", (object?)metadata.StoreClosureDate ?? DBNull.Value);
+        command.Parameters.AddWithValue("$refurbishmentDate", (object?)metadata.RefurbishmentDate ?? DBNull.Value);
+        command.Parameters.AddWithValue("$storePriority", (object?)metadata.StorePriority ?? DBNull.Value);
         command.Parameters.AddWithValue("$isActive", metadata.IsActive ? 1 : 0);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -2128,7 +2241,16 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             Storey = string.IsNullOrWhiteSpace(profile.Storey) ? null : profile.Storey.Trim(),
             BuildingStatus = string.IsNullOrWhiteSpace(profile.BuildingStatus) ? null : profile.BuildingStatus.Trim(),
             Rsom = string.IsNullOrWhiteSpace(profile.Rsom) ? null : profile.Rsom.Trim(),
-            Dm = string.IsNullOrWhiteSpace(profile.Dm) ? null : profile.Dm.Trim()
+            Dm = string.IsNullOrWhiteSpace(profile.Dm) ? null : profile.Dm.Trim(),
+            StoreClusterRole = string.IsNullOrWhiteSpace(profile.StoreClusterRole) ? null : profile.StoreClusterRole.Trim(),
+            StoreFormatTier = string.IsNullOrWhiteSpace(profile.StoreFormatTier) ? null : profile.StoreFormatTier.Trim(),
+            CatchmentType = string.IsNullOrWhiteSpace(profile.CatchmentType) ? null : profile.CatchmentType.Trim(),
+            DemographicSegment = string.IsNullOrWhiteSpace(profile.DemographicSegment) ? null : profile.DemographicSegment.Trim(),
+            ClimateZone = string.IsNullOrWhiteSpace(profile.ClimateZone) ? null : profile.ClimateZone.Trim(),
+            StoreOpeningSeason = string.IsNullOrWhiteSpace(profile.StoreOpeningSeason) ? null : profile.StoreOpeningSeason.Trim(),
+            StoreClosureDate = string.IsNullOrWhiteSpace(profile.StoreClosureDate) ? null : profile.StoreClosureDate.Trim(),
+            RefurbishmentDate = string.IsNullOrWhiteSpace(profile.RefurbishmentDate) ? null : profile.RefurbishmentDate.Trim(),
+            StorePriority = string.IsNullOrWhiteSpace(profile.StorePriority) ? null : profile.StorePriority.Trim()
         };
     }
 
@@ -2381,7 +2503,71 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             "alter table store_metadata add column rsom text null;",
             "alter table store_metadata add column dm text null;",
             "alter table store_metadata add column rental real null;",
+            "alter table store_metadata add column store_cluster_role text null;",
+            "alter table store_metadata add column store_capacity_sqft real null;",
+            "alter table store_metadata add column store_format_tier text null;",
+            "alter table store_metadata add column catchment_type text null;",
+            "alter table store_metadata add column demographic_segment text null;",
+            "alter table store_metadata add column climate_zone text null;",
+            "alter table store_metadata add column fulfilment_enabled integer not null default 0;",
+            "alter table store_metadata add column online_fulfilment_node integer not null default 0;",
+            "alter table store_metadata add column store_opening_season text null;",
+            "alter table store_metadata add column store_closure_date text null;",
+            "alter table store_metadata add column refurbishment_date text null;",
+            "alter table store_metadata add column store_priority text null;",
             "alter table store_metadata add column is_active integer not null default 1;"
+        };
+
+        foreach (var statement in statements)
+        {
+            try
+            {
+                await using var command = connection.CreateCommand();
+                command.Transaction = transaction;
+                command.CommandText = statement;
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+            catch (SqliteException exception) when (exception.SqliteErrorCode == 1 && exception.Message.Contains("duplicate column name", StringComparison.OrdinalIgnoreCase))
+            {
+            }
+        }
+    }
+
+    private static async Task EnsureProductProfileColumnsAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        var statements = new[]
+        {
+            "alter table product_profiles add column supplier text null;",
+            "alter table product_profiles add column lifecycle_stage text null;",
+            "alter table product_profiles add column age_stage text null;",
+            "alter table product_profiles add column gender_target text null;",
+            "alter table product_profiles add column material text null;",
+            "alter table product_profiles add column pack_size text null;",
+            "alter table product_profiles add column size_range text null;",
+            "alter table product_profiles add column colour_family text null;",
+            "alter table product_profiles add column kvi_flag integer not null default 0;",
+            "alter table product_profiles add column markdown_eligible integer not null default 1;",
+            "alter table product_profiles add column markdown_floor_price real null;",
+            "alter table product_profiles add column minimum_margin_pct real null;",
+            "alter table product_profiles add column price_ladder_group text null;",
+            "alter table product_profiles add column good_better_best_tier text null;",
+            "alter table product_profiles add column season_code text null;",
+            "alter table product_profiles add column event_code text null;",
+            "alter table product_profiles add column launch_date text null;",
+            "alter table product_profiles add column end_of_life_date text null;",
+            "alter table product_profiles add column substitute_group text null;",
+            "alter table product_profiles add column companion_group text null;",
+            "alter table product_profiles add column replenishment_type text null;",
+            "alter table product_profiles add column lead_time_days integer null;",
+            "alter table product_profiles add column moq integer null;",
+            "alter table product_profiles add column case_pack integer null;",
+            "alter table product_profiles add column starting_inventory real null;",
+            "alter table product_profiles add column projected_stock_on_hand real null;",
+            "alter table product_profiles add column sell_through_target_pct real null;",
+            "alter table product_profiles add column weeks_of_cover_target real null;"
         };
 
         foreach (var statement in statements)
@@ -2449,7 +2635,14 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             ["status"] = metadata.Status,
             ["buildingStatus"] = metadata.BuildingStatus,
             ["lifecycleState"] = metadata.LifecycleState,
-            ["rampProfileCode"] = metadata.RampProfileCode
+            ["rampProfileCode"] = metadata.RampProfileCode,
+            ["storeClusterRole"] = metadata.StoreClusterRole,
+            ["storeFormatTier"] = metadata.StoreFormatTier,
+            ["catchmentType"] = metadata.CatchmentType,
+            ["demographicSegment"] = metadata.DemographicSegment,
+            ["climateZone"] = metadata.ClimateZone,
+            ["storeOpeningSeason"] = metadata.StoreOpeningSeason,
+            ["storePriority"] = metadata.StorePriority
         };
 
         foreach (var (fieldName, value) in values)
@@ -2546,7 +2739,11 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             ? """
                 select sku_variant, description, description2, price, cost, dpt_no, clss_no, brand_no, department, class,
                        brand, rev_department, rev_class, subclass, prod_group, prod_type, active_flag, order_flag,
-                       brand_type, launch_month, gender, size, collection, promo, ramadhan_promo, is_active
+                       brand_type, launch_month, gender, size, collection, promo, ramadhan_promo, supplier, lifecycle_stage,
+                       age_stage, gender_target, material, pack_size, size_range, colour_family, kvi_flag, markdown_eligible,
+                       markdown_floor_price, minimum_margin_pct, price_ladder_group, good_better_best_tier, season_code, event_code,
+                       launch_date, end_of_life_date, substitute_group, companion_group, replenishment_type, lead_time_days, moq,
+                       case_pack, starting_inventory, projected_stock_on_hand, sell_through_target_pct, weeks_of_cover_target, is_active
                 from product_profiles
                 order by department, class, subclass, description, sku_variant
                 limit $limit offset $offset;
@@ -2554,7 +2751,11 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             : """
                 select sku_variant, description, description2, price, cost, dpt_no, clss_no, brand_no, department, class,
                        brand, rev_department, rev_class, subclass, prod_group, prod_type, active_flag, order_flag,
-                       brand_type, launch_month, gender, size, collection, promo, ramadhan_promo, is_active
+                       brand_type, launch_month, gender, size, collection, promo, ramadhan_promo, supplier, lifecycle_stage,
+                       age_stage, gender_target, material, pack_size, size_range, colour_family, kvi_flag, markdown_eligible,
+                       markdown_floor_price, minimum_margin_pct, price_ladder_group, good_better_best_tier, season_code, event_code,
+                       launch_date, end_of_life_date, substitute_group, companion_group, replenishment_type, lead_time_days, moq,
+                       case_pack, starting_inventory, projected_stock_on_hand, sell_through_target_pct, weeks_of_cover_target, is_active
                 from product_profiles
                 where sku_variant like $search
                    or description like $search
@@ -2600,7 +2801,35 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 reader.IsDBNull(22) ? null : reader.GetString(22),
                 reader.IsDBNull(23) ? null : reader.GetString(23),
                 reader.IsDBNull(24) ? null : reader.GetString(24),
-                reader.GetInt64(25) == 1));
+                reader.GetInt64(53) == 1,
+                reader.IsDBNull(25) ? null : reader.GetString(25),
+                reader.IsDBNull(26) ? null : reader.GetString(26),
+                reader.IsDBNull(27) ? null : reader.GetString(27),
+                reader.IsDBNull(28) ? null : reader.GetString(28),
+                reader.IsDBNull(29) ? null : reader.GetString(29),
+                reader.IsDBNull(30) ? null : reader.GetString(30),
+                reader.IsDBNull(31) ? null : reader.GetString(31),
+                reader.IsDBNull(32) ? null : reader.GetString(32),
+                !reader.IsDBNull(33) && reader.GetInt64(33) == 1,
+                reader.IsDBNull(34) || reader.GetInt64(34) == 1,
+                reader.IsDBNull(35) ? null : ReadDecimal(reader, 35),
+                reader.IsDBNull(36) ? null : ReadDecimal(reader, 36),
+                reader.IsDBNull(37) ? null : reader.GetString(37),
+                reader.IsDBNull(38) ? null : reader.GetString(38),
+                reader.IsDBNull(39) ? null : reader.GetString(39),
+                reader.IsDBNull(40) ? null : reader.GetString(40),
+                reader.IsDBNull(41) ? null : reader.GetString(41),
+                reader.IsDBNull(42) ? null : reader.GetString(42),
+                reader.IsDBNull(43) ? null : reader.GetString(43),
+                reader.IsDBNull(44) ? null : reader.GetString(44),
+                reader.IsDBNull(45) ? null : reader.GetString(45),
+                reader.IsDBNull(46) ? null : reader.GetInt32(46),
+                reader.IsDBNull(47) ? null : reader.GetInt32(47),
+                reader.IsDBNull(48) ? null : reader.GetInt32(48),
+                reader.IsDBNull(49) ? null : ReadDecimal(reader, 49),
+                reader.IsDBNull(50) ? null : ReadDecimal(reader, 50),
+                reader.IsDBNull(51) ? null : ReadDecimal(reader, 51),
+                reader.IsDBNull(52) ? null : ReadDecimal(reader, 52)));
         }
 
         return result;
@@ -2647,7 +2876,24 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             Size = Optional(profile.Size),
             Collection = Optional(profile.Collection),
             Promo = Optional(profile.Promo),
-            RamadhanPromo = Optional(profile.RamadhanPromo)
+            RamadhanPromo = Optional(profile.RamadhanPromo),
+            Supplier = Optional(profile.Supplier),
+            LifecycleStage = Optional(profile.LifecycleStage),
+            AgeStage = Optional(profile.AgeStage),
+            GenderTarget = Optional(profile.GenderTarget),
+            Material = Optional(profile.Material),
+            PackSize = Optional(profile.PackSize),
+            SizeRange = Optional(profile.SizeRange),
+            ColourFamily = Optional(profile.ColourFamily),
+            PriceLadderGroup = Optional(profile.PriceLadderGroup),
+            GoodBetterBestTier = Optional(profile.GoodBetterBestTier),
+            SeasonCode = Optional(profile.SeasonCode),
+            EventCode = Optional(profile.EventCode),
+            LaunchDate = Optional(profile.LaunchDate),
+            EndOfLifeDate = Optional(profile.EndOfLifeDate),
+            SubstituteGroup = Optional(profile.SubstituteGroup),
+            CompanionGroup = Optional(profile.CompanionGroup),
+            ReplenishmentType = Optional(profile.ReplenishmentType)
         };
     }
 
@@ -2663,11 +2909,19 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             insert into product_profiles (
                 sku_variant, description, description2, price, cost, dpt_no, clss_no, brand_no, department, class,
                 brand, rev_department, rev_class, subclass, prod_group, prod_type, active_flag, order_flag, brand_type,
-                launch_month, gender, size, collection, promo, ramadhan_promo, is_active)
+                launch_month, gender, size, collection, promo, ramadhan_promo, supplier, lifecycle_stage, age_stage,
+                gender_target, material, pack_size, size_range, colour_family, kvi_flag, markdown_eligible, markdown_floor_price,
+                minimum_margin_pct, price_ladder_group, good_better_best_tier, season_code, event_code, launch_date, end_of_life_date,
+                substitute_group, companion_group, replenishment_type, lead_time_days, moq, case_pack, starting_inventory,
+                projected_stock_on_hand, sell_through_target_pct, weeks_of_cover_target, is_active)
             values (
                 $skuVariant, $description, $description2, $price, $cost, $dptNo, $clssNo, $brandNo, $department, $class,
                 $brand, $revDepartment, $revClass, $subclass, $prodGroup, $prodType, $activeFlag, $orderFlag, $brandType,
-                $launchMonth, $gender, $size, $collection, $promo, $ramadhanPromo, $isActive)
+                $launchMonth, $gender, $size, $collection, $promo, $ramadhanPromo, $supplier, $lifecycleStage, $ageStage,
+                $genderTarget, $material, $packSize, $sizeRange, $colourFamily, $kviFlag, $markdownEligible, $markdownFloorPrice,
+                $minimumMarginPct, $priceLadderGroup, $goodBetterBestTier, $seasonCode, $eventCode, $launchDate, $endOfLifeDate,
+                $substituteGroup, $companionGroup, $replenishmentType, $leadTimeDays, $moq, $casePack, $startingInventory,
+                $projectedStockOnHand, $sellThroughTargetPct, $weeksOfCoverTarget, $isActive)
             on conflict (sku_variant)
             do update set
                 description = excluded.description,
@@ -2694,6 +2948,34 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
                 collection = excluded.collection,
                 promo = excluded.promo,
                 ramadhan_promo = excluded.ramadhan_promo,
+                supplier = excluded.supplier,
+                lifecycle_stage = excluded.lifecycle_stage,
+                age_stage = excluded.age_stage,
+                gender_target = excluded.gender_target,
+                material = excluded.material,
+                pack_size = excluded.pack_size,
+                size_range = excluded.size_range,
+                colour_family = excluded.colour_family,
+                kvi_flag = excluded.kvi_flag,
+                markdown_eligible = excluded.markdown_eligible,
+                markdown_floor_price = excluded.markdown_floor_price,
+                minimum_margin_pct = excluded.minimum_margin_pct,
+                price_ladder_group = excluded.price_ladder_group,
+                good_better_best_tier = excluded.good_better_best_tier,
+                season_code = excluded.season_code,
+                event_code = excluded.event_code,
+                launch_date = excluded.launch_date,
+                end_of_life_date = excluded.end_of_life_date,
+                substitute_group = excluded.substitute_group,
+                companion_group = excluded.companion_group,
+                replenishment_type = excluded.replenishment_type,
+                lead_time_days = excluded.lead_time_days,
+                moq = excluded.moq,
+                case_pack = excluded.case_pack,
+                starting_inventory = excluded.starting_inventory,
+                projected_stock_on_hand = excluded.projected_stock_on_hand,
+                sell_through_target_pct = excluded.sell_through_target_pct,
+                weeks_of_cover_target = excluded.weeks_of_cover_target,
                 is_active = excluded.is_active;
             """;
         command.Parameters.AddWithValue("$skuVariant", profile.SkuVariant);
@@ -2721,6 +3003,34 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
         command.Parameters.AddWithValue("$collection", (object?)profile.Collection ?? DBNull.Value);
         command.Parameters.AddWithValue("$promo", (object?)profile.Promo ?? DBNull.Value);
         command.Parameters.AddWithValue("$ramadhanPromo", (object?)profile.RamadhanPromo ?? DBNull.Value);
+        command.Parameters.AddWithValue("$supplier", (object?)profile.Supplier ?? DBNull.Value);
+        command.Parameters.AddWithValue("$lifecycleStage", (object?)profile.LifecycleStage ?? DBNull.Value);
+        command.Parameters.AddWithValue("$ageStage", (object?)profile.AgeStage ?? DBNull.Value);
+        command.Parameters.AddWithValue("$genderTarget", (object?)profile.GenderTarget ?? DBNull.Value);
+        command.Parameters.AddWithValue("$material", (object?)profile.Material ?? DBNull.Value);
+        command.Parameters.AddWithValue("$packSize", (object?)profile.PackSize ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sizeRange", (object?)profile.SizeRange ?? DBNull.Value);
+        command.Parameters.AddWithValue("$colourFamily", (object?)profile.ColourFamily ?? DBNull.Value);
+        command.Parameters.AddWithValue("$kviFlag", profile.KviFlag ? 1 : 0);
+        command.Parameters.AddWithValue("$markdownEligible", profile.MarkdownEligible ? 1 : 0);
+        command.Parameters.AddWithValue("$markdownFloorPrice", (object?)profile.MarkdownFloorPrice ?? DBNull.Value);
+        command.Parameters.AddWithValue("$minimumMarginPct", (object?)profile.MinimumMarginPct ?? DBNull.Value);
+        command.Parameters.AddWithValue("$priceLadderGroup", (object?)profile.PriceLadderGroup ?? DBNull.Value);
+        command.Parameters.AddWithValue("$goodBetterBestTier", (object?)profile.GoodBetterBestTier ?? DBNull.Value);
+        command.Parameters.AddWithValue("$seasonCode", (object?)profile.SeasonCode ?? DBNull.Value);
+        command.Parameters.AddWithValue("$eventCode", (object?)profile.EventCode ?? DBNull.Value);
+        command.Parameters.AddWithValue("$launchDate", (object?)profile.LaunchDate ?? DBNull.Value);
+        command.Parameters.AddWithValue("$endOfLifeDate", (object?)profile.EndOfLifeDate ?? DBNull.Value);
+        command.Parameters.AddWithValue("$substituteGroup", (object?)profile.SubstituteGroup ?? DBNull.Value);
+        command.Parameters.AddWithValue("$companionGroup", (object?)profile.CompanionGroup ?? DBNull.Value);
+        command.Parameters.AddWithValue("$replenishmentType", (object?)profile.ReplenishmentType ?? DBNull.Value);
+        command.Parameters.AddWithValue("$leadTimeDays", (object?)profile.LeadTimeDays ?? DBNull.Value);
+        command.Parameters.AddWithValue("$moq", (object?)profile.Moq ?? DBNull.Value);
+        command.Parameters.AddWithValue("$casePack", (object?)profile.CasePack ?? DBNull.Value);
+        command.Parameters.AddWithValue("$startingInventory", (object?)profile.StartingInventory ?? DBNull.Value);
+        command.Parameters.AddWithValue("$projectedStockOnHand", (object?)profile.ProjectedStockOnHand ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sellThroughTargetPct", (object?)profile.SellThroughTargetPct ?? DBNull.Value);
+        command.Parameters.AddWithValue("$weeksOfCoverTarget", (object?)profile.WeeksOfCoverTarget ?? DBNull.Value);
         command.Parameters.AddWithValue("$isActive", profile.IsActive ? 1 : 0);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -2747,7 +3057,20 @@ public sealed class SqlitePlanningRepository : IPlanningRepository
             ["ramadhanPromo"] = profile.RamadhanPromo,
             ["activeFlag"] = profile.ActiveFlag,
             ["orderFlag"] = profile.OrderFlag,
-            ["launchMonth"] = profile.LaunchMonth
+            ["launchMonth"] = profile.LaunchMonth,
+            ["supplier"] = profile.Supplier,
+            ["lifecycleStage"] = profile.LifecycleStage,
+            ["ageStage"] = profile.AgeStage,
+            ["genderTarget"] = profile.GenderTarget,
+            ["material"] = profile.Material,
+            ["packSize"] = profile.PackSize,
+            ["sizeRange"] = profile.SizeRange,
+            ["colourFamily"] = profile.ColourFamily,
+            ["priceLadderGroup"] = profile.PriceLadderGroup,
+            ["goodBetterBestTier"] = profile.GoodBetterBestTier,
+            ["seasonCode"] = profile.SeasonCode,
+            ["eventCode"] = profile.EventCode,
+            ["replenishmentType"] = profile.ReplenishmentType
         };
 
         foreach (var (fieldName, value) in options)

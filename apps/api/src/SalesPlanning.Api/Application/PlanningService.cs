@@ -5,7 +5,7 @@ using SalesPlanning.Api.Domain;
 
 namespace SalesPlanning.Api.Application;
 
-public sealed class PlanningService : IPlanningService
+public sealed partial class PlanningService : IPlanningService
 {
     private static readonly string[] MonthLabels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     private static readonly string[] ImportHeaders =
@@ -17,13 +17,20 @@ public sealed class PlanningService : IPlanningService
     [
         "CompCode", "BranchName", "State", "Branch Type", "Latitude", "Longitude", "Region", "Opening Date",
         "SSSG", "Sales Type", "Status", "Storey", "Building Status", "GTA", "NTA", "RSOM", "DM", "Rental",
-        "Lifecycle State", "Ramp Profile", "Active"
+        "Lifecycle State", "Ramp Profile", "Active", "Store Cluster Role", "Store Capacity SqFt", "Store Format Tier",
+        "Catchment Type", "Demographic Segment", "Climate Zone", "Fulfilment Enabled", "Online Fulfilment Node",
+        "Store Opening Season", "Store Closure Date", "Refurbishment Date", "Store Priority"
     ];
     private static readonly string[] ProductProfileImportHeaders =
     [
         "SKU Variant", "Description", "Description2", "Price", "Cost", "DptNo", "ClssNo", "BrandNo",
         "Department", "Class", "Brand", "Rev. Dept", "Rev. Class", "Subclass", "Prod Group", "Prod Type",
-        "Active Flag", "Order Flag", "Brand Type", "Launch Month", "Gender", "Size", "Collection", "Promo", "Ramadhan Promo"
+        "Active Flag", "Order Flag", "Brand Type", "Launch Month", "Gender", "Size", "Collection", "Promo", "Ramadhan Promo",
+        "Supplier", "Lifecycle Stage", "Age Stage", "Gender Target", "Material", "Pack Size", "Size Range", "Colour Family",
+        "KVI Flag", "Markdown Eligible", "Markdown Floor Price", "Minimum Margin Pct", "Price Ladder Group",
+        "Good Better Best Tier", "Season Code", "Event Code", "Launch Date", "End Of Life Date", "Substitute Group",
+        "Companion Group", "Replenishment Type", "Lead Time Days", "MOQ", "Case Pack", "Starting Inventory",
+        "Projected Stock On Hand", "Sell Through Target Pct", "Weeks Of Cover Target"
     ];
     private static readonly string[] ProductHierarchyImportHeaders =
     [
@@ -31,6 +38,7 @@ public sealed class PlanningService : IPlanningService
     ];
     private const string RemarkHeader = "Remark";
     private const string ExpectedValueHeader = "Expected Value";
+    private const int RequiredProductProfileImportHeaderCount = 25;
     private readonly IPlanningRepository _repository;
     private readonly ISplashAllocator _splashAllocator;
 
@@ -1885,7 +1893,19 @@ public sealed class PlanningService : IPlanningService
         store.Rental,
         store.LifecycleState,
         store.RampProfileCode,
-        store.IsActive);
+        store.IsActive,
+        store.StoreClusterRole,
+        store.StoreCapacitySqFt,
+        store.StoreFormatTier,
+        store.CatchmentType,
+        store.DemographicSegment,
+        store.ClimateZone,
+        store.FulfilmentEnabled,
+        store.OnlineFulfilmentNode,
+        store.StoreOpeningSeason,
+        store.StoreClosureDate,
+        store.RefurbishmentDate,
+        store.StorePriority);
 
     private static StoreNodeMetadata NormalizeStoreProfile(UpsertStoreProfileRequest request) => new(
         request.StoreId ?? 0,
@@ -1911,7 +1931,19 @@ public sealed class PlanningService : IPlanningService
         NormalizeOptionalText(request.Rsom),
         NormalizeOptionalText(request.Dm),
         request.Rental,
-        request.IsActive);
+        request.IsActive,
+        NormalizeOptionalText(request.StoreClusterRole),
+        request.StoreCapacitySqFt,
+        NormalizeOptionalText(request.StoreFormatTier),
+        NormalizeOptionalText(request.CatchmentType),
+        NormalizeOptionalText(request.DemographicSegment),
+        NormalizeOptionalText(request.ClimateZone),
+        request.FulfilmentEnabled,
+        request.OnlineFulfilmentNode,
+        NormalizeOptionalText(request.StoreOpeningSeason),
+        NormalizeOptionalDate(request.StoreClosureDate),
+        NormalizeOptionalDate(request.RefurbishmentDate),
+        NormalizeOptionalText(request.StorePriority));
 
     private static string NormalizeRequiredText(string? preferred, string? fallback, string label)
     {
@@ -1981,6 +2013,18 @@ public sealed class PlanningService : IPlanningService
             GetValue("Lifecycle State"),
             GetValue("Ramp Profile"),
             GetValue("Active"),
+            GetValue("Store Cluster Role"),
+            GetValue("Store Capacity SqFt"),
+            GetValue("Store Format Tier"),
+            GetValue("Catchment Type"),
+            GetValue("Demographic Segment"),
+            GetValue("Climate Zone"),
+            GetValue("Fulfilment Enabled"),
+            GetValue("Online Fulfilment Node"),
+            GetValue("Store Opening Season"),
+            GetValue("Store Closure Date"),
+            GetValue("Refurbishment Date"),
+            GetValue("Store Priority"),
             GetValue(RemarkHeader),
             GetValue(ExpectedValueHeader));
     }
@@ -2048,10 +2092,42 @@ public sealed class PlanningService : IPlanningService
             return false;
         }
 
+        if (!TryParseOptionalDecimal(row.StoreCapacitySqFt, out var storeCapacitySqFt))
+        {
+            error = "Store Capacity SqFt must be numeric when provided.";
+            return false;
+        }
+
+        if (!TryParseOptionalBoolean(row.FulfilmentEnabled, out var fulfilmentEnabled))
+        {
+            error = "Fulfilment Enabled must be true/false when provided.";
+            return false;
+        }
+
+        if (!TryParseOptionalBoolean(row.OnlineFulfilmentNode, out var onlineFulfilmentNode))
+        {
+            error = "Online Fulfilment Node must be true/false when provided.";
+            return false;
+        }
+
         var openingDate = NormalizeWorkbookDate(row.OpeningDate);
         if (openingDate == "__INVALID__")
         {
             error = "Opening Date must be a valid Excel or calendar date.";
+            return false;
+        }
+
+        var storeClosureDate = NormalizeWorkbookDate(row.StoreClosureDate);
+        if (storeClosureDate == "__INVALID__")
+        {
+            error = "Store Closure Date must be a valid Excel or calendar date.";
+            return false;
+        }
+
+        var refurbishmentDate = NormalizeWorkbookDate(row.RefurbishmentDate);
+        if (refurbishmentDate == "__INVALID__")
+        {
+            error = "Refurbishment Date must be a valid Excel or calendar date.";
             return false;
         }
 
@@ -2083,7 +2159,19 @@ public sealed class PlanningService : IPlanningService
             NormalizeOptionalText(row.Rsom),
             NormalizeOptionalText(row.Dm),
             rental,
-            isActive);
+            isActive,
+            NormalizeOptionalText(row.StoreClusterRole),
+            storeCapacitySqFt,
+            NormalizeOptionalText(row.StoreFormatTier),
+            NormalizeOptionalText(row.CatchmentType),
+            NormalizeOptionalText(row.DemographicSegment),
+            NormalizeOptionalText(row.ClimateZone),
+            fulfilmentEnabled ?? false,
+            onlineFulfilmentNode ?? false,
+            NormalizeOptionalText(row.StoreOpeningSeason),
+            storeClosureDate is null or "__INVALID__" ? null : storeClosureDate,
+            refurbishmentDate is null or "__INVALID__" ? null : refurbishmentDate,
+            NormalizeOptionalText(row.StorePriority));
         return true;
     }
 
@@ -2098,6 +2186,55 @@ public sealed class PlanningService : IPlanningService
         if (decimal.TryParse(rawValue, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed))
         {
             value = parsed;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryParseOptionalInt(string rawValue, out int? value)
+    {
+        value = null;
+        if (string.IsNullOrWhiteSpace(rawValue))
+        {
+            return true;
+        }
+
+        if (int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+        {
+            value = parsed;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryParseOptionalBoolean(string rawValue, out bool? value)
+    {
+        value = null;
+        if (string.IsNullOrWhiteSpace(rawValue))
+        {
+            return true;
+        }
+
+        var normalized = rawValue.Trim();
+        if (normalized.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("y", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("active", StringComparison.OrdinalIgnoreCase))
+        {
+            value = true;
+            return true;
+        }
+
+        if (normalized.Equals("0", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("n", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("no", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("inactive", StringComparison.OrdinalIgnoreCase))
+        {
+            value = false;
             return true;
         }
 
@@ -2163,6 +2300,18 @@ public sealed class PlanningService : IPlanningService
         sheet.Cell(rowIndex, 19).Value = store.LifecycleState;
         sheet.Cell(rowIndex, 20).Value = store.RampProfileCode;
         sheet.Cell(rowIndex, 21).Value = store.IsActive ? "true" : "false";
+        sheet.Cell(rowIndex, 22).Value = store.StoreClusterRole;
+        sheet.Cell(rowIndex, 23).Value = store.StoreCapacitySqFt;
+        sheet.Cell(rowIndex, 24).Value = store.StoreFormatTier;
+        sheet.Cell(rowIndex, 25).Value = store.CatchmentType;
+        sheet.Cell(rowIndex, 26).Value = store.DemographicSegment;
+        sheet.Cell(rowIndex, 27).Value = store.ClimateZone;
+        sheet.Cell(rowIndex, 28).Value = store.FulfilmentEnabled ? "true" : "false";
+        sheet.Cell(rowIndex, 29).Value = store.OnlineFulfilmentNode ? "true" : "false";
+        sheet.Cell(rowIndex, 30).Value = store.StoreOpeningSeason;
+        sheet.Cell(rowIndex, 31).Value = store.StoreClosureDate;
+        sheet.Cell(rowIndex, 32).Value = store.RefurbishmentDate;
+        sheet.Cell(rowIndex, 33).Value = store.StorePriority;
     }
 
     private static void WriteStoreProfileExceptionRow(IXLWorksheet sheet, int rowIndex, ImportedStoreProfileRow row, string error)
@@ -2171,7 +2320,9 @@ public sealed class PlanningService : IPlanningService
         {
             row.CompCode, row.BranchName, row.State, row.BranchType, row.Latitude, row.Longitude, row.Region, row.OpeningDate,
             row.Sssg, row.SalesType, row.Status, row.Storey, row.BuildingStatus, row.Gta, row.Nta, row.Rsom, row.Dm, row.Rental,
-            row.LifecycleState, row.RampProfile, row.Active, error
+            row.LifecycleState, row.RampProfile, row.Active, row.StoreClusterRole, row.StoreCapacitySqFt, row.StoreFormatTier,
+            row.CatchmentType, row.DemographicSegment, row.ClimateZone, row.FulfilmentEnabled, row.OnlineFulfilmentNode,
+            row.StoreOpeningSeason, row.StoreClosureDate, row.RefurbishmentDate, row.StorePriority, error
         };
 
         for (var index = 0; index < values.Length; index += 1)
@@ -2228,7 +2379,35 @@ public sealed class PlanningService : IPlanningService
         profile.Collection,
         profile.Promo,
         profile.RamadhanPromo,
-        profile.IsActive);
+        profile.IsActive,
+        profile.Supplier,
+        profile.LifecycleStage,
+        profile.AgeStage,
+        profile.GenderTarget,
+        profile.Material,
+        profile.PackSize,
+        profile.SizeRange,
+        profile.ColourFamily,
+        profile.KviFlag,
+        profile.MarkdownEligible,
+        profile.MarkdownFloorPrice,
+        profile.MinimumMarginPct,
+        profile.PriceLadderGroup,
+        profile.GoodBetterBestTier,
+        profile.SeasonCode,
+        profile.EventCode,
+        profile.LaunchDate,
+        profile.EndOfLifeDate,
+        profile.SubstituteGroup,
+        profile.CompanionGroup,
+        profile.ReplenishmentType,
+        profile.LeadTimeDays,
+        profile.Moq,
+        profile.CasePack,
+        profile.StartingInventory,
+        profile.ProjectedStockOnHand,
+        profile.SellThroughTargetPct,
+        profile.WeeksOfCoverTarget);
 
     private static ProductProfileMetadata NormalizeProductProfile(UpsertProductProfileRequest request) => new(
         NormalizeRequiredText(request.SkuVariant, null, "SKU Variant"),
@@ -2256,7 +2435,35 @@ public sealed class PlanningService : IPlanningService
         NormalizeOptionalText(request.Collection),
         NormalizeOptionalText(request.Promo),
         NormalizeOptionalText(request.RamadhanPromo),
-        request.IsActive);
+        request.IsActive,
+        NormalizeOptionalText(request.Supplier),
+        NormalizeOptionalText(request.LifecycleStage),
+        NormalizeOptionalText(request.AgeStage),
+        NormalizeOptionalText(request.GenderTarget),
+        NormalizeOptionalText(request.Material),
+        NormalizeOptionalText(request.PackSize),
+        NormalizeOptionalText(request.SizeRange),
+        NormalizeOptionalText(request.ColourFamily),
+        request.KviFlag,
+        request.MarkdownEligible,
+        request.MarkdownFloorPrice,
+        request.MinimumMarginPct,
+        NormalizeOptionalText(request.PriceLadderGroup),
+        NormalizeOptionalText(request.GoodBetterBestTier),
+        NormalizeOptionalText(request.SeasonCode),
+        NormalizeOptionalText(request.EventCode),
+        NormalizeOptionalDate(request.LaunchDate),
+        NormalizeOptionalDate(request.EndOfLifeDate),
+        NormalizeOptionalText(request.SubstituteGroup),
+        NormalizeOptionalText(request.CompanionGroup),
+        NormalizeOptionalText(request.ReplenishmentType),
+        request.LeadTimeDays,
+        request.Moq,
+        request.CasePack,
+        request.StartingInventory,
+        request.ProjectedStockOnHand,
+        request.SellThroughTargetPct,
+        request.WeeksOfCoverTarget);
 
     private static ProductHierarchyCatalogRecord NormalizeProductHierarchy(ProductHierarchyCatalogRecord record) => new(
         NormalizeRequiredText(record.DptNo, null, "DptNo"),
@@ -2268,7 +2475,7 @@ public sealed class PlanningService : IPlanningService
 
     private static void ValidateProductProfileHeaders(IReadOnlyDictionary<string, int> headerMap)
     {
-        foreach (var header in ProductProfileImportHeaders)
+        foreach (var header in ProductProfileImportHeaders.Take(RequiredProductProfileImportHeaderCount))
         {
             if (!headerMap.ContainsKey(header))
             {
@@ -2317,6 +2524,34 @@ public sealed class PlanningService : IPlanningService
             GetValue("Collection"),
             GetValue("Promo"),
             GetValue("Ramadhan Promo"),
+            GetValue("Supplier"),
+            GetValue("Lifecycle Stage"),
+            GetValue("Age Stage"),
+            GetValue("Gender Target"),
+            GetValue("Material"),
+            GetValue("Pack Size"),
+            GetValue("Size Range"),
+            GetValue("Colour Family"),
+            GetValue("KVI Flag"),
+            GetValue("Markdown Eligible"),
+            GetValue("Markdown Floor Price"),
+            GetValue("Minimum Margin Pct"),
+            GetValue("Price Ladder Group"),
+            GetValue("Good Better Best Tier"),
+            GetValue("Season Code"),
+            GetValue("Event Code"),
+            GetValue("Launch Date"),
+            GetValue("End Of Life Date"),
+            GetValue("Substitute Group"),
+            GetValue("Companion Group"),
+            GetValue("Replenishment Type"),
+            GetValue("Lead Time Days"),
+            GetValue("MOQ"),
+            GetValue("Case Pack"),
+            GetValue("Starting Inventory"),
+            GetValue("Projected Stock On Hand"),
+            GetValue("Sell Through Target Pct"),
+            GetValue("Weeks Of Cover Target"),
             GetValue(RemarkHeader),
             GetValue(ExpectedValueHeader));
     }
@@ -2346,6 +2581,72 @@ public sealed class PlanningService : IPlanningService
         if (!TryParseRequiredDecimal(row.Cost, out var cost))
         {
             error = "Cost must be numeric.";
+            return false;
+        }
+
+        if (!TryParseOptionalBoolean(row.KviFlag, out var kviFlag))
+        {
+            error = "KVI Flag must be true/false when provided.";
+            return false;
+        }
+
+        if (!TryParseOptionalBoolean(row.MarkdownEligible, out var markdownEligible))
+        {
+            error = "Markdown Eligible must be true/false when provided.";
+            return false;
+        }
+
+        if (!TryParseOptionalDecimal(row.MarkdownFloorPrice, out var markdownFloorPrice))
+        {
+            error = "Markdown Floor Price must be numeric when provided.";
+            return false;
+        }
+
+        if (!TryParseOptionalDecimal(row.MinimumMarginPct, out var minimumMarginPct))
+        {
+            error = "Minimum Margin Pct must be numeric when provided.";
+            return false;
+        }
+
+        if (!TryParseOptionalInt(row.LeadTimeDays, out var leadTimeDays))
+        {
+            error = "Lead Time Days must be an integer when provided.";
+            return false;
+        }
+
+        if (!TryParseOptionalInt(row.Moq, out var moq))
+        {
+            error = "MOQ must be an integer when provided.";
+            return false;
+        }
+
+        if (!TryParseOptionalInt(row.CasePack, out var casePack))
+        {
+            error = "Case Pack must be an integer when provided.";
+            return false;
+        }
+
+        if (!TryParseOptionalDecimal(row.StartingInventory, out var startingInventory))
+        {
+            error = "Starting Inventory must be numeric when provided.";
+            return false;
+        }
+
+        if (!TryParseOptionalDecimal(row.ProjectedStockOnHand, out var projectedStockOnHand))
+        {
+            error = "Projected Stock On Hand must be numeric when provided.";
+            return false;
+        }
+
+        if (!TryParseOptionalDecimal(row.SellThroughTargetPct, out var sellThroughTargetPct))
+        {
+            error = "Sell Through Target Pct must be numeric when provided.";
+            return false;
+        }
+
+        if (!TryParseOptionalDecimal(row.WeeksOfCoverTarget, out var weeksOfCoverTarget))
+        {
+            error = "Weeks Of Cover Target must be numeric when provided.";
             return false;
         }
 
@@ -2388,6 +2689,20 @@ public sealed class PlanningService : IPlanningService
             activeFlag.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
             activeFlag.Equals("active", StringComparison.OrdinalIgnoreCase);
 
+        var launchDate = NormalizeWorkbookDate(row.LaunchDate);
+        if (launchDate == "__INVALID__")
+        {
+            error = "Launch Date must be a valid Excel or calendar date.";
+            return false;
+        }
+
+        var endOfLifeDate = NormalizeWorkbookDate(row.EndOfLifeDate);
+        if (endOfLifeDate == "__INVALID__")
+        {
+            error = "End Of Life Date must be a valid Excel or calendar date.";
+            return false;
+        }
+
         normalized = new ProductProfileMetadata(
             skuVariant,
             description,
@@ -2414,7 +2729,35 @@ public sealed class PlanningService : IPlanningService
             NormalizeOptionalText(row.Collection),
             NormalizeOptionalText(row.Promo),
             NormalizeOptionalText(row.RamadhanPromo),
-            isActive);
+            isActive,
+            NormalizeOptionalText(row.Supplier),
+            NormalizeOptionalText(row.LifecycleStage),
+            NormalizeOptionalText(row.AgeStage),
+            NormalizeOptionalText(row.GenderTarget),
+            NormalizeOptionalText(row.Material),
+            NormalizeOptionalText(row.PackSize),
+            NormalizeOptionalText(row.SizeRange),
+            NormalizeOptionalText(row.ColourFamily),
+            kviFlag ?? false,
+            markdownEligible ?? true,
+            markdownFloorPrice,
+            minimumMarginPct,
+            NormalizeOptionalText(row.PriceLadderGroup),
+            NormalizeOptionalText(row.GoodBetterBestTier),
+            NormalizeOptionalText(row.SeasonCode),
+            NormalizeOptionalText(row.EventCode),
+            launchDate is null or "__INVALID__" ? null : launchDate,
+            endOfLifeDate is null or "__INVALID__" ? null : endOfLifeDate,
+            NormalizeOptionalText(row.SubstituteGroup),
+            NormalizeOptionalText(row.CompanionGroup),
+            NormalizeOptionalText(row.ReplenishmentType),
+            leadTimeDays,
+            moq,
+            casePack,
+            startingInventory,
+            projectedStockOnHand,
+            sellThroughTargetPct,
+            weeksOfCoverTarget);
         return true;
     }
 
@@ -2492,6 +2835,34 @@ public sealed class PlanningService : IPlanningService
         sheet.Cell(rowIndex, 23).Value = profile.Collection;
         sheet.Cell(rowIndex, 24).Value = profile.Promo;
         sheet.Cell(rowIndex, 25).Value = profile.RamadhanPromo;
+        sheet.Cell(rowIndex, 26).Value = profile.Supplier;
+        sheet.Cell(rowIndex, 27).Value = profile.LifecycleStage;
+        sheet.Cell(rowIndex, 28).Value = profile.AgeStage;
+        sheet.Cell(rowIndex, 29).Value = profile.GenderTarget;
+        sheet.Cell(rowIndex, 30).Value = profile.Material;
+        sheet.Cell(rowIndex, 31).Value = profile.PackSize;
+        sheet.Cell(rowIndex, 32).Value = profile.SizeRange;
+        sheet.Cell(rowIndex, 33).Value = profile.ColourFamily;
+        sheet.Cell(rowIndex, 34).Value = profile.KviFlag ? "true" : "false";
+        sheet.Cell(rowIndex, 35).Value = profile.MarkdownEligible ? "true" : "false";
+        sheet.Cell(rowIndex, 36).Value = profile.MarkdownFloorPrice;
+        sheet.Cell(rowIndex, 37).Value = profile.MinimumMarginPct;
+        sheet.Cell(rowIndex, 38).Value = profile.PriceLadderGroup;
+        sheet.Cell(rowIndex, 39).Value = profile.GoodBetterBestTier;
+        sheet.Cell(rowIndex, 40).Value = profile.SeasonCode;
+        sheet.Cell(rowIndex, 41).Value = profile.EventCode;
+        sheet.Cell(rowIndex, 42).Value = profile.LaunchDate;
+        sheet.Cell(rowIndex, 43).Value = profile.EndOfLifeDate;
+        sheet.Cell(rowIndex, 44).Value = profile.SubstituteGroup;
+        sheet.Cell(rowIndex, 45).Value = profile.CompanionGroup;
+        sheet.Cell(rowIndex, 46).Value = profile.ReplenishmentType;
+        sheet.Cell(rowIndex, 47).Value = profile.LeadTimeDays;
+        sheet.Cell(rowIndex, 48).Value = profile.Moq;
+        sheet.Cell(rowIndex, 49).Value = profile.CasePack;
+        sheet.Cell(rowIndex, 50).Value = profile.StartingInventory;
+        sheet.Cell(rowIndex, 51).Value = profile.ProjectedStockOnHand;
+        sheet.Cell(rowIndex, 52).Value = profile.SellThroughTargetPct;
+        sheet.Cell(rowIndex, 53).Value = profile.WeeksOfCoverTarget;
     }
 
     private static void WriteProductHierarchyRow(IXLWorksheet sheet, int rowIndex, ProductHierarchyCatalogRecord row)
@@ -2510,6 +2881,11 @@ public sealed class PlanningService : IPlanningService
             row.SkuVariant, row.Description, row.Description2, row.Price, row.Cost, row.DptNo, row.ClssNo, row.BrandNo,
             row.Department, row.Class, row.Brand, row.RevDepartment, row.RevClass, row.Subclass, row.ProdGroup, row.ProdType,
             row.ActiveFlag, row.OrderFlag, row.BrandType, row.LaunchMonth, row.Gender, row.Size, row.Collection, row.Promo, row.RamadhanPromo,
+            row.Supplier, row.LifecycleStage, row.AgeStage, row.GenderTarget, row.Material, row.PackSize, row.SizeRange, row.ColourFamily,
+            row.KviFlag, row.MarkdownEligible, row.MarkdownFloorPrice, row.MinimumMarginPct, row.PriceLadderGroup, row.GoodBetterBestTier,
+            row.SeasonCode, row.EventCode, row.LaunchDate, row.EndOfLifeDate, row.SubstituteGroup, row.CompanionGroup,
+            row.ReplenishmentType, row.LeadTimeDays, row.Moq, row.CasePack, row.StartingInventory, row.ProjectedStockOnHand,
+            row.SellThroughTargetPct, row.WeeksOfCoverTarget,
             error
         };
 
@@ -2561,6 +2937,18 @@ public sealed class PlanningService : IPlanningService
         string LifecycleState,
         string RampProfile,
         string Active,
+        string StoreClusterRole,
+        string StoreCapacitySqFt,
+        string StoreFormatTier,
+        string CatchmentType,
+        string DemographicSegment,
+        string ClimateZone,
+        string FulfilmentEnabled,
+        string OnlineFulfilmentNode,
+        string StoreOpeningSeason,
+        string StoreClosureDate,
+        string RefurbishmentDate,
+        string StorePriority,
         string Remark,
         string ExpectedValue);
 
@@ -2590,6 +2978,34 @@ public sealed class PlanningService : IPlanningService
         string Collection,
         string Promo,
         string RamadhanPromo,
+        string Supplier,
+        string LifecycleStage,
+        string AgeStage,
+        string GenderTarget,
+        string Material,
+        string PackSize,
+        string SizeRange,
+        string ColourFamily,
+        string KviFlag,
+        string MarkdownEligible,
+        string MarkdownFloorPrice,
+        string MinimumMarginPct,
+        string PriceLadderGroup,
+        string GoodBetterBestTier,
+        string SeasonCode,
+        string EventCode,
+        string LaunchDate,
+        string EndOfLifeDate,
+        string SubstituteGroup,
+        string CompanionGroup,
+        string ReplenishmentType,
+        string LeadTimeDays,
+        string Moq,
+        string CasePack,
+        string StartingInventory,
+        string ProjectedStockOnHand,
+        string SellThroughTargetPct,
+        string WeeksOfCoverTarget,
         string Remark,
         string ExpectedValue);
 
