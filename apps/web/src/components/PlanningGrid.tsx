@@ -685,7 +685,7 @@ export function PlanningGrid({
           readOnlyEdit
           suppressClickEdit={showGrowthFactors}
           undoRedoCellEditing
-          undoRedoCellEditingLimit={20}
+          undoRedoCellEditingLimit={30}
           rowHeight={compactMode ? 24 : 28}
           headerHeight={compactMode ? 28 : 32}
           groupHeaderHeight={compactMode ? 30 : 34}
