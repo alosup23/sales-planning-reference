@@ -124,6 +124,7 @@ type ActiveView =
   | "seasonality-event"
   | "vendor-supply";
 type DepartmentLayout = "department-store-class" | "department-class-store";
+type PlanningStoreScopeSelection = number | "all" | null;
 
 export default function App() {
   const queryClient = useQueryClient();
@@ -145,16 +146,20 @@ export default function App() {
   const [seasonalityPageNumber, setSeasonalityPageNumber] = useState(1);
   const [vendorSearchTerm, setVendorSearchTerm] = useState("");
   const [vendorPageNumber, setVendorPageNumber] = useState(1);
-  const [selectedPlanningStoreId, setSelectedPlanningStoreId] = useState<number | null>(null);
+  const [selectedPlanningStoreId, setSelectedPlanningStoreId] = useState<PlanningStoreScopeSelection>(null);
   const [selectedDepartmentLabel, setSelectedDepartmentLabel] = useState<string | null>(null);
   const [departmentScopeOptions, setDepartmentScopeOptions] = useState<string[]>([]);
   const [expandedBranchNodeIds, setExpandedBranchNodeIds] = useState<number[]>([]);
   const [expandAllBranches, setExpandAllBranches] = useState(false);
   const loadingBranchNodeIdsRef = useRef<Set<number>>(new Set());
+  const effectivePlanningStoreId = selectedPlanningStoreId === "all" ? null : selectedPlanningStoreId;
+  const planningScopeCacheKey = activeView === "planning-store"
+    ? selectedPlanningStoreId ?? "__pending__"
+    : "__all-stores__";
   const gridExpansionToken = "branch-cache";
   const gridSliceQueryKey = useMemo(
-    () => ["grid-slice", 1, activeView, selectedPlanningStoreId, selectedDepartmentLabel, gridExpansionToken, expandAllBranches ? "all" : "branch"] as const,
-    [activeView, expandAllBranches, gridExpansionToken, selectedDepartmentLabel, selectedPlanningStoreId],
+    () => ["grid-slice", 1, activeView, planningScopeCacheKey, selectedDepartmentLabel, gridExpansionToken, expandAllBranches ? "all" : "branch"] as const,
+    [activeView, expandAllBranches, gridExpansionToken, planningScopeCacheKey, selectedDepartmentLabel],
   );
   const planningStoreScopesQueryKey = ["planning-store-scopes"] as const;
   const undoRedoQueryKey = ["undo-redo-availability", 1] as const;
@@ -166,7 +171,7 @@ export default function App() {
   const gridQuery = useQuery({
     queryKey: gridSliceQueryKey,
     queryFn: () => getGridSlice({
-      selectedStoreId: activeView === "planning-store" ? selectedPlanningStoreId : null,
+      selectedStoreId: activeView === "planning-store" ? effectivePlanningStoreId : null,
       selectedDepartmentLabel: activeView === "planning-department" ? selectedDepartmentLabel : null,
       expandedProductNodeIds: activeView === "planning-store" || activeView === "planning-department" ? expandedBranchNodeIds : [],
       expandAllBranches,
@@ -241,7 +246,7 @@ export default function App() {
   });
 
   useEffect(() => {
-    if (selectedPlanningStoreId || !planningStoreScopeQuery.data?.stores.length) {
+    if (selectedPlanningStoreId !== null || !planningStoreScopeQuery.data?.stores.length) {
       return;
     }
 
@@ -1765,7 +1770,14 @@ export default function App() {
         {activeView === "planning-store" ? (
           <label className="year-picker">
             <span>Store Scope</span>
-            <select value={selectedPlanningStoreId ?? ""} onChange={(event) => setSelectedPlanningStoreId(Number(event.target.value) || null)}>
+            <select
+              value={selectedPlanningStoreId === null ? "" : String(selectedPlanningStoreId)}
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                setSelectedPlanningStoreId(nextValue === "all" ? "all" : (Number(nextValue) || null));
+              }}
+            >
+              <option value="all">All Stores</option>
               {(planningStoreScopeQuery.data?.stores ?? []).map((store: PlanningStoreScope) => (
                 <option key={store.storeId} value={store.storeId}>
                   {store.branchName}

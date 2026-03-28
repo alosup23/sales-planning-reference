@@ -341,6 +341,24 @@ test("renders the correct department hierarchy order in both layouts and applies
   await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store B" }).first()).toBeVisible();
 });
 
+test("supports All Stores scope and keeps department expansion independent from store scope", async ({ page }) => {
+  await openGrid(page);
+
+  await selectStoreScope(page, "all");
+  await toggleRowCaret(page, storeRootRowId);
+  await expectReady(page);
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store A" }).first()).toBeVisible();
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store B" }).first()).toBeVisible();
+
+  await selectStoreScope(page, "101");
+  await selectWorkspace(page, "planning-department");
+  await expectReady(page);
+  await toggleRowCaretByLabel(page, "Beverages");
+  await expectReady(page);
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store A" }).first()).toBeVisible();
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store B" }).first()).toBeVisible();
+});
+
 test("editing a visible Sales Revenue month persists the updated value", async ({ page }) => {
   await expandYears(page);
   const monthRevenueCol = "202601:1";
