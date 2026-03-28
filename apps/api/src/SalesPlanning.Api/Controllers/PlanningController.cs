@@ -34,6 +34,15 @@ public sealed class PlanningController : ControllerBase
         return _planningService.GetGridSliceAsync(scenarioVersionId, selectedStoreId, selectedDepartmentLabel, expandedNodes, expandAllBranches, cancellationToken);
     }
 
+    [HttpGet("grid-branches")]
+    public Task<GridBranchResponse> GetGridBranch(
+        [FromQuery] long scenarioVersionId,
+        [FromQuery] long parentProductNodeId,
+        CancellationToken cancellationToken = default)
+    {
+        return _planningService.GetGridBranchRowsAsync(scenarioVersionId, parentProductNodeId, cancellationToken);
+    }
+
     [HttpPost("cell-edits")]
     public Task<EditCellsResponse> EditCells([FromBody] EditCellsRequest request, CancellationToken cancellationToken)
     {

@@ -54,6 +54,11 @@ public sealed partial class PlanningService : IPlanningService
         return _repository.GetGridSliceAsync(scenarioVersionId, selectedStoreId, selectedDepartmentLabel, expandedProductNodeIds, expandAllBranches, cancellationToken);
     }
 
+    public Task<GridBranchResponse> GetGridBranchRowsAsync(long scenarioVersionId, long parentProductNodeId, CancellationToken cancellationToken)
+    {
+        return _repository.GetGridBranchRowsAsync(scenarioVersionId, parentProductNodeId, cancellationToken);
+    }
+
     public Task<EditCellsResponse> ApplyEditsAsync(EditCellsRequest request, string userId, CancellationToken cancellationToken)
     {
         return _repository.ExecuteAtomicAsync(async ct =>

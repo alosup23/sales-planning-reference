@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiRequestError,
@@ -11,6 +11,7 @@ import {
   downloadBase64Workbook,
   downloadWorkbookExport,
   getGridSlice,
+  getGridBranchRows,
   getHierarchyMappings,
   getInventoryProfiles,
   getPlanningStoreScopes,
@@ -79,7 +80,7 @@ import { SeasonalityEventMaintenanceSheet } from "./components/SeasonalityEventM
 import { StoreProfileMaintenanceSheet } from "./components/StoreProfileMaintenanceSheet";
 import { VendorSupplyProfileMaintenanceSheet } from "./components/VendorSupplyProfileMaintenanceSheet";
 import { authEnabled } from "./lib/auth";
-import { applyPlanningGridPatch } from "./lib/gridPatch";
+import { applyPlanningGridPatch, mergeGridRowsIntoSlice } from "./lib/gridPatch";
 import type {
   AddRowResponse,
   GridCell,
@@ -148,9 +149,11 @@ export default function App() {
   const [selectedDepartmentLabel, setSelectedDepartmentLabel] = useState<string | null>(null);
   const [expandedBranchNodeIds, setExpandedBranchNodeIds] = useState<number[]>([]);
   const [expandAllBranches, setExpandAllBranches] = useState(false);
+  const loadingBranchNodeIdsRef = useRef<Set<number>>(new Set());
+  const gridExpansionToken = activeView === "planning-department" ? expandedBranchNodeIds.join(",") : "store-branch-cache";
   const gridSliceQueryKey = useMemo(
-    () => ["grid-slice", 1, activeView, selectedPlanningStoreId, selectedDepartmentLabel, expandedBranchNodeIds.join(","), expandAllBranches ? "all" : "branch"] as const,
-    [activeView, expandAllBranches, expandedBranchNodeIds, selectedDepartmentLabel, selectedPlanningStoreId],
+    () => ["grid-slice", 1, activeView, selectedPlanningStoreId, selectedDepartmentLabel, gridExpansionToken, expandAllBranches ? "all" : "branch"] as const,
+    [activeView, expandAllBranches, gridExpansionToken, selectedDepartmentLabel, selectedPlanningStoreId],
   );
   const planningStoreScopesQueryKey = ["planning-store-scopes"] as const;
   const undoRedoQueryKey = ["undo-redo-availability", 1] as const;
@@ -164,7 +167,7 @@ export default function App() {
     queryFn: () => getGridSlice({
       selectedStoreId: activeView === "planning-store" ? selectedPlanningStoreId : null,
       selectedDepartmentLabel: activeView === "planning-department" ? selectedDepartmentLabel : null,
-      expandedProductNodeIds: activeView === "planning-store" ? expandedBranchNodeIds : [],
+      expandedProductNodeIds: activeView === "planning-store" || activeView === "planning-department" ? expandedBranchNodeIds : [],
       expandAllBranches,
     }),
     enabled: activeView === "planning-store" ? selectedPlanningStoreId !== null : activeView === "planning-department",
@@ -246,10 +249,12 @@ export default function App() {
   }, [selectedPlanningStoreId, planningStoreScopeQuery.data]);
 
   useEffect(() => {
+    loadingBranchNodeIdsRef.current.clear();
     setExpandedBranchNodeIds([]);
   }, [selectedPlanningStoreId, selectedDepartmentLabel]);
 
   useEffect(() => {
+    loadingBranchNodeIdsRef.current.clear();
     setExpandedBranchNodeIds([]);
     setExpandAllBranches(false);
   }, [activeView, departmentLayout]);
@@ -271,6 +276,17 @@ export default function App() {
     let didChange = false;
     queryClient.setQueryData<GridSliceResponse | undefined>(gridSliceQueryKey, (current) => {
       const next = applyPlanningGridPatch(current, patch);
+      didChange = next !== current;
+      return next;
+    });
+
+    return didChange;
+  };
+
+  const mergeRowsIntoVisiblePlanningSlice = (rows: GridRow[]) => {
+    let didChange = false;
+    queryClient.setQueryData<GridSliceResponse | undefined>(gridSliceQueryKey, (current) => {
+      const next = mergeGridRowsIntoSlice(current, rows);
       didChange = next !== current;
       return next;
     });
@@ -1240,11 +1256,42 @@ export default function App() {
       return;
     }
 
-    setExpandedBranchNodeIds((current) => (
-      current.includes(row.bindingProductNodeId!)
-        ? current
-        : [...current, row.bindingProductNodeId!].sort((left, right) => left - right)
-    ));
+    const branchNodeId = row.bindingProductNodeId;
+
+    if (activeView === "planning-department") {
+      setExpandedBranchNodeIds((current) => (
+        current.includes(branchNodeId)
+          ? current
+          : [...current, branchNodeId].sort((left, right) => left - right)
+      ));
+      return;
+    }
+
+    const branchAlreadyLoaded = (storeViewData?.rows ?? []).some((candidate) =>
+      candidate.level === row.level + 1
+      && row.path.every((segment, index) => candidate.path[index] === segment));
+
+    if (branchAlreadyLoaded || expandedBranchNodeIds.includes(branchNodeId) || loadingBranchNodeIdsRef.current.has(branchNodeId) || !planningData) {
+      return;
+    }
+
+    loadingBranchNodeIdsRef.current.add(branchNodeId);
+    void getGridBranchRows(planningData.scenarioVersionId, branchNodeId)
+      .then((result) => {
+        mergeRowsIntoVisiblePlanningSlice(result.rows);
+        setExpandedBranchNodeIds((current) => (
+          current.includes(branchNodeId)
+            ? current
+            : [...current, branchNodeId].sort((left, right) => left - right)
+        ));
+        setLastError(null);
+      })
+      .catch((error: unknown) => {
+        setLastError(error instanceof Error ? error.message : "Unable to load branch details.");
+      })
+      .finally(() => {
+        loadingBranchNodeIdsRef.current.delete(branchNodeId);
+      });
   };
 
   const handleExpandAllBranches = () => {

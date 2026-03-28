@@ -30,6 +30,18 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
+    public async Task GetGridBranchRowsAsync_ReturnsOnlyDirectChildrenForTheRequestedBranch()
+    {
+        var branch = await _service.GetGridBranchRowsAsync(1, 2100, CancellationToken.None);
+
+        Assert.Equal(2100, branch.ParentProductNodeId);
+        Assert.NotEmpty(branch.Rows);
+        Assert.All(branch.Rows, row => Assert.Equal(2, row.Level));
+        Assert.Contains(branch.Rows, row => row.Path.SequenceEqual(new[] { "Store A", "Beverages", "Soft Drinks" }));
+        Assert.DoesNotContain(branch.Rows, row => row.Path.SequenceEqual(new[] { "Store A", "Beverages", "Soft Drinks", "Cola" }));
+    }
+
+    [Fact]
     public async Task ApplyEditsAsync_WhenGrossProfitPercentChanges_RecalculatesAspRevenueAndGrossProfit()
     {
         var gpPercentCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.GrossProfitPercent, 101, 2111, 202603), CancellationToken.None);

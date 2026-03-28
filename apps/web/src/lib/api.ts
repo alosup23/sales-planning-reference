@@ -11,6 +11,7 @@ import type {
   DeleteYearRequest,
   EditCellsRequest,
   GenerateNextYearRequest,
+  GridBranchResponse,
   GrowthFactorRequest,
   GridSliceResponse,
   HierarchyMappingResponse,
@@ -161,6 +162,15 @@ export async function getGridSlice(
 
     return sampleGridData;
   }
+}
+
+export async function getGridBranchRows(scenarioVersionId: number, parentProductNodeId: number): Promise<GridBranchResponse> {
+  const params = new URLSearchParams({
+    scenarioVersionId: String(scenarioVersionId),
+    parentProductNodeId: String(parentProductNodeId),
+  });
+
+  return await fetchJson<GridBranchResponse>(`${API_BASE_URL}/grid-branches?${params.toString()}`);
 }
 
 export async function getPlanningStoreScopes(): Promise<PlanningStoreScopeResponse> {

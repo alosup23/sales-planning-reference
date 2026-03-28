@@ -113,6 +113,9 @@ public sealed class S3BackedSqlitePlanningRepository : IPlanningRepository
     public Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, string? selectedDepartmentLabel, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, CancellationToken cancellationToken) =>
         WithReadAsync((ct) => _innerRepository.GetGridSliceAsync(scenarioVersionId, selectedStoreId, selectedDepartmentLabel, expandedProductNodeIds, expandAllBranches, ct), cancellationToken);
 
+    public Task<GridBranchResponse> GetGridBranchRowsAsync(long scenarioVersionId, long parentProductNodeId, CancellationToken cancellationToken) =>
+        WithReadAsync((ct) => _innerRepository.GetGridBranchRowsAsync(scenarioVersionId, parentProductNodeId, ct), cancellationToken);
+
     public Task<ProductNode> AddRowAsync(AddRowRequest request, CancellationToken cancellationToken) =>
         WithMutationAsync((ct) => _innerRepository.AddRowAsync(request, ct), cancellationToken);
 

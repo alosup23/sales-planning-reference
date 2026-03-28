@@ -1,4 +1,4 @@
-import type { GridCell, GridCellPatch, GridSliceResponse, PlanningGridPatch } from "./types";
+import type { GridCell, GridCellPatch, GridRow, GridSliceResponse, PlanningGridPatch } from "./types";
 
 export function applyPlanningGridPatch(
   current: GridSliceResponse | undefined,
@@ -71,4 +71,50 @@ export function applyPlanningGridPatch(
     ...current,
     rows: nextRows,
   };
+}
+
+export function mergeGridRowsIntoSlice(
+  current: GridSliceResponse | undefined,
+  incomingRows: GridRow[],
+): GridSliceResponse | undefined {
+  if (!current || incomingRows.length === 0) {
+    return current;
+  }
+
+  const mergedByKey = new Map<string, GridRow>();
+  current.rows.forEach((row) => {
+    mergedByKey.set(getGridRowKey(row), row);
+  });
+
+  let didChange = false;
+  incomingRows.forEach((row) => {
+    const key = getGridRowKey(row);
+    const previous = mergedByKey.get(key);
+    if (previous !== row) {
+      didChange = true;
+    }
+
+    mergedByKey.set(key, row);
+  });
+
+  if (!didChange) {
+    return current;
+  }
+
+  const rows = [...mergedByKey.values()].sort((left, right) => {
+    if (left.path.length !== right.path.length) {
+      return left.path.length - right.path.length;
+    }
+
+    return left.path.join(">").localeCompare(right.path.join(">"), undefined, { sensitivity: "base" });
+  });
+
+  return {
+    ...current,
+    rows,
+  };
+}
+
+function getGridRowKey(row: GridRow): string {
+  return `${row.storeId}:${row.productNodeId}`;
 }

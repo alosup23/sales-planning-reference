@@ -335,47 +335,7 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
             visibleNodeIds,
             cancellationToken);
 
-        var rows = visibleNodes
-            .OrderBy(node => node.Path.Length)
-            .ThenBy(node => string.Join(">", node.Path), StringComparer.OrdinalIgnoreCase)
-            .Select(node =>
-            {
-                var resolvedMetadata = ResolveNodeMetadata(node, stores, hierarchyMappings);
-                var cells = scenarioCells
-                    .Where(cell => cell.Coordinate.StoreId == node.StoreId && cell.Coordinate.ProductNodeId == node.ProductNodeId)
-                    .GroupBy(cell => cell.Coordinate.TimePeriodId)
-                    .ToDictionary(
-                        group => group.Key,
-                        group => new GridPeriodCellDto(
-                            group.ToDictionary(
-                                cell => cell.Coordinate.MeasureId,
-                                cell => new GridCellDto(
-                                    cell.EffectiveValue,
-                                    cell.GrowthFactor,
-                                    IsEffectivelyLocked(cell.Coordinate, scenarioCells, productNodes, timePeriods),
-                                    cell.CellKind == "calculated",
-                                    cell.OverrideValue is not null,
-                                    cell.RowVersion,
-                                    cell.CellKind))));
-
-                return new GridRowDto(
-                    node.StoreId,
-                    node.ProductNodeId,
-                    node.Label,
-                    node.Level,
-                    node.Path,
-                    node.IsLeaf,
-                    node.NodeKind,
-                    stores.TryGetValue(node.StoreId, out var storeMetadata) ? storeMetadata.StoreLabel : node.Path.FirstOrDefault() ?? $"Store {node.StoreId}",
-                    stores.TryGetValue(node.StoreId, out storeMetadata) ? storeMetadata.ClusterLabel : "Unassigned Cluster",
-                    stores.TryGetValue(node.StoreId, out storeMetadata) ? storeMetadata.RegionLabel : "Unassigned Region",
-                    resolvedMetadata.LifecycleState,
-                    resolvedMetadata.RampProfileCode,
-                    resolvedMetadata.EffectiveFromTimePeriodId,
-                    resolvedMetadata.EffectiveToTimePeriodId,
-                    cells);
-            })
-            .ToList();
+        var rows = BuildGridRows(visibleNodes, scenarioCells, productNodes, timePeriods, stores, hierarchyMappings);
 
         var periods = timePeriods.Values
             .OrderBy(node => node.SortOrder)
@@ -394,6 +354,48 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
             .ToList();
 
         return new GridSliceResponse(scenarioVersionId, measures, periods, rows);
+    }
+
+    public async Task<GridBranchResponse> GetGridBranchRowsAsync(long scenarioVersionId, long parentProductNodeId, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        var productNodes = await LoadProductNodesAsync(connection, null, cancellationToken);
+        if (!productNodes.TryGetValue(parentProductNodeId, out var parentNode))
+        {
+            throw new InvalidOperationException($"Branch {parentProductNodeId} was not found.");
+        }
+
+        var children = productNodes.Values
+            .Where(node => node.ParentProductNodeId == parentProductNodeId)
+            .OrderBy(node => node.Path.Length)
+            .ThenBy(node => string.Join(">", node.Path), StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (children.Count == 0)
+        {
+            return new GridBranchResponse(scenarioVersionId, parentProductNodeId, []);
+        }
+
+        var timePeriods = await LoadTimePeriodsAsync(connection, null, cancellationToken);
+        var stores = await LoadStoreMetadataAsync(connection, null, cancellationToken);
+        var hierarchyMappings = await LoadHierarchyMappingsAsync(connection, null, cancellationToken);
+
+        var relevantNodeIds = children
+            .Select(node => node.ProductNodeId)
+            .Concat(GetAncestorProductNodeIds(parentNode, productNodes))
+            .Distinct()
+            .ToArray();
+
+        var scenarioCells = await LoadScenarioCellsForNodesAsync(
+            connection,
+            null,
+            scenarioVersionId,
+            relevantNodeIds,
+            cancellationToken);
+
+        var rows = BuildGridRows(children, scenarioCells, productNodes, timePeriods, stores, hierarchyMappings);
+        return new GridBranchResponse(scenarioVersionId, parentProductNodeId, rows);
     }
 
     private static bool ShouldIncludeGridNode(
@@ -464,6 +466,67 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
         }
 
         return node.Path.ElementAtOrDefault(1) ?? node.Label;
+    }
+
+    private static IReadOnlyList<GridRowDto> BuildGridRows(
+        IReadOnlyList<ProductNode> nodes,
+        IReadOnlyCollection<PlanningCell> scenarioCells,
+        IReadOnlyDictionary<long, ProductNode> productNodes,
+        IReadOnlyDictionary<long, TimePeriodNode> timePeriods,
+        IReadOnlyDictionary<long, StoreNodeMetadata> stores,
+        IReadOnlyList<HierarchyDepartmentRecord> hierarchyMappings)
+    {
+        return nodes
+            .OrderBy(node => node.Path.Length)
+            .ThenBy(node => string.Join(">", node.Path), StringComparer.OrdinalIgnoreCase)
+            .Select(node =>
+            {
+                var resolvedMetadata = ResolveNodeMetadata(node, stores, hierarchyMappings);
+                var cells = scenarioCells
+                    .Where(cell => cell.Coordinate.StoreId == node.StoreId && cell.Coordinate.ProductNodeId == node.ProductNodeId)
+                    .GroupBy(cell => cell.Coordinate.TimePeriodId)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => new GridPeriodCellDto(
+                            group.ToDictionary(
+                                cell => cell.Coordinate.MeasureId,
+                                cell => new GridCellDto(
+                                    cell.EffectiveValue,
+                                    cell.GrowthFactor,
+                                    IsEffectivelyLocked(cell.Coordinate, scenarioCells, productNodes, timePeriods),
+                                    cell.CellKind == "calculated",
+                                    cell.OverrideValue is not null,
+                                    cell.RowVersion,
+                                    cell.CellKind))));
+
+                return new GridRowDto(
+                    node.StoreId,
+                    node.ProductNodeId,
+                    node.Label,
+                    node.Level,
+                    node.Path,
+                    node.IsLeaf,
+                    node.NodeKind,
+                    stores.TryGetValue(node.StoreId, out var storeMetadata) ? storeMetadata.StoreLabel : node.Path.FirstOrDefault() ?? $"Store {node.StoreId}",
+                    stores.TryGetValue(node.StoreId, out storeMetadata) ? storeMetadata.ClusterLabel : "Unassigned Cluster",
+                    stores.TryGetValue(node.StoreId, out storeMetadata) ? storeMetadata.RegionLabel : "Unassigned Region",
+                    resolvedMetadata.LifecycleState,
+                    resolvedMetadata.RampProfileCode,
+                    resolvedMetadata.EffectiveFromTimePeriodId,
+                    resolvedMetadata.EffectiveToTimePeriodId,
+                    cells);
+            })
+            .ToList();
+    }
+
+    private static IEnumerable<long> GetAncestorProductNodeIds(ProductNode node, IReadOnlyDictionary<long, ProductNode> productNodes)
+    {
+        var currentParentId = node.ParentProductNodeId;
+        while (currentParentId is long parentId && productNodes.TryGetValue(parentId, out var parentNode))
+        {
+            yield return parentId;
+            currentParentId = parentNode.ParentProductNodeId;
+        }
     }
 
     public async Task<ProductNode> AddRowAsync(AddRowRequest request, CancellationToken cancellationToken)

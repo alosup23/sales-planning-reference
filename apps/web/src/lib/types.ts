@@ -63,6 +63,12 @@ export type GridSliceResponse = {
   rows: GridRow[];
 };
 
+export type GridBranchResponse = {
+  scenarioVersionId: number;
+  parentProductNodeId: number;
+  rows: GridRow[];
+};
+
 export type GridCellPatch = {
   storeId: number;
   productNodeId: number;
