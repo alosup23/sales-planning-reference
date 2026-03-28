@@ -1,53 +1,60 @@
 # AWS Demo / UAT Deployment
 
-This deployment path moves the persisted planning store from the prior S3-backed SQLite model to `Amazon RDS for PostgreSQL` in `ap-southeast-5` while keeping the current planning engine and UI behavior intact.
+This document describes the current AWS UAT deployment status and the intended migration direction toward the target AWS architecture.
 
-## Runtime architecture
+The detailed target-state architecture now lives in:
+
+- [docs/aws-target-state-architecture.md](/Users/aloysius/Documents/New%20project/docs/aws-target-state-architecture.md)
+- [docs/uat-product-requirements.md](/Users/aloysius/Documents/New%20project/docs/uat-product-requirements.md)
+- [docs/master-data-file-formats.md](/Users/aloysius/Documents/New%20project/docs/master-data-file-formats.md)
+- [docs/phase-roadmap-and-backlog.md](/Users/aloysius/Documents/New%20project/docs/phase-roadmap-and-backlog.md)
+
+## Current live UAT runtime
 
 - Frontend: static Vite build uploaded to `sales-planning-demo-web-427304877733-ap-southeast-5-an`
-- API: `.NET 8` ASP.NET Core API hosted on AWS Lambda behind HTTP API
+- API: `.NET 8` ASP.NET Core API currently hosted on AWS Lambda behind HTTP API
 - Persistence:
-  - authoritative store: `Amazon RDS for PostgreSQL`
-  - runtime compatibility cache: ephemeral SQLite file in Lambda `/tmp`
+  - current working live mode: `S3-backed SQLite`
+  - in-progress migration target: `Amazon RDS for PostgreSQL`
 - Identity:
   - current UAT access gate: Microsoft Entra sign-in on the web app
   - next security milestone after PostgreSQL stabilization: restore clean backend API authorizer / audience validation
 
-## Free-tier guardrails used for this UAT path
+## UAT cost guardrails
 
-- Region: `ap-southeast-5`
-- Database template equivalent: `Free Tier`
-- Instance count: `1`
-- Instance class: `db.t3.micro`
-- Storage: `20 GB`
-- Storage autoscaling: `disabled` by omission of max allocated storage
-- Public access: `disabled`
+- Region target for future clean AWS posture: `ap-southeast-1` or another approved Southeast Asia region
+- During UAT keep:
+  - `1` database instance
+  - `1` interactive API service instance where possible
+  - storage autoscaling disabled where free-tier guardrails matter
+  - public DB exposure disabled
 
 Note:
 - Exact free-tier eligibility depends on the AWS account plan in effect at deployment time.
 - This runbook keeps the settings aligned with the account-safe guardrails requested for UAT, but it does not guarantee zero cost outside AWS free-tier eligibility.
 
-## Infrastructure created for PostgreSQL UAT
+## PostgreSQL migration assets already added
 
-- Default VPC: `vpc-0c29c4e611198869c`
-- Lambda security group: `sg-072a7438e07397e55`
-- RDS security group: `sg-02e38011d0de1a5d5`
-- Secrets Manager VPC endpoint security group: `sg-0b1c1688d6334f924`
-- DB subnet group: `sales-planning-demo-rds-subnets`
-- Secrets Manager interface endpoint: `vpce-00bd3a5f4489815a1`
-- RDS instance identifier: `sales-planning-demo-pg`
+- SQL migration scripts under:
+  - `apps/api/src/SalesPlanning.Api/Infrastructure/Postgres/Migrations`
+- PostgreSQL repository and connection resolver
+- PostgreSQL admin import / migration tool
 
-## PostgreSQL operating model
+## Target PostgreSQL operating model
 
 - PostgreSQL schema is created from SQL migration scripts in:
   - `apps/api/src/SalesPlanning.Api/Infrastructure/Postgres/Migrations`
-- Startup seeding is intentionally removed from the database bootstrap path.
+- Startup seeding must remain removed from the database bootstrap path.
 - `seed_runs` is used as the seed/version ledger for managed imports and cutover loads.
 - `planning_data_state` tracks the authoritative persisted data version.
 
 ## Admin tooling
 
-Use the PostgreSQL admin tool for migrations and one-time SQLite cutover imports:
+Use the PostgreSQL admin tool for:
+
+- schema migrations
+- one-time SQLite cutover imports
+- future controlled migration and admin operations
 
 - project:
   - `apps/api/tools/SalesPlanning.PostgresAdmin`
@@ -63,38 +70,33 @@ Commands:
 Recommended seed key for the live cutover:
 - `live-s3-sqlite-cutover-20260328`
 
-## Lambda deployment settings
+## Important current status
 
-The Lambda template now supports PostgreSQL mode with:
+At the time of this document update:
 
-- `PlanningStorageMode=postgres`
-- `PlanningPostgresSecretArn=<secret-arn>`
-- `PlanningDbPath=/tmp/sales-planning-demo/planning.db`
-- `LambdaSubnetIds=subnet-0829b0ba1df103016,subnet-0fa1876970692d5ce,subnet-0bccfffc49dfea45c`
-- `LambdaSecurityGroupIds=sg-072a7438e07397e55`
+- the working live app remains on `s3-sqlite`
+- the PostgreSQL migration code path has been added, but the full live cutover is not yet complete
+- the final target runtime for performance is no longer Lambda for interactive planning traffic
 
-The current template keeps:
-- `PlanningSecurityMode=disabled`
+Recommended target interactive runtime:
 
-That is deliberate for the PostgreSQL cutover wave. Backend API hardening should be restored after the database migration is stable.
+- `ECS Fargate` for the interactive API
+- `RDS PostgreSQL` for persistence
+- optional `ElastiCache Redis` for hot metadata and aggregate caches
 
-## Cutover sequence
+## Recommended cutover sequence
 
-1. Provision RDS, subnet group, VPC endpoint, and security groups.
-2. Wait until the RDS instance is `available`.
-3. Obtain the managed master secret ARN from the RDS instance.
-4. Update the Lambda execution role with:
-   - `AWSLambdaVPCAccessExecutionRole`
-   - `secretsmanager:GetSecretValue` for the PostgreSQL secret
-5. Migrate schema into PostgreSQL.
-6. Import the current authoritative SQLite dataset into PostgreSQL.
-7. Update Lambda environment to PostgreSQL mode and attach VPC config.
-8. Redeploy Lambda code.
-9. Smoke-test:
+1. Finalize PostgreSQL schema and native repository behavior.
+2. Run one-time import into PostgreSQL out of band.
+3. Validate row counts, aggregates, and workbook compatibility.
+4. Deploy interactive API on `ECS Fargate`.
+5. Point CloudFront or API routing to the new interactive API.
+6. Retest:
    - health
    - store scopes
    - scoped grid load
-   - store-first and department-first views
+   - branch expansion
+   - edit / splash / lock
    - store/product maintenance
    - import/export
 
@@ -110,4 +112,4 @@ Recommended UX strategy:
 - keep department scope incremental even on PostgreSQL
 - avoid forcing full department-across-all-stores expansion on startup
 
-The PostgreSQL cutover improves authoritative persistence and query flexibility, but it does not remove browser and Lambda payload limits.
+The PostgreSQL cutover improves authoritative persistence and query flexibility, but it does not remove browser payload limits. The target architecture therefore keeps the planning UI on an incremental, server-driven loading model.

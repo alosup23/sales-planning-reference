@@ -22,7 +22,19 @@ public sealed record StoreProfileDto(
     decimal? Rental,
     string LifecycleState,
     string? RampProfileCode,
-    bool IsActive);
+    bool IsActive,
+    string? StoreClusterRole = null,
+    decimal? StoreCapacitySqFt = null,
+    string? StoreFormatTier = null,
+    string? CatchmentType = null,
+    string? DemographicSegment = null,
+    string? ClimateZone = null,
+    bool FulfilmentEnabled = false,
+    bool OnlineFulfilmentNode = false,
+    string? StoreOpeningSeason = null,
+    string? StoreClosureDate = null,
+    string? RefurbishmentDate = null,
+    string? StorePriority = null);
 
 public sealed record StoreProfileResponse(
     IReadOnlyList<StoreProfileDto> Stores);
@@ -61,7 +73,19 @@ public sealed record UpsertStoreProfileRequest(
     decimal? Rental,
     string LifecycleState,
     string? RampProfileCode,
-    bool IsActive);
+    bool IsActive,
+    string? StoreClusterRole = null,
+    decimal? StoreCapacitySqFt = null,
+    string? StoreFormatTier = null,
+    string? CatchmentType = null,
+    string? DemographicSegment = null,
+    string? ClimateZone = null,
+    bool FulfilmentEnabled = false,
+    bool OnlineFulfilmentNode = false,
+    string? StoreOpeningSeason = null,
+    string? StoreClosureDate = null,
+    string? RefurbishmentDate = null,
+    string? StorePriority = null);
 
 public sealed record DeleteStoreProfileRequest(
     long ScenarioVersionId,

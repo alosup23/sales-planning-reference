@@ -245,6 +245,18 @@ export type StoreProfile = {
   lifecycleState: string;
   rampProfileCode?: string | null;
   isActive: boolean;
+  storeClusterRole?: string | null;
+  storeCapacitySqFt?: number | null;
+  storeFormatTier?: string | null;
+  catchmentType?: string | null;
+  demographicSegment?: string | null;
+  climateZone?: string | null;
+  fulfilmentEnabled?: boolean;
+  onlineFulfilmentNode?: boolean;
+  storeOpeningSeason?: string | null;
+  storeClosureDate?: string | null;
+  refurbishmentDate?: string | null;
+  storePriority?: string | null;
 };
 
 export type StoreProfileResponse = {
@@ -288,6 +300,18 @@ export type UpsertStoreProfileRequest = {
   lifecycleState: string;
   rampProfileCode?: string | null;
   isActive: boolean;
+  storeClusterRole?: string | null;
+  storeCapacitySqFt?: number | null;
+  storeFormatTier?: string | null;
+  catchmentType?: string | null;
+  demographicSegment?: string | null;
+  climateZone?: string | null;
+  fulfilmentEnabled?: boolean;
+  onlineFulfilmentNode?: boolean;
+  storeOpeningSeason?: string | null;
+  storeClosureDate?: string | null;
+  refurbishmentDate?: string | null;
+  storePriority?: string | null;
 };
 
 export type DeleteStoreProfileRequest = {
@@ -347,6 +371,34 @@ export type ProductProfile = {
   promo?: string | null;
   ramadhanPromo?: string | null;
   isActive: boolean;
+  supplier?: string | null;
+  lifecycleStage?: string | null;
+  ageStage?: string | null;
+  genderTarget?: string | null;
+  material?: string | null;
+  packSize?: string | null;
+  sizeRange?: string | null;
+  colourFamily?: string | null;
+  kviFlag?: boolean;
+  markdownEligible?: boolean;
+  markdownFloorPrice?: number | null;
+  minimumMarginPct?: number | null;
+  priceLadderGroup?: string | null;
+  goodBetterBestTier?: string | null;
+  seasonCode?: string | null;
+  eventCode?: string | null;
+  launchDate?: string | null;
+  endOfLifeDate?: string | null;
+  substituteGroup?: string | null;
+  companionGroup?: string | null;
+  replenishmentType?: string | null;
+  leadTimeDays?: number | null;
+  moq?: number | null;
+  casePack?: number | null;
+  startingInventory?: number | null;
+  projectedStockOnHand?: number | null;
+  sellThroughTargetPct?: number | null;
+  weeksOfCoverTarget?: number | null;
 };
 
 export type ProductProfileResponse = {
@@ -404,4 +456,68 @@ export type ProductHierarchySubclass = {
 export type ProductHierarchyResponse = {
   hierarchyRows: ProductHierarchyCatalog[];
   subclassRows: ProductHierarchySubclass[];
+};
+
+export type InventoryProfile = {
+  inventoryProfileId?: number | null;
+  storeCode: string;
+  productCode: string;
+  startingInventory: number;
+  inboundQty?: number | null;
+  reservedQty?: number | null;
+  projectedStockOnHand?: number | null;
+  safetyStock?: number | null;
+  weeksOfCoverTarget?: number | null;
+  sellThroughTargetPct?: number | null;
+  isActive: boolean;
+};
+
+export type PricingPolicy = {
+  pricingPolicyId?: number | null;
+  department?: string | null;
+  class?: string | null;
+  subclass?: string | null;
+  brand?: string | null;
+  priceLadderGroup?: string | null;
+  minPrice?: number | null;
+  maxPrice?: number | null;
+  markdownFloorPrice?: number | null;
+  minimumMarginPct?: number | null;
+  kviFlag: boolean;
+  markdownEligible: boolean;
+  isActive: boolean;
+};
+
+export type SeasonalityEventProfile = {
+  seasonalityEventProfileId?: number | null;
+  department?: string | null;
+  class?: string | null;
+  subclass?: string | null;
+  seasonCode?: string | null;
+  eventCode?: string | null;
+  month: number;
+  weight: number;
+  promoWindow?: string | null;
+  peakFlag: boolean;
+  isActive: boolean;
+};
+
+export type VendorSupplyProfile = {
+  vendorSupplyProfileId?: number | null;
+  supplier: string;
+  brand?: string | null;
+  leadTimeDays?: number | null;
+  moq?: number | null;
+  casePack?: number | null;
+  replenishmentType?: string | null;
+  paymentTerms?: string | null;
+  isActive: boolean;
+};
+
+export type UndoRedoAvailability = {
+  canUndo: boolean;
+  canRedo: boolean;
+  undoDepth: number;
+  redoDepth: number;
+  limit: number;
 };

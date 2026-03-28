@@ -1,17 +1,36 @@
 # Sales Budget & Planning Reference Skeleton
 
-This repository contains a greenfield reference implementation skeleton for an enterprise sales planning application with:
+This repository contains the evolving reference implementation for an enterprise sales planning application, plus the target-state requirements and AWS architecture needed to move from UAT into a production-ready platform.
+
+Current implementation stack:
 
 - `React + TypeScript + AG Grid Enterprise` on the web front end
 - `.NET 8 Web API` for planning actions, locking, import/export, and the splash engine
-- SQLite-backed sample persistence locally plus an AWS Lambda demo path with S3-backed persistence
-- Microsoft Entra single-tenant sign-in on the frontend plus JWT validation on the API
+- working UAT runtime currently on `S3-backed SQLite`
+- in-progress `PostgreSQL` migration path for the next architecture wave
+- Microsoft Entra single-tenant sign-in on the frontend plus API auth seams on the backend
 
 ## Workspace Layout
 
 - `apps/api`: .NET backend skeleton with lock-safe edit and splash services
 - `apps/web`: React frontend skeleton with an Excel-like planning grid shell
-- `docs`: implementation notes and extension guidance
+- `docs`: product requirements, architecture, and implementation notes
+
+## Primary Design Documents
+
+- UAT requirements and UX behavior:
+  - [docs/uat-product-requirements.md](/Users/aloysius/Documents/New%20project/docs/uat-product-requirements.md)
+- AWS target-state architecture, data model, API contracts, grid event model, and phased migration:
+  - [docs/aws-target-state-architecture.md](/Users/aloysius/Documents/New%20project/docs/aws-target-state-architecture.md)
+- master-data import and export formats:
+  - [docs/master-data-file-formats.md](/Users/aloysius/Documents/New%20project/docs/master-data-file-formats.md)
+- non-functional, calculation, AI, and backlog support documents:
+  - [docs/non-functional-requirements.md](/Users/aloysius/Documents/New%20project/docs/non-functional-requirements.md)
+  - [docs/calculation-and-reconciliation-spec.md](/Users/aloysius/Documents/New%20project/docs/calculation-and-reconciliation-spec.md)
+  - [docs/ai-phase-2-merchandising-architecture.md](/Users/aloysius/Documents/New%20project/docs/ai-phase-2-merchandising-architecture.md)
+  - [docs/phase-roadmap-and-backlog.md](/Users/aloysius/Documents/New%20project/docs/phase-roadmap-and-backlog.md)
+- current implementation notes:
+  - [docs/reference-implementation.md](/Users/aloysius/Documents/New%20project/docs/reference-implementation.md)
 
 ## What Is Included
 
@@ -33,7 +52,7 @@ This repository contains a greenfield reference implementation skeleton for an e
 
 - Real-time collaboration notifications
 - Approval workflows
-- Final production persistence architecture, WAF, and private-origin CDN controls
+- Final production runtime cutover to the target AWS architecture
 
 ## Local Setup
 
