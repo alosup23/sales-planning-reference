@@ -46,6 +46,7 @@ type PlanningGridProps = {
   onDeleteRow: (row: GridRow | null) => Promise<void>;
   onImportWorkbook: (file: File) => Promise<void>;
   onEnsureBranchLoaded: (row: GridRow) => void;
+  canRowExpand?: (row: GridRow) => boolean;
   onExpandAllBranches: () => void;
   onCollapseAllBranches: () => void;
   expandAllBranches: boolean;
@@ -102,6 +103,7 @@ export function PlanningGrid({
   onDeleteRow,
   onImportWorkbook,
   onEnsureBranchLoaded,
+  canRowExpand,
   onExpandAllBranches,
   onCollapseAllBranches,
   expandAllBranches,
@@ -121,6 +123,11 @@ export function PlanningGrid({
   const yearGroupStateRef = useRef<Map<string, boolean>>(new Map());
   const columnWidthStateRef = useRef<Map<string, number>>(new Map());
   const hasAppliedInitialExpansionRef = useRef(false);
+
+  useEffect(() => {
+    hasAppliedInitialExpansionRef.current = false;
+    expandedRowStateRef.current.clear();
+  }, [sheetLabel]);
 
   const yearPeriods = useMemo(
     () => data.periods.filter((period) => period.grain === "year"),
@@ -769,6 +776,7 @@ export function PlanningGrid({
             cellRenderer: HierarchyCellRenderer,
             cellRendererParams: {
               onEnsureBranchLoaded,
+              canRowExpand,
               onToggleExpandedState: (row: GridRowView, expanded: boolean) => {
                 expandedRowStateRef.current.set(getRowKey(row), expanded);
               },
@@ -948,12 +956,14 @@ type GrowthCellRendererProps = {
 
 type HierarchyCellRendererProps = ICellRendererParams<GridRowView> & {
   onEnsureBranchLoaded: (row: GridRowView) => void;
+  canRowExpand?: (row: GridRowView) => boolean;
   onToggleExpandedState: (row: GridRowView, expanded: boolean) => void;
 };
 
 function HierarchyCellRenderer(props: HierarchyCellRendererProps) {
-  const { data, node, onEnsureBranchLoaded, onToggleExpandedState, value } = props;
-  const canExpand = Boolean(node.group && data);
+  const { data, node, onEnsureBranchLoaded, canRowExpand, onToggleExpandedState, value } = props;
+  const isGrouped = Boolean(node.group && data);
+  const canExpand = Boolean(data && (isGrouped || canRowExpand?.(data) === true));
   const depth = Math.max(node.level ?? 0, 0);
 
   const handleToggle = (event: ReactMouseEvent<HTMLButtonElement>) => {
@@ -968,7 +978,9 @@ function HierarchyCellRenderer(props: HierarchyCellRendererProps) {
     if (nextExpanded) {
       onEnsureBranchLoaded(data);
     }
-    node.setExpanded(nextExpanded);
+    if (isGrouped) {
+      node.setExpanded(nextExpanded);
+    }
     onToggleExpandedState(data, nextExpanded);
     node.setSelected(true, true);
   };

@@ -147,6 +147,7 @@ export default function App() {
   const [vendorPageNumber, setVendorPageNumber] = useState(1);
   const [selectedPlanningStoreId, setSelectedPlanningStoreId] = useState<number | null>(null);
   const [selectedDepartmentLabel, setSelectedDepartmentLabel] = useState<string | null>(null);
+  const [departmentScopeOptions, setDepartmentScopeOptions] = useState<string[]>([]);
   const [expandedBranchNodeIds, setExpandedBranchNodeIds] = useState<number[]>([]);
   const [expandAllBranches, setExpandAllBranches] = useState(false);
   const loadingBranchNodeIdsRef = useRef<Set<number>>(new Set());
@@ -1037,15 +1038,28 @@ export default function App() {
   const activeGridData = activeView === "planning-department" ? departmentViewData : storeViewData;
 
   useEffect(() => {
-    if (activeView !== "planning-department" || selectedDepartmentLabel || !departmentViewData) {
+    if (!departmentViewData) {
       return;
     }
 
-    const firstDepartment = departmentViewData.rows.find((row) => row.structureRole === "department" && row.level === 1);
-    if (firstDepartment) {
-      setSelectedDepartmentLabel(firstDepartment.label);
+    const labels = departmentViewData.rows
+      .filter((row) => row.structureRole === "department" && row.level === 1)
+      .map((row) => row.label)
+      .filter((label, index, values) => values.indexOf(label) === index)
+      .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+
+    if (labels.length === 0) {
+      return;
     }
-  }, [activeView, departmentViewData, selectedDepartmentLabel]);
+
+    setDepartmentScopeOptions((current) => {
+      if (current.length === labels.length && current.every((value, index) => value === labels[index])) {
+        return current;
+      }
+
+      return labels;
+    });
+  }, [departmentViewData]);
 
   const planningReady = (activeView !== "planning-store" && activeView !== "planning-department")
     || (!!planningStoreScopeQuery.data
@@ -1240,15 +1254,10 @@ export default function App() {
       return;
     }
 
-    if (activeView === "planning-department" && row.structureRole === "department" && row.level === 1) {
-      if (row.label !== selectedDepartmentLabel) {
-        setSelectedDepartmentLabel(row.label);
-      }
-    }
   };
 
   const ensureBranchLoaded = (row: GridRow) => {
-    if (row.isLeaf || row.structureRole === "virtual" || !row.bindingProductNodeId) {
+    if (row.isLeaf || row.structureRole === "virtual") {
       return;
     }
 
@@ -1256,13 +1265,58 @@ export default function App() {
       return;
     }
 
-    const branchNodeId = row.bindingProductNodeId;
-
     const branchAlreadyLoaded = (activeGridData?.rows ?? []).some((candidate) =>
       candidate.level === row.level + 1
       && row.path.every((segment, index) => candidate.path[index] === segment));
 
-    if (branchAlreadyLoaded || expandedBranchNodeIds.includes(branchNodeId) || loadingBranchNodeIdsRef.current.has(branchNodeId) || !planningData) {
+    if (branchAlreadyLoaded || !planningData) {
+      return;
+    }
+
+    if (
+      activeView === "planning-department"
+      && departmentLayout === "department-class-store"
+      && row.structureRole === "department"
+      && row.level === 1
+      && !selectedDepartmentLabel
+    ) {
+      const branchNodeId = row.productNodeId;
+      const expansionNodeIds = row.splashRoots
+        ?.map((scopeRoot) => scopeRoot.productNodeId)
+        .filter((productNodeId): productNodeId is number => Number.isFinite(productNodeId) && productNodeId > 0) ?? [];
+
+      const nextExpandedNodeIds = [...new Set([...expandedBranchNodeIds, ...expansionNodeIds])].sort((left, right) => left - right);
+      if (nextExpandedNodeIds.length === expandedBranchNodeIds.length || loadingBranchNodeIdsRef.current.has(branchNodeId)) {
+        return;
+      }
+
+      loadingBranchNodeIdsRef.current.add(branchNodeId);
+      void getGridSlice({
+        selectedDepartmentLabel,
+        expandedProductNodeIds: nextExpandedNodeIds,
+        expandAllBranches,
+      })
+        .then((result) => {
+          queryClient.setQueryData<GridSliceResponse | undefined>(gridSliceQueryKey, result);
+          setExpandedBranchNodeIds(nextExpandedNodeIds);
+          setLastError(null);
+        })
+        .catch((error: unknown) => {
+          setLastError(error instanceof Error ? error.message : "Unable to load branch details.");
+        })
+        .finally(() => {
+          loadingBranchNodeIdsRef.current.delete(branchNodeId);
+        });
+      return;
+    }
+
+    if (!row.bindingProductNodeId) {
+      return;
+    }
+
+    const branchNodeId = row.bindingProductNodeId;
+
+    if (expandedBranchNodeIds.includes(branchNodeId) || loadingBranchNodeIdsRef.current.has(branchNodeId)) {
       return;
     }
 
@@ -1292,6 +1346,24 @@ export default function App() {
   const handleCollapseAllBranches = () => {
     setExpandAllBranches(false);
     setExpandedBranchNodeIds([]);
+  };
+
+  const canExpandPlanningRow = (row: GridRow) => {
+    if (row.isLeaf) {
+      return false;
+    }
+
+    if (
+      activeView === "planning-department"
+      && departmentLayout === "department-class-store"
+      && row.structureRole === "department"
+      && row.level === 1
+      && !selectedDepartmentLabel
+    ) {
+      return true;
+    }
+
+    return Boolean(row.bindingProductNodeId);
   };
 
   const handleDeleteRow = async (row: GridRow | null) => {
@@ -1708,13 +1780,12 @@ export default function App() {
           <label className="year-picker">
             <span>Department Scope</span>
             <select value={selectedDepartmentLabel ?? ""} onChange={(event) => setSelectedDepartmentLabel(event.target.value || null)}>
-              {(departmentViewData?.rows ?? [])
-                .filter((row) => row.structureRole === "department" && row.level === 1)
-                .map((row) => (
-                  <option key={row.label} value={row.label}>
-                    {row.label}
-                  </option>
-                ))}
+              <option value="">All Departments</option>
+              {departmentScopeOptions.map((label) => (
+                <option key={label} value={label}>
+                  {label}
+                </option>
+              ))}
             </select>
           </label>
         ) : null}
@@ -1910,6 +1981,7 @@ export default function App() {
               onDeleteRow={handleDeleteRow}
               onImportWorkbook={handleImportWorkbook}
               onEnsureBranchLoaded={ensureBranchLoaded}
+              canRowExpand={canExpandPlanningRow}
               onExpandAllBranches={handleExpandAllBranches}
               onCollapseAllBranches={handleCollapseAllBranches}
               expandAllBranches={expandAllBranches}

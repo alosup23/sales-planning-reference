@@ -45,6 +45,13 @@ async function toggleRowCaret(page: import("@playwright/test").Page, rowId: stri
   await toggle.click();
 }
 
+async function toggleRowCaretByLabel(page: import("@playwright/test").Page, label: string) {
+  const row = page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: label }).first();
+  const toggle = row.locator(".hierarchy-toggle").first();
+  await expect(toggle).toBeVisible();
+  await toggle.click();
+}
+
 async function expectToggleLabel(page: import("@playwright/test").Page, rowId: string, label: string) {
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${rowId}"] .hierarchy-toggle`).first()).toHaveAttribute("aria-label", label);
 }
@@ -301,12 +308,28 @@ test("renders the correct department hierarchy order in both layouts and applies
   await selectWorkspace(page, "planning-department");
   await expectReady(page);
 
+  await expect(page.locator(".view-menu-bar .year-picker").filter({ hasText: "Department Scope" }).locator("select")).toHaveValue("");
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"] .ag-cell`).first()).toHaveCSS("background-color", "rgb(221, 221, 221)");
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"]`)).toHaveClass(/row-band-level-0/);
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Beverages" }).first()).toBeVisible();
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store A" })).toHaveCount(0);
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Soft Drinks" })).toHaveCount(0);
+
+  await toggleRowCaretByLabel(page, "Beverages");
+  await expectReady(page);
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store A" }).first()).toBeVisible();
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Soft Drinks" })).toHaveCount(0);
 
   await selectDepartmentLayout(page, "department-class-store");
   await expectReady(page);
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${departmentRootRowId}"]`)).toBeVisible();
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store A" })).toHaveCount(0);
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Soft Drinks" })).toHaveCount(0);
+
+  await toggleRowCaretByLabel(page, "Beverages");
+  await expectReady(page);
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Soft Drinks" }).first()).toBeVisible();
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: /^Store A$/ })).toHaveCount(0);
 });
 
 test("editing a visible Sales Revenue month persists the updated value", async ({ page }) => {
