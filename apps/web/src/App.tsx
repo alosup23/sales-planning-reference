@@ -150,7 +150,7 @@ export default function App() {
   const [expandedBranchNodeIds, setExpandedBranchNodeIds] = useState<number[]>([]);
   const [expandAllBranches, setExpandAllBranches] = useState(false);
   const loadingBranchNodeIdsRef = useRef<Set<number>>(new Set());
-  const gridExpansionToken = activeView === "planning-department" ? expandedBranchNodeIds.join(",") : "store-branch-cache";
+  const gridExpansionToken = "branch-cache";
   const gridSliceQueryKey = useMemo(
     () => ["grid-slice", 1, activeView, selectedPlanningStoreId, selectedDepartmentLabel, gridExpansionToken, expandAllBranches ? "all" : "branch"] as const,
     [activeView, expandAllBranches, gridExpansionToken, selectedDepartmentLabel, selectedPlanningStoreId],
@@ -1258,16 +1258,7 @@ export default function App() {
 
     const branchNodeId = row.bindingProductNodeId;
 
-    if (activeView === "planning-department") {
-      setExpandedBranchNodeIds((current) => (
-        current.includes(branchNodeId)
-          ? current
-          : [...current, branchNodeId].sort((left, right) => left - right)
-      ));
-      return;
-    }
-
-    const branchAlreadyLoaded = (storeViewData?.rows ?? []).some((candidate) =>
+    const branchAlreadyLoaded = (activeGridData?.rows ?? []).some((candidate) =>
       candidate.level === row.level + 1
       && row.path.every((segment, index) => candidate.path[index] === segment));
 
