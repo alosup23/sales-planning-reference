@@ -5,7 +5,7 @@
   "Parameters": {
     "PlanningStorageMode": {
       "Type": "String",
-      "Default": "postgres"
+      "Default": "s3-sqlite"
     },
     "PlanningStorageS3Bucket": {
       "Type": "String",
@@ -21,15 +21,15 @@
     },
     "PlanningApplyMigrationsOnStartup": {
       "Type": "String",
-      "Default": "true"
+      "Default": "false"
     },
     "PlanningBootstrapS3Bucket": {
       "Type": "String",
-      "Default": "sales-planning-demo-files-427304877733-ap-southeast-5-an"
+      "Default": ""
     },
     "PlanningBootstrapS3ObjectKey": {
       "Type": "String",
-      "Default": "planning/demo-planning.db"
+      "Default": ""
     },
     "PlanningBootstrapS3Region": {
       "Type": "String",
@@ -37,7 +37,7 @@
     },
     "PlanningBootstrapSeedKey": {
       "Type": "String",
-      "Default": "live-s3-sqlite-cutover-20260328"
+      "Default": ""
     },
     "PlanningDbPath": {
       "Type": "String",

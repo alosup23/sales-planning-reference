@@ -1,14 +1,14 @@
 {
   "Information": [
     "Default values for deploying the Sales Planning demo API into AWS Lambda in ap-southeast-5.",
-    "Update template parameters when the PostgreSQL secret ARN, subnet IDs, or CORS origins change."
+    "These defaults are kept aligned to the current working UAT runtime while the PostgreSQL/Fargate cutover remains in progress."
   ],
   "profile": "",
   "region": "ap-southeast-5",
   "configuration": "Release",
   "framework": "net8.0",
   "template": "serverless.template",
-  "template-parameters": "PlanningStorageMode=postgres;PlanningStorageS3Bucket=sales-planning-demo-files-427304877733-ap-southeast-5-an;PlanningStorageS3ObjectKey=planning/demo-planning.db;PlanningPostgresSecretArn=arn:aws:secretsmanager:ap-southeast-5:427304877733:secret:rds!db-c3a5f4d8-c142-45cf-92ad-074a40299442-wKsUmu;PlanningApplyMigrationsOnStartup=true;PlanningBootstrapS3Bucket=sales-planning-demo-files-427304877733-ap-southeast-5-an;PlanningBootstrapS3ObjectKey=planning/demo-planning.db;PlanningBootstrapS3Region=ap-southeast-5;PlanningBootstrapSeedKey=live-s3-sqlite-cutover-20260328;PlanningDbPath=/tmp/sales-planning-demo/planning.db;LambdaSubnetIds=subnet-0829b0ba1df103016,subnet-0fa1876970692d5ce,subnet-0bccfffc49dfea45c;LambdaSecurityGroupIds=sg-072a7438e07397e55;PlanningSecurityMode=disabled;CorsAllowedOrigins=https://d22xc0mfhkv9bk.cloudfront.net;EntraTenantId=76ad236c-6db1-4d3d-9901-996450816c3c;EntraClientId=557f0c81-0531-4616-b62e-0b69eb7cb86f;EntraApiAudience=api://557f0c81-0531-4616-b62e-0b69eb7cb86f",
+  "template-parameters": "PlanningStorageMode=s3-sqlite;PlanningStorageS3Bucket=sales-planning-demo-files-427304877733-ap-southeast-5-an;PlanningStorageS3ObjectKey=planning/demo-planning.db;PlanningPostgresSecretArn=;PlanningApplyMigrationsOnStartup=false;PlanningBootstrapS3Bucket=;PlanningBootstrapS3ObjectKey=;PlanningBootstrapS3Region=ap-southeast-5;PlanningBootstrapSeedKey=;PlanningDbPath=/tmp/sales-planning-demo/planning.db;LambdaSubnetIds=subnet-0829b0ba1df103016,subnet-0fa1876970692d5ce,subnet-0bccfffc49dfea45c;LambdaSecurityGroupIds=sg-072a7438e07397e55;PlanningSecurityMode=disabled;CorsAllowedOrigins=https://d22xc0mfhkv9bk.cloudfront.net;EntraTenantId=76ad236c-6db1-4d3d-9901-996450816c3c;EntraClientId=557f0c81-0531-4616-b62e-0b69eb7cb86f;EntraApiAudience=api://557f0c81-0531-4616-b62e-0b69eb7cb86f",
   "s3-bucket": "sales-planning-demo-files-427304877733-ap-southeast-5-an",
   "s3-prefix": "lambda-artifacts",
   "stack-name": "sales-planning-demo-api",
