@@ -617,6 +617,7 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
                     throw new InvalidOperationException($"Unsupported row level '{request.Level}'.");
             }
 
+            await ClearPlanningCommandHistoryAsync(connection, transaction, request.ScenarioVersionId, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return node;
         }
@@ -1171,6 +1172,7 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
             }
 
             await RebuildHierarchyMappingsAsync(connection, transaction, cancellationToken);
+            await ClearPlanningCommandHistoryAsync(connection, transaction, scenarioVersionId, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return deletedCells;
         }
@@ -1234,6 +1236,7 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
                 await deleteTimeCommand.ExecuteNonQueryAsync(cancellationToken);
             }
 
+            await ClearPlanningCommandHistoryAsync(connection, transaction, scenarioVersionId, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return deletedCells;
         }
@@ -1301,6 +1304,8 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
             await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
             foreach (var tableName in new[]
                      {
+                         "planning_command_cell_deltas",
+                         "planning_command_batches",
                          "audit_deltas",
                          "audits",
                          "planning_cells",
@@ -1413,6 +1418,49 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
                         old_value real not null,
                         new_value real not null,
                         was_locked integer not null,
+                        change_kind text not null
+                    );
+                    create table if not exists planning_command_batches (
+                        command_batch_id integer primary key,
+                        scenario_version_id integer not null,
+                        user_id text not null,
+                        command_kind text not null,
+                        command_scope_json text null,
+                        is_undone integer not null default 0,
+                        superseded_by_batch_id integer null,
+                        created_at text not null,
+                        undone_at text null
+                    );
+                    create table if not exists planning_command_cell_deltas (
+                        command_delta_id integer primary key autoincrement,
+                        command_batch_id integer not null,
+                        scenario_version_id integer not null,
+                        measure_id integer not null,
+                        store_id integer not null,
+                        product_node_id integer not null,
+                        time_period_id integer not null,
+                        old_input_value real null,
+                        new_input_value real null,
+                        old_override_value real null,
+                        new_override_value real null,
+                        old_is_system_generated_override integer not null default 0,
+                        new_is_system_generated_override integer not null default 0,
+                        old_derived_value real not null,
+                        new_derived_value real not null,
+                        old_effective_value real not null,
+                        new_effective_value real not null,
+                        old_growth_factor real not null default 1.0,
+                        new_growth_factor real not null default 1.0,
+                        old_is_locked integer not null default 0,
+                        new_is_locked integer not null default 0,
+                        old_lock_reason text null,
+                        new_lock_reason text null,
+                        old_locked_by text null,
+                        new_locked_by text null,
+                        old_row_version integer not null,
+                        new_row_version integer not null,
+                        old_cell_kind text not null,
+                        new_cell_kind text not null,
                         change_kind text not null
                     );
                     create table if not exists hierarchy_categories (
@@ -1573,6 +1621,9 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
                     );
                     create index if not exists idx_planning_cells_scenario_measure on planning_cells (scenario_version_id, measure_id);
                     create index if not exists idx_audit_deltas_lookup on audit_deltas (scenario_version_id, measure_id, store_id, product_node_id);
+                    create index if not exists idx_command_batches_lookup on planning_command_batches (scenario_version_id, user_id, command_batch_id desc);
+                    create index if not exists idx_command_redo_lookup on planning_command_batches (scenario_version_id, user_id, is_undone, undone_at desc);
+                    create index if not exists idx_command_deltas_lookup on planning_command_cell_deltas (command_batch_id, scenario_version_id, measure_id, store_id, product_node_id, time_period_id);
                     """;
                 await command.ExecuteNonQueryAsync(cancellationToken);
             }
@@ -3350,6 +3401,8 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
             .ThenBy(row => row.Class, StringComparer.OrdinalIgnoreCase)
             .ThenBy(row => row.Subclass, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        await ClearPlanningCommandHistoryAsync(connection, transaction, scenarioVersionId, cancellationToken);
 
         foreach (var tableName in new[] { "planning_cells", "product_nodes", "hierarchy_subclasses_v2", "hierarchy_classes_v2", "hierarchy_departments_v2", "hierarchy_subcategories", "hierarchy_categories", "time_periods" })
         {

@@ -134,6 +134,24 @@ public sealed class PlanningController : ControllerBase
         return _planningService.SaveScenarioAsync(request, GetRequiredUserId(), cancellationToken);
     }
 
+    [HttpGet("undo-redo/availability")]
+    public Task<UndoRedoAvailabilityDto> GetUndoRedoAvailability([FromQuery] long scenarioVersionId = 1, CancellationToken cancellationToken = default)
+    {
+        return _planningService.GetUndoRedoAvailabilityAsync(scenarioVersionId, GetRequiredUserId(), cancellationToken);
+    }
+
+    [HttpPost("actions/undo")]
+    public Task<UndoPlanningActionResponse> Undo([FromQuery] long scenarioVersionId = 1, CancellationToken cancellationToken = default)
+    {
+        return _planningService.UndoAsync(scenarioVersionId, GetRequiredUserId(), cancellationToken);
+    }
+
+    [HttpPost("actions/redo")]
+    public Task<RedoPlanningActionResponse> Redo([FromQuery] long scenarioVersionId = 1, CancellationToken cancellationToken = default)
+    {
+        return _planningService.RedoAsync(scenarioVersionId, GetRequiredUserId(), cancellationToken);
+    }
+
     [HttpGet("planning-store-scopes")]
     public Task<PlanningStoreScopeResponse> GetPlanningStoreScopes(CancellationToken cancellationToken)
     {

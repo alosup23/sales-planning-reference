@@ -613,3 +613,13 @@ export type UndoRedoAvailability = {
   redoDepth: number;
   limit: number;
 };
+
+export type UndoPlanningActionResponse = {
+  status: string;
+  availability: UndoRedoAvailability;
+};
+
+export type RedoPlanningActionResponse = {
+  status: string;
+  availability: UndoRedoAvailability;
+};

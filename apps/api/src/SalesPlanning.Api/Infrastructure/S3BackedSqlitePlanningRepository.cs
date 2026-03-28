@@ -95,6 +95,21 @@ public sealed class S3BackedSqlitePlanningRepository : IPlanningRepository
     public Task<IReadOnlyList<PlanningActionAudit>> GetAuditAsync(long scenarioVersionId, long measureId, long storeId, long productNodeId, CancellationToken cancellationToken) =>
         WithReadAsync((ct) => _innerRepository.GetAuditAsync(scenarioVersionId, measureId, storeId, productNodeId, ct), cancellationToken);
 
+    public Task<long> GetNextCommandBatchIdAsync(CancellationToken cancellationToken) =>
+        WithReadAsync(_innerRepository.GetNextCommandBatchIdAsync, cancellationToken);
+
+    public Task AppendCommandBatchAsync(PlanningCommandBatch batch, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.AppendCommandBatchAsync(batch, ct), cancellationToken);
+
+    public Task<PlanningUndoRedoAvailability> GetUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
+        WithReadAsync((ct) => _innerRepository.GetUndoRedoAvailabilityAsync(scenarioVersionId, userId, limit, ct), cancellationToken);
+
+    public Task<PlanningCommandBatch?> UndoLatestCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.UndoLatestCommandAsync(scenarioVersionId, userId, limit, ct), cancellationToken);
+
+    public Task<PlanningCommandBatch?> RedoLatestCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.RedoLatestCommandAsync(scenarioVersionId, userId, limit, ct), cancellationToken);
+
     public Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, string? selectedDepartmentLabel, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, CancellationToken cancellationToken) =>
         WithReadAsync((ct) => _innerRepository.GetGridSliceAsync(scenarioVersionId, selectedStoreId, selectedDepartmentLabel, expandedProductNodeIds, expandAllBranches, ct), cancellationToken);
 

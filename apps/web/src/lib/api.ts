@@ -26,9 +26,12 @@ import type {
   ProductProfileResponse,
   SaveScenarioRequest,
   SaveScenarioResponse,
+  UndoPlanningActionResponse,
+  UndoRedoAvailability,
   SeasonalityEventProfile,
   SeasonalityEventProfileImportResponse,
   SeasonalityEventProfileResponse,
+  RedoPlanningActionResponse,
   StoreProfile,
   StoreProfileImportResponse,
   StoreProfileOptionsResponse,
@@ -262,6 +265,22 @@ export async function postSave(request: SaveScenarioRequest): Promise<SaveScenar
   return await fetchJson<SaveScenarioResponse>(`${API_BASE_URL}/save`, {
     method: "POST",
     body: JSON.stringify(request),
+  });
+}
+
+export async function getUndoRedoAvailability(scenarioVersionId = 1): Promise<UndoRedoAvailability> {
+  return await fetchJson<UndoRedoAvailability>(`${API_BASE_URL}/undo-redo/availability?scenarioVersionId=${scenarioVersionId}`);
+}
+
+export async function postUndo(scenarioVersionId = 1): Promise<UndoPlanningActionResponse> {
+  return await fetchJson<UndoPlanningActionResponse>(`${API_BASE_URL}/actions/undo?scenarioVersionId=${scenarioVersionId}`, {
+    method: "POST",
+  });
+}
+
+export async function postRedo(scenarioVersionId = 1): Promise<RedoPlanningActionResponse> {
+  return await fetchJson<RedoPlanningActionResponse>(`${API_BASE_URL}/actions/redo?scenarioVersionId=${scenarioVersionId}`, {
+    method: "POST",
   });
 }
 

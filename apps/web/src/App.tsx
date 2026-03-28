@@ -14,6 +14,7 @@ import {
   getHierarchyMappings,
   getInventoryProfiles,
   getPlanningStoreScopes,
+  getUndoRedoAvailability,
   getPlanningInsights,
   getProductHierarchy,
   getProductProfileOptions,
@@ -53,6 +54,8 @@ import {
   postSeasonalityEventProfile,
   postSeasonalityEventProfileImport,
   postSplash,
+  postUndo,
+  postRedo,
   postInventoryProfile,
   postInventoryProfileImport,
   postPricingPolicy,
@@ -90,6 +93,7 @@ import type {
   ProductProfile,
   SeasonalityEventProfile,
   StoreProfile,
+  UndoRedoAvailability,
   UpsertInventoryProfileRequest,
   UpsertPricingPolicyRequest,
   UpsertProductProfileRequest,
@@ -156,10 +160,16 @@ export default function App() {
       expandAllBranches,
     }),
     enabled: activeView === "planning-store" ? selectedPlanningStoreId !== null : activeView === "planning-department",
+    placeholderData: (previousData) => previousData,
   });
   const planningStoreScopeQuery = useQuery({
     queryKey: ["planning-store-scopes"],
     queryFn: getPlanningStoreScopes,
+    enabled: activeView === "planning-store" || activeView === "planning-department",
+  });
+  const undoRedoAvailabilityQuery = useQuery({
+    queryKey: ["undo-redo-availability", 1],
+    queryFn: () => getUndoRedoAvailability(1),
     enabled: activeView === "planning-store" || activeView === "planning-department",
   });
   const hierarchyQuery = useQuery({
@@ -249,6 +259,7 @@ export default function App() {
     await Promise.all([
       queryClient.refetchQueries({ queryKey: ["grid-slice", 1], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["planning-store-scopes"], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["undo-redo-availability", 1], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["hierarchy-mappings"], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["store-profiles"], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["store-profile-options"], type: "active" }),
@@ -354,6 +365,26 @@ export default function App() {
 
   const growthFactorMutation = useMutation({
     mutationFn: postGrowthFactor,
+    onSuccess: async () => {
+      setLastError(null);
+      setHasUnsavedChanges(true);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const undoMutation = useMutation({
+    mutationFn: () => postUndo(1),
+    onSuccess: async () => {
+      setLastError(null);
+      setHasUnsavedChanges(true);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const redoMutation = useMutation({
+    mutationFn: () => postRedo(1),
     onSuccess: async () => {
       setLastError(null);
       setHasUnsavedChanges(true);
@@ -944,6 +975,7 @@ export default function App() {
   const planningData = gridQuery.data ?? null;
   const yearPeriods = planningData?.periods.filter((period) => period.grain === "year") ?? [];
   const measureLookup = new Map((planningData?.measures ?? []).map((measure) => [measure.measureId, measure]));
+  const undoRedoAvailability: UndoRedoAvailability | null = undoRedoAvailabilityQuery.data ?? null;
 
   const handleCellEdit = async (row: GridRow, timePeriodId: number, measureId: number, newValue: number) => {
     if (!planningData) {
@@ -1241,6 +1273,14 @@ export default function App() {
       comment: "Apply growth factor",
       scopeRoots: isLeafMonth ? undefined : scopeRoots,
     });
+  };
+
+  const handleUndo = async () => {
+    await undoMutation.mutateAsync();
+  };
+
+  const handleRedo = async () => {
+    await redoMutation.mutateAsync();
   };
 
   const handleAddHierarchyDepartment = async () => {
@@ -1741,6 +1781,9 @@ export default function App() {
               onApplyGrowthFactor={handleApplyGrowthFactor}
               onToggleLock={handleToggleLock}
               onSplashYear={handleSplashYear}
+              undoRedoAvailability={undoRedoAvailability}
+              onUndo={handleUndo}
+              onRedo={handleRedo}
               onAddRow={handleAddRow}
               onDeleteRow={handleDeleteRow}
               onImportWorkbook={handleImportWorkbook}

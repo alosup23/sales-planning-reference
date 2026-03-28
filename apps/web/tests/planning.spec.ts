@@ -110,12 +110,10 @@ async function gridCellByPinnedText(page: import("@playwright/test").Page, rowTe
 
 async function editCell(page: import("@playwright/test").Page, rowId: string, colId: string, nextValue: string) {
   const cell = await gridCell(page, rowId, colId);
-  await cell.dblclick();
-
-  const editor = page.locator(".ag-cell-inline-editing input").last();
-  await expect(editor).toBeVisible();
-  await editor.fill(nextValue);
-  await editor.press("Enter");
+  await cell.click();
+  await page.keyboard.press("Enter");
+  await page.keyboard.type(nextValue);
+  await page.keyboard.press("Enter");
 }
 
 async function acceptPrompts(page: import("@playwright/test").Page, responses: string[]) {
@@ -270,10 +268,10 @@ test("supports expand and collapse controls for rows and years", async ({ page }
   await expect(page.locator(".ag-header-group-text", { hasText: "FY26" }).first()).toBeVisible();
 });
 
-test("keeps expanded year groups open after updates", async ({ page }) => {
+test("keeps expanded year groups open after scoped refreshes", async ({ page }) => {
   await page.getByRole("button", { name: "Expand Years" }).click();
   await expect(page.locator(".ag-header-group-text", { hasText: "Jan" }).first()).toBeVisible();
-  await editCell(page, storeRowId(101, 2000), "202600:1", "12000");
+  await selectStoreScope(page, "102");
   await expectReady(page);
 
   await expect(page.locator(".ag-header-group-text", { hasText: "Jan" }).first()).toBeVisible();

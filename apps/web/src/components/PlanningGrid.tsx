@@ -21,7 +21,7 @@ import {
 } from "ag-grid-community";
 import "ag-grid-enterprise";
 import { AgGridReact } from "ag-grid-react";
-import type { AddRowResponse, GridMeasure, GridPeriod, GridRow, GridSliceResponse } from "../lib/types";
+import type { AddRowResponse, GridMeasure, GridPeriod, GridRow, GridSliceResponse, UndoRedoAvailability } from "../lib/types";
 import "ag-grid-community/styles/ag-grid.css";
 import "ag-grid-community/styles/ag-theme-quartz.css";
 
@@ -39,6 +39,9 @@ type PlanningGridProps = {
   onApplyGrowthFactor: (row: GridRow, timePeriodId: number, measureId: number, growthFactor: number, currentValue: number) => Promise<void>;
   onToggleLock: (row: GridRow, timePeriodId: number, measureId: number, locked: boolean) => Promise<void>;
   onSplashYear: (row: GridRow, yearTimePeriodId: number, measureId: number) => Promise<void>;
+  undoRedoAvailability?: UndoRedoAvailability | null;
+  onUndo: () => Promise<void>;
+  onRedo: () => Promise<void>;
   onAddRow: (level: "store" | "department" | "class" | "subclass", parentRow: GridRow | null) => Promise<void>;
   onDeleteRow: (row: GridRow | null) => Promise<void>;
   onImportWorkbook: (file: File) => Promise<void>;
@@ -92,6 +95,9 @@ export function PlanningGrid({
   onApplyGrowthFactor,
   onToggleLock,
   onSplashYear,
+  undoRedoAvailability,
+  onUndo,
+  onRedo,
   onAddRow,
   onDeleteRow,
   onImportWorkbook,
@@ -293,19 +299,26 @@ export function PlanningGrid({
       return;
     }
 
-    const widthState = [...columnWidthStateRef.current.entries()].map(([colId, width]) => ({ colId, width }));
-    if (widthState.length > 0) {
-      api.applyColumnState({ state: widthState, applyOrder: false });
-    }
+    const applyColumnPresentationState = () => {
+      const widthState = [...columnWidthStateRef.current.entries()].map(([colId, width]) => ({ colId, width }));
+      if (widthState.length > 0) {
+        api.applyColumnState({ state: widthState, applyOrder: false });
+      }
 
-    yearPeriods.forEach((year) => {
-      const groupId = `year-${year.timePeriodId}`;
-      const rememberedState = yearGroupStateRef.current.get(groupId);
-      const nextOpened = rememberedState ?? false;
-      yearGroupStateRef.current.set(groupId, nextOpened);
-      api.setColumnGroupOpened(groupId, nextOpened);
-    });
-  }, [columnDefs, yearPeriods]);
+      yearPeriods.forEach((year) => {
+        const groupId = `year-${year.timePeriodId}`;
+        const rememberedState = yearGroupStateRef.current.get(groupId);
+        const nextOpened = rememberedState ?? false;
+        yearGroupStateRef.current.set(groupId, nextOpened);
+        api.setColumnGroupOpened(groupId, nextOpened);
+      });
+    };
+
+    applyColumnPresentationState();
+    const animationFrameId = window.requestAnimationFrame(() => applyColumnPresentationState());
+
+    return () => window.cancelAnimationFrame(animationFrameId);
+  }, [columnDefs, rowData, yearPeriods]);
 
   useEffect(() => {
     if (!pendingRevealRow) {
@@ -415,6 +428,11 @@ export function PlanningGrid({
   };
 
   const handleColumnGroupOpened = (event: ColumnGroupOpenedEvent<GridRowView>) => {
+    const eventSource = (event as ColumnGroupOpenedEvent<GridRowView> & { source?: string }).source;
+    if (eventSource && eventSource !== "uiColumnExpanded") {
+      return;
+    }
+
     const providedGroup = event.columnGroups?.[0];
     const groupId = providedGroup?.getGroupId?.();
     if (!groupId) {
@@ -595,6 +613,43 @@ export function PlanningGrid({
     onSelectionContextChange(null);
   }, [data.periods, onSelectionContextChange, selectedCell, selectedCellRow]);
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isUndoShortcut = (event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z";
+      const isRedoShortcut = ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "z")
+        || (event.ctrlKey && event.key.toLowerCase() === "y");
+
+      if (!isUndoShortcut && !isRedoShortcut) {
+        return;
+      }
+
+      const activeElement = document.activeElement as HTMLElement | null;
+      if (activeElement?.isContentEditable || activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement || activeElement instanceof HTMLSelectElement) {
+        return;
+      }
+
+      if (isUndoShortcut) {
+        if (!undoRedoAvailability?.canUndo) {
+          return;
+        }
+
+        event.preventDefault();
+        void onUndo();
+        return;
+      }
+
+      if (!undoRedoAvailability?.canRedo) {
+        return;
+      }
+
+      event.preventDefault();
+      void onRedo();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onRedo, onUndo, undoRedoAvailability?.canRedo, undoRedoAvailability?.canUndo]);
+
   return (
     <div className={`planning-shell${compactMode ? " planning-shell-compact" : ""}`}>
       <div className="planning-toolbar">
@@ -621,6 +676,12 @@ export function PlanningGrid({
           </button>
           <button type="button" className="secondary-button danger-button" disabled={!canDeleteSelectedRow} onClick={() => void onDeleteRow(selectedRow)}>
             Delete Selected Row
+          </button>
+          <button type="button" className="secondary-button" disabled={!undoRedoAvailability?.canUndo} onClick={() => void onUndo()}>
+            Undo{undoRedoAvailability?.undoDepth ? ` (${undoRedoAvailability.undoDepth})` : ""}
+          </button>
+          <button type="button" className="secondary-button" disabled={!undoRedoAvailability?.canRedo} onClick={() => void onRedo()}>
+            Redo{undoRedoAvailability?.redoDepth ? ` (${undoRedoAvailability.redoDepth})` : ""}
           </button>
           <button type="button" className="secondary-button" onClick={() => importInputRef.current?.click()}>
             Upload Workbook
@@ -684,8 +745,6 @@ export function PlanningGrid({
           cellSelection
           readOnlyEdit
           suppressClickEdit={showGrowthFactors}
-          undoRedoCellEditing
-          undoRedoCellEditingLimit={30}
           rowHeight={compactMode ? 24 : 28}
           headerHeight={compactMode ? 28 : 32}
           groupHeaderHeight={compactMode ? 30 : 34}

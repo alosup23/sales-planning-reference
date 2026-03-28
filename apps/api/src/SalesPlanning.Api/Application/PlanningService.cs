@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using ClosedXML.Excel;
 using SalesPlanning.Api.Contracts;
 using SalesPlanning.Api.Domain;
@@ -53,111 +54,164 @@ public sealed partial class PlanningService : IPlanningService
         return _repository.GetGridSliceAsync(scenarioVersionId, selectedStoreId, selectedDepartmentLabel, expandedProductNodeIds, expandAllBranches, cancellationToken);
     }
 
-    public async Task<EditCellsResponse> ApplyEditsAsync(EditCellsRequest request, string userId, CancellationToken cancellationToken)
+    public Task<EditCellsResponse> ApplyEditsAsync(EditCellsRequest request, string userId, CancellationToken cancellationToken)
     {
-        var metadata = await _repository.GetMetadataAsync(cancellationToken);
-        var originalCells = await _repository.GetScenarioCellsAsync(request.ScenarioVersionId, cancellationToken);
-        var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
-
-        foreach (var edit in request.Cells)
+        return _repository.ExecuteAtomicAsync(async ct =>
         {
-            var coordinate = new PlanningCellCoordinate(request.ScenarioVersionId, request.MeasureId, edit.StoreId, edit.ProductNodeId, edit.TimePeriodId);
-            ValidateDirectEdit(coordinate, edit.RowVersion, workingCells, metadata);
+            var metadata = await _repository.GetMetadataAsync(ct);
+            var originalCells = await _repository.GetScenarioCellsAsync(request.ScenarioVersionId, ct);
+            var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
 
-            if (string.Equals(edit.EditMode, "input", StringComparison.OrdinalIgnoreCase))
+            foreach (var edit in request.Cells)
             {
-                ApplyLeafMeasureEdit(coordinate, edit.NewValue, workingCells, metadata);
+                var coordinate = new PlanningCellCoordinate(request.ScenarioVersionId, request.MeasureId, edit.StoreId, edit.ProductNodeId, edit.TimePeriodId);
+                ValidateDirectEdit(coordinate, edit.RowVersion, workingCells, metadata);
+
+                if (string.Equals(edit.EditMode, "input", StringComparison.OrdinalIgnoreCase))
+                {
+                    ApplyLeafMeasureEdit(coordinate, edit.NewValue, workingCells, metadata);
+                }
+                else
+                {
+                    ApplyAggregateAllocation(
+                        request.ScenarioVersionId,
+                        request.MeasureId,
+                        edit.TimePeriodId,
+                        [new SplashScopeRootDto(edit.StoreId, edit.ProductNodeId)],
+                        edit.NewValue,
+                        "existing_plan",
+                        null,
+                        workingCells,
+                        metadata);
+                }
             }
-            else
+
+            RecalculateAll(workingCells, metadata, request.ScenarioVersionId);
+            var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "manual-edit", ct);
+            var actionId = await AppendAuditAsync("manual_edit", "manual", userId, request.Comment, deltas, ct);
+            await AppendCommandBatchAsync(
+                request.ScenarioVersionId,
+                userId,
+                "manual_edit",
+                new
+                {
+                    request.MeasureId,
+                    request.Comment,
+                    request.Cells
+                },
+                deltas,
+                ct);
+            return new EditCellsResponse(actionId, deltas.Count, "applied");
+        }, cancellationToken);
+    }
+
+    public Task<SplashResponse> ApplySplashAsync(SplashRequest request, string userId, CancellationToken cancellationToken)
+    {
+        return _repository.ExecuteAtomicAsync(async ct =>
+        {
+            var metadata = await _repository.GetMetadataAsync(ct);
+            var originalCells = await _repository.GetScenarioCellsAsync(request.ScenarioVersionId, ct);
+            var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
+            var scopeRoots = (request.ScopeRoots is { Count: > 0 } ? request.ScopeRoots : [new SplashScopeRootDto(request.SourceCell.StoreId, request.SourceCell.ProductNodeId)])
+                .Distinct()
+                .ToList();
+
+            if (scopeRoots.Count == 1)
             {
-                ApplyAggregateAllocation(
+                var directCoordinate = new PlanningCellCoordinate(
                     request.ScenarioVersionId,
                     request.MeasureId,
-                    edit.TimePeriodId,
-                    [new SplashScopeRootDto(edit.StoreId, edit.ProductNodeId)],
-                    edit.NewValue,
-                    "existing_plan",
-                    null,
-                    workingCells,
-                    metadata);
+                    scopeRoots[0].StoreId,
+                    scopeRoots[0].ProductNodeId,
+                    request.SourceCell.TimePeriodId);
+                if (IsLockedBySelfOrAncestor(directCoordinate, workingCells.Values, metadata))
+                {
+                    throw new InvalidOperationException($"Cell {directCoordinate.Key} is locked and cannot be changed.");
+                }
             }
-        }
 
-        RecalculateAll(workingCells, metadata, request.ScenarioVersionId);
-        var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "manual-edit", cancellationToken);
-        var actionId = await AppendAuditAsync("manual_edit", "manual", userId, request.Comment, deltas, cancellationToken);
-        return new EditCellsResponse(actionId, deltas.Count, "applied");
-    }
-
-    public async Task<SplashResponse> ApplySplashAsync(SplashRequest request, string userId, CancellationToken cancellationToken)
-    {
-        var metadata = await _repository.GetMetadataAsync(cancellationToken);
-        var originalCells = await _repository.GetScenarioCellsAsync(request.ScenarioVersionId, cancellationToken);
-        var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
-        var scopeRoots = (request.ScopeRoots is { Count: > 0 } ? request.ScopeRoots : [new SplashScopeRootDto(request.SourceCell.StoreId, request.SourceCell.ProductNodeId)])
-            .Distinct()
-            .ToList();
-
-        if (scopeRoots.Count == 1)
-        {
-            var directCoordinate = new PlanningCellCoordinate(
+            ApplyAggregateAllocation(
                 request.ScenarioVersionId,
                 request.MeasureId,
-                scopeRoots[0].StoreId,
-                scopeRoots[0].ProductNodeId,
-                request.SourceCell.TimePeriodId);
-            if (IsLockedBySelfOrAncestor(directCoordinate, workingCells.Values, metadata))
-            {
-                throw new InvalidOperationException($"Cell {directCoordinate.Key} is locked and cannot be changed.");
-            }
-        }
+                request.SourceCell.TimePeriodId,
+                scopeRoots,
+                request.TotalValue,
+                request.Method,
+                request.ManualWeights,
+                workingCells,
+                metadata);
 
-        ApplyAggregateAllocation(
-            request.ScenarioVersionId,
-            request.MeasureId,
-            request.SourceCell.TimePeriodId,
-            scopeRoots,
-            request.TotalValue,
-            request.Method,
-            request.ManualWeights,
-            workingCells,
-            metadata);
-
-        RecalculateAll(workingCells, metadata, request.ScenarioVersionId);
-        var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "splash", cancellationToken);
-        var actionId = await AppendAuditAsync("splash", request.Method, userId, request.Comment, deltas, cancellationToken);
-        return new SplashResponse(actionId, "applied", deltas.Count, deltas.Count(delta => delta.WasLocked));
+            RecalculateAll(workingCells, metadata, request.ScenarioVersionId);
+            var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "splash", ct);
+            var actionId = await AppendAuditAsync("splash", request.Method, userId, request.Comment, deltas, ct);
+            await AppendCommandBatchAsync(
+                request.ScenarioVersionId,
+                userId,
+                "splash",
+                new
+                {
+                    request.MeasureId,
+                    request.SourceCell,
+                    request.TotalValue,
+                    request.Method,
+                    request.ScopeRoots,
+                    request.ManualWeights,
+                    request.Comment
+                },
+                deltas,
+                ct);
+            return new SplashResponse(actionId, "applied", deltas.Count, deltas.Count(delta => delta.OldState.IsLocked));
+        }, cancellationToken);
     }
 
-    public async Task<LockCellsResponse> ApplyLockAsync(LockCellsRequest request, string userId, CancellationToken cancellationToken)
+    public Task<LockCellsResponse> ApplyLockAsync(LockCellsRequest request, string userId, CancellationToken cancellationToken)
     {
-        var scenarioCells = (await _repository.GetScenarioCellsAsync(request.ScenarioVersionId, cancellationToken))
-            .Where(cell => cell.Coordinate.MeasureId == request.MeasureId)
-            .ToDictionary(cell => cell.Coordinate.Key, cell => cell);
-
-        foreach (var coordinate in request.Coordinates)
+        return _repository.ExecuteAtomicAsync(async ct =>
         {
-            var key = new PlanningCellCoordinate(
-                request.ScenarioVersionId,
-                request.MeasureId,
-                coordinate.StoreId,
-                coordinate.ProductNodeId,
-                coordinate.TimePeriodId).Key;
+            var scenarioCells = (await _repository.GetScenarioCellsAsync(request.ScenarioVersionId, ct))
+                .Where(cell => cell.Coordinate.MeasureId == request.MeasureId)
+                .ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
+            var originalCells = new List<PlanningCell>();
+            var targetedCells = new List<PlanningCell>();
 
-            if (!scenarioCells.TryGetValue(key, out var cell))
+            foreach (var coordinate in request.Coordinates)
             {
-                throw new InvalidOperationException($"Cell {key} was not found.");
+                var key = new PlanningCellCoordinate(
+                    request.ScenarioVersionId,
+                    request.MeasureId,
+                    coordinate.StoreId,
+                    coordinate.ProductNodeId,
+                    coordinate.TimePeriodId).Key;
+
+                if (!scenarioCells.TryGetValue(key, out var cell))
+                {
+                    throw new InvalidOperationException($"Cell {key} was not found.");
+                }
+
+                originalCells.Add(cell.Clone());
+                cell.IsLocked = request.Locked;
+                cell.LockReason = request.Reason;
+                cell.LockedBy = request.Locked ? userId : null;
+                targetedCells.Add(cell);
             }
 
-            cell.IsLocked = request.Locked;
-            cell.LockReason = request.Reason;
-            cell.LockedBy = request.Locked ? userId : null;
-            cell.RowVersion += 1;
-        }
-
-        await _repository.UpsertCellsAsync(scenarioCells.Values, cancellationToken);
-        await AppendAuditAsync(request.Locked ? "lock" : "unlock", "lock", userId, request.Reason, [], cancellationToken);
-        return new LockCellsResponse(request.Coordinates.Count, request.Locked);
+            var deltas = await PersistScenarioChangesAsync(originalCells, targetedCells, request.Locked ? "lock" : "unlock", ct);
+            await AppendAuditAsync(request.Locked ? "lock" : "unlock", "lock", userId, request.Reason, deltas, ct);
+            await AppendCommandBatchAsync(
+                request.ScenarioVersionId,
+                userId,
+                request.Locked ? "lock" : "unlock",
+                new
+                {
+                    request.MeasureId,
+                    request.Reason,
+                    request.Locked,
+                    request.Coordinates
+                },
+                deltas,
+                ct);
+            return new LockCellsResponse(request.Coordinates.Count, request.Locked);
+        }, cancellationToken);
     }
 
     public Task<IReadOnlyList<AuditTrailItemDto>> GetAuditAsync(long scenarioVersionId, long measureId, long storeId, long productNodeId, CancellationToken cancellationToken)
@@ -197,71 +251,87 @@ public sealed partial class PlanningService : IPlanningService
         return new DeleteEntityResponse(deletedNodeCount, deletedCellCount, "deleted");
     }
 
-    public async Task<GenerateNextYearResponse> GenerateNextYearAsync(GenerateNextYearRequest request, string userId, CancellationToken cancellationToken)
+    public Task<GenerateNextYearResponse> GenerateNextYearAsync(GenerateNextYearRequest request, string userId, CancellationToken cancellationToken)
     {
-        var metadata = await _repository.GetMetadataAsync(cancellationToken);
-        if (!metadata.TimePeriods.TryGetValue(request.SourceYearTimePeriodId, out var sourceYear) || !string.Equals(sourceYear.Grain, "year", StringComparison.OrdinalIgnoreCase))
+        return _repository.ExecuteAtomicAsync(async ct =>
         {
-            throw new InvalidOperationException($"Year {request.SourceYearTimePeriodId} was not found.");
-        }
-
-        var sourceFiscalYear = (int)(request.SourceYearTimePeriodId / 100);
-        var targetFiscalYear = sourceFiscalYear + 1;
-        var targetYearTimePeriodId = targetFiscalYear * 100L;
-
-        await _repository.EnsureYearAsync(request.ScenarioVersionId, targetFiscalYear, cancellationToken);
-        metadata = await _repository.GetMetadataAsync(cancellationToken);
-
-        var originalCells = await _repository.GetScenarioCellsAsync(request.ScenarioVersionId, cancellationToken);
-        var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
-        var copiedCount = 0;
-
-        var sourceMonthIds = GetLeafTimeIds(request.SourceYearTimePeriodId, metadata);
-        var sourceMonthIdSet = sourceMonthIds.ToHashSet();
-        var sourceMonthByTimeId = sourceMonthIds.ToDictionary(timeId => timeId, timeId => metadata.TimePeriods[timeId].Label);
-        var targetMonthIds = GetLeafTimeIds(targetYearTimePeriodId, metadata)
-            .ToDictionary(timeId => metadata.TimePeriods[timeId].Label);
-
-        foreach (var sourceCell in workingCells.Values.Where(cell =>
-                     cell.Coordinate.ScenarioVersionId == request.ScenarioVersionId &&
-                     sourceMonthIdSet.Contains(cell.Coordinate.TimePeriodId) &&
-                     metadata.ProductNodes[cell.Coordinate.ProductNodeId].IsLeaf &&
-                     cell.InputValue is not null &&
-                     PlanningMeasures.GetDefinition(cell.Coordinate.MeasureId).EditableAtLeaf &&
-                     cell.Coordinate.MeasureId != PlanningMeasures.GrossProfitPercent))
-        {
-            var targetLabel = sourceMonthByTimeId[sourceCell.Coordinate.TimePeriodId];
-            if (!targetMonthIds.TryGetValue(targetLabel, out var targetTimePeriodId))
+            var metadata = await _repository.GetMetadataAsync(ct);
+            if (!metadata.TimePeriods.TryGetValue(request.SourceYearTimePeriodId, out var sourceYear) || !string.Equals(sourceYear.Grain, "year", StringComparison.OrdinalIgnoreCase))
             {
-                continue;
+                throw new InvalidOperationException($"Year {request.SourceYearTimePeriodId} was not found.");
             }
 
-            var targetKey = new PlanningCellCoordinate(
+            var sourceFiscalYear = (int)(request.SourceYearTimePeriodId / 100);
+            var targetFiscalYear = sourceFiscalYear + 1;
+            var targetYearTimePeriodId = targetFiscalYear * 100L;
+
+            await _repository.EnsureYearAsync(request.ScenarioVersionId, targetFiscalYear, ct);
+            metadata = await _repository.GetMetadataAsync(ct);
+
+            var originalCells = await _repository.GetScenarioCellsAsync(request.ScenarioVersionId, ct);
+            var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
+            var copiedCount = 0;
+
+            var sourceMonthIds = GetLeafTimeIds(request.SourceYearTimePeriodId, metadata);
+            var sourceMonthIdSet = sourceMonthIds.ToHashSet();
+            var sourceMonthByTimeId = sourceMonthIds.ToDictionary(timeId => timeId, timeId => metadata.TimePeriods[timeId].Label);
+            var targetMonthIds = GetLeafTimeIds(targetYearTimePeriodId, metadata)
+                .ToDictionary(timeId => metadata.TimePeriods[timeId].Label);
+
+            foreach (var sourceCell in workingCells.Values.Where(cell =>
+                         cell.Coordinate.ScenarioVersionId == request.ScenarioVersionId &&
+                         sourceMonthIdSet.Contains(cell.Coordinate.TimePeriodId) &&
+                         metadata.ProductNodes[cell.Coordinate.ProductNodeId].IsLeaf &&
+                         cell.InputValue is not null &&
+                         PlanningMeasures.GetDefinition(cell.Coordinate.MeasureId).EditableAtLeaf &&
+                         cell.Coordinate.MeasureId != PlanningMeasures.GrossProfitPercent))
+            {
+                var targetLabel = sourceMonthByTimeId[sourceCell.Coordinate.TimePeriodId];
+                if (!targetMonthIds.TryGetValue(targetLabel, out var targetTimePeriodId))
+                {
+                    continue;
+                }
+
+                var targetKey = new PlanningCellCoordinate(
+                    request.ScenarioVersionId,
+                    sourceCell.Coordinate.MeasureId,
+                    sourceCell.Coordinate.StoreId,
+                    sourceCell.Coordinate.ProductNodeId,
+                    targetTimePeriodId).Key;
+
+                if (!workingCells.TryGetValue(targetKey, out var targetCell))
+                {
+                    continue;
+                }
+
+                targetCell.InputValue = sourceCell.InputValue;
+                targetCell.OverrideValue = null;
+                targetCell.IsSystemGeneratedOverride = false;
+                targetCell.DerivedValue = sourceCell.InputValue ?? 0m;
+                targetCell.EffectiveValue = sourceCell.InputValue ?? 0m;
+                targetCell.CellKind = "input";
+                targetCell.GrowthFactor = 1.0m;
+                copiedCount += 1;
+            }
+
+            RecalculateAll(workingCells, metadata, request.ScenarioVersionId);
+            var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "generate-next-year", ct);
+            await AppendAuditAsync("generate_next_year", "copy-inputs", userId, $"Generated FY{targetFiscalYear % 100:00} from FY{sourceFiscalYear % 100:00}", deltas, ct);
+            await AppendCommandBatchAsync(
                 request.ScenarioVersionId,
-                sourceCell.Coordinate.MeasureId,
-                sourceCell.Coordinate.StoreId,
-                sourceCell.Coordinate.ProductNodeId,
-                targetTimePeriodId).Key;
-
-            if (!workingCells.TryGetValue(targetKey, out var targetCell))
-            {
-                continue;
-            }
-
-            targetCell.InputValue = sourceCell.InputValue;
-            targetCell.OverrideValue = null;
-            targetCell.IsSystemGeneratedOverride = false;
-            targetCell.DerivedValue = sourceCell.InputValue ?? 0m;
-            targetCell.EffectiveValue = sourceCell.InputValue ?? 0m;
-            targetCell.CellKind = "input";
-            targetCell.GrowthFactor = 1.0m;
-            copiedCount += 1;
-        }
-
-        RecalculateAll(workingCells, metadata, request.ScenarioVersionId);
-        var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "generate-next-year", cancellationToken);
-        await AppendAuditAsync("generate_next_year", "copy-inputs", userId, $"Generated FY{targetFiscalYear % 100:00} from FY{sourceFiscalYear % 100:00}", deltas, cancellationToken);
-        return new GenerateNextYearResponse(request.SourceYearTimePeriodId, targetYearTimePeriodId, "applied", copiedCount);
+                userId,
+                "generate_next_year",
+                new
+                {
+                    request.SourceYearTimePeriodId,
+                    GeneratedYearTimePeriodId = targetYearTimePeriodId,
+                    sourceFiscalYear,
+                    targetFiscalYear
+                },
+                deltas,
+                ct);
+            return new GenerateNextYearResponse(request.SourceYearTimePeriodId, targetYearTimePeriodId, "applied", copiedCount);
+        }, cancellationToken);
     }
 
     public async Task<HierarchyMappingResponse> GetHierarchyMappingsAsync(CancellationToken cancellationToken)
@@ -342,57 +412,110 @@ public sealed partial class PlanningService : IPlanningService
             ]);
     }
 
-    public async Task<ApplyGrowthFactorResponse> ApplyGrowthFactorAsync(ApplyGrowthFactorRequest request, string userId, CancellationToken cancellationToken)
+    public Task<ApplyGrowthFactorResponse> ApplyGrowthFactorAsync(ApplyGrowthFactorRequest request, string userId, CancellationToken cancellationToken)
     {
-        var metadata = await _repository.GetMetadataAsync(cancellationToken);
-        var originalCells = await _repository.GetScenarioCellsAsync(request.ScenarioVersionId, cancellationToken);
-        var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
-        var scopeRoots = (request.ScopeRoots is { Count: > 0 } ? request.ScopeRoots : [new SplashScopeRootDto(request.SourceCell.StoreId, request.SourceCell.ProductNodeId)])
-            .Distinct()
-            .ToList();
-
-        var growthFactor = PlanningMath.NormalizeGrowthFactor(request.GrowthFactor);
-        var newValue = request.CurrentValue * growthFactor;
-        var sourceCoordinate = new PlanningCellCoordinate(
-            request.ScenarioVersionId,
-            request.MeasureId,
-            request.SourceCell.StoreId,
-            request.SourceCell.ProductNodeId,
-            request.SourceCell.TimePeriodId);
-
-        var isLeafWrite = IsLeafWriteCoordinate(sourceCoordinate, metadata);
-        if (isLeafWrite)
+        return _repository.ExecuteAtomicAsync(async ct =>
         {
-            ValidateDirectEdit(sourceCoordinate, null, workingCells, metadata);
-            ApplyLeafMeasureEdit(sourceCoordinate, newValue, workingCells, metadata);
-        }
-        else
-        {
-            ApplyAggregateAllocation(
+            var metadata = await _repository.GetMetadataAsync(ct);
+            var originalCells = await _repository.GetScenarioCellsAsync(request.ScenarioVersionId, ct);
+            var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
+            var scopeRoots = (request.ScopeRoots is { Count: > 0 } ? request.ScopeRoots : [new SplashScopeRootDto(request.SourceCell.StoreId, request.SourceCell.ProductNodeId)])
+                .Distinct()
+                .ToList();
+
+            var growthFactor = PlanningMath.NormalizeGrowthFactor(request.GrowthFactor);
+            var newValue = request.CurrentValue * growthFactor;
+            var sourceCoordinate = new PlanningCellCoordinate(
                 request.ScenarioVersionId,
                 request.MeasureId,
-                request.SourceCell.TimePeriodId,
-                scopeRoots,
-                newValue,
-                request.SourceCell.TimePeriodId % 100 == 0 ? "seasonality_profile" : "existing_plan",
-                request.SourceCell.TimePeriodId % 100 == 0 ? BuildDefaultSeasonalityWeights(request.SourceCell.TimePeriodId, metadata) : null,
-                workingCells,
-                metadata);
+                request.SourceCell.StoreId,
+                request.SourceCell.ProductNodeId,
+                request.SourceCell.TimePeriodId);
 
-        }
+            var isLeafWrite = IsLeafWriteCoordinate(sourceCoordinate, metadata);
+            if (isLeafWrite)
+            {
+                ValidateDirectEdit(sourceCoordinate, null, workingCells, metadata);
+                ApplyLeafMeasureEdit(sourceCoordinate, newValue, workingCells, metadata);
+            }
+            else
+            {
+                ApplyAggregateAllocation(
+                    request.ScenarioVersionId,
+                    request.MeasureId,
+                    request.SourceCell.TimePeriodId,
+                    scopeRoots,
+                    newValue,
+                    request.SourceCell.TimePeriodId % 100 == 0 ? "seasonality_profile" : "existing_plan",
+                    request.SourceCell.TimePeriodId % 100 == 0 ? BuildDefaultSeasonalityWeights(request.SourceCell.TimePeriodId, metadata) : null,
+                    workingCells,
+                    metadata);
+            }
 
-        ResetGrowthFactors(workingCells.Values, request.MeasureId);
+            ResetGrowthFactors(workingCells.Values, request.MeasureId);
 
-        RecalculateAll(workingCells, metadata, request.ScenarioVersionId);
-        var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "growth-factor", cancellationToken);
-        var actionId = await AppendAuditAsync("growth_factor", "growth-factor", userId, request.Comment, deltas, cancellationToken);
-        return new ApplyGrowthFactorResponse(actionId, "applied", growthFactor, deltas.Count);
+            RecalculateAll(workingCells, metadata, request.ScenarioVersionId);
+            var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "growth-factor", ct);
+            var actionId = await AppendAuditAsync("growth_factor", "growth-factor", userId, request.Comment, deltas, ct);
+            await AppendCommandBatchAsync(
+                request.ScenarioVersionId,
+                userId,
+                "growth_factor",
+                new
+                {
+                    request.MeasureId,
+                    request.SourceCell,
+                    request.CurrentValue,
+                    request.GrowthFactor,
+                    request.ScopeRoots,
+                    request.Comment
+                },
+                deltas,
+                ct);
+            return new ApplyGrowthFactorResponse(actionId, "applied", growthFactor, deltas.Count);
+        }, cancellationToken);
     }
 
     public async Task<SaveScenarioResponse> SaveScenarioAsync(SaveScenarioRequest request, string userId, CancellationToken cancellationToken)
     {
         await AppendAuditAsync("save", request.Mode, userId, $"Scenario {request.ScenarioVersionId} save checkpoint", [], cancellationToken);
         return new SaveScenarioResponse("saved", request.Mode, DateTimeOffset.UtcNow);
+    }
+
+    public async Task<UndoRedoAvailabilityDto> GetUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken)
+    {
+        var availability = await _repository.GetUndoRedoAvailabilityAsync(scenarioVersionId, userId, UndoRedoLimit, cancellationToken);
+        return ToUndoRedoAvailabilityDto(availability);
+    }
+
+    public Task<UndoPlanningActionResponse> UndoAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken)
+    {
+        return _repository.ExecuteAtomicAsync(async ct =>
+        {
+            var batch = await _repository.UndoLatestCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
+            if (batch is not null)
+            {
+                await AppendAuditAsync("undo", "undo", userId, $"Undo {batch.CommandKind}", InvertCommandDeltas(batch.Deltas), ct);
+            }
+
+            var availability = await _repository.GetUndoRedoAvailabilityAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
+            return new UndoPlanningActionResponse(batch is null ? "no-op" : "applied", ToUndoRedoAvailabilityDto(availability));
+        }, cancellationToken);
+    }
+
+    public Task<RedoPlanningActionResponse> RedoAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken)
+    {
+        return _repository.ExecuteAtomicAsync(async ct =>
+        {
+            var batch = await _repository.RedoLatestCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
+            if (batch is not null)
+            {
+                await AppendAuditAsync("redo", "redo", userId, $"Redo {batch.CommandKind}", batch.Deltas, ct);
+            }
+
+            var availability = await _repository.GetUndoRedoAvailabilityAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
+            return new RedoPlanningActionResponse(batch is null ? "no-op" : "applied", ToUndoRedoAvailabilityDto(availability));
+        }, cancellationToken);
     }
 
     public async Task<PlanningStoreScopeResponse> GetPlanningStoreScopesAsync(CancellationToken cancellationToken)
@@ -893,6 +1016,19 @@ public sealed partial class PlanningService : IPlanningService
             RecalculateAll(workingCells, metadata, scenarioVersionId);
             var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "import", ct);
             await AppendAuditAsync("import", "workbook", userId, $"Imported workbook {fileName}", deltas, ct);
+            await AppendCommandBatchAsync(
+                scenarioVersionId,
+                userId,
+                "import",
+                new
+                {
+                    FileName = fileName,
+                    RowsProcessed = rowsProcessed,
+                    RowsCreated = rowsCreated,
+                    TouchedCellCount = touchedCoordinates.Count
+                },
+                deltas,
+                ct);
 
             string? exceptionWorkbookBase64 = null;
             string? exceptionFileName = null;
@@ -1403,7 +1539,7 @@ public sealed partial class PlanningService : IPlanningService
             .ToList();
     }
 
-    private async Task<IReadOnlyList<PlanningCellDeltaAudit>> PersistScenarioChangesAsync(
+    private async Task<IReadOnlyList<PlanningCommandCellDelta>> PersistScenarioChangesAsync(
         IReadOnlyList<PlanningCell> originalCells,
         IEnumerable<PlanningCell> workingCells,
         string changeKind,
@@ -1411,7 +1547,7 @@ public sealed partial class PlanningService : IPlanningService
     {
         var originalByKey = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell);
         var changedCells = new List<PlanningCell>();
-        var deltas = new List<PlanningCellDeltaAudit>();
+        var deltas = new List<PlanningCommandCellDelta>();
 
         foreach (var cell in workingCells)
         {
@@ -1429,11 +1565,11 @@ public sealed partial class PlanningService : IPlanningService
             var updated = cell.Clone();
             updated.RowVersion = original.RowVersion + 1;
             changedCells.Add(updated);
-
-            if (original.EffectiveValue != updated.EffectiveValue)
-            {
-                deltas.Add(new PlanningCellDeltaAudit(updated.Coordinate, original.EffectiveValue, updated.EffectiveValue, original.IsLocked, changeKind));
-            }
+            deltas.Add(new PlanningCommandCellDelta(
+                updated.Coordinate,
+                PlanningCellState.FromCell(original),
+                PlanningCellState.FromCell(updated),
+                changeKind));
         }
 
         await _repository.UpsertCellsAsync(changedCells, cancellationToken);
@@ -1445,7 +1581,7 @@ public sealed partial class PlanningService : IPlanningService
         string method,
         string userId,
         string? comment,
-        IReadOnlyList<PlanningCellDeltaAudit> deltas,
+        IReadOnlyList<PlanningCommandCellDelta> deltas,
         CancellationToken cancellationToken)
     {
         var audit = new PlanningActionAudit(
@@ -1455,7 +1591,7 @@ public sealed partial class PlanningService : IPlanningService
             userId,
             comment,
             DateTimeOffset.UtcNow,
-            deltas);
+            BuildAuditDeltas(deltas));
 
         await _repository.AppendAuditAsync(audit, cancellationToken);
         return audit.ActionId;
@@ -1526,6 +1662,7 @@ public sealed partial class PlanningService : IPlanningService
     {
         return left.InputValue != right.InputValue ||
                left.OverrideValue != right.OverrideValue ||
+               left.IsSystemGeneratedOverride != right.IsSystemGeneratedOverride ||
                left.DerivedValue != right.DerivedValue ||
                left.EffectiveValue != right.EffectiveValue ||
                left.GrowthFactor != right.GrowthFactor ||

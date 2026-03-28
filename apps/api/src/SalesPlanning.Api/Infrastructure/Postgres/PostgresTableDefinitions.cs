@@ -93,12 +93,15 @@ internal static class PostgresTableDefinitions
             ["vendor_supply_profile_id"]),
         new("planning_command_batches",
             ["command_batch_id", "scenario_version_id", "user_id", "command_kind", "command_scope_json", "is_undone",
-             "superseded_by_batch_id", "created_at"],
+             "superseded_by_batch_id", "created_at", "undone_at"],
             ["command_batch_id"]),
         new("planning_command_cell_deltas",
             ["command_delta_id", "command_batch_id", "scenario_version_id", "measure_id", "store_id", "product_node_id",
              "time_period_id", "old_input_value", "new_input_value", "old_override_value", "new_override_value",
-             "old_effective_value", "new_effective_value", "old_is_locked", "new_is_locked", "change_kind"],
+             "old_is_system_generated_override", "new_is_system_generated_override", "old_derived_value", "new_derived_value",
+             "old_effective_value", "new_effective_value", "old_growth_factor", "new_growth_factor",
+             "old_is_locked", "new_is_locked", "old_lock_reason", "new_lock_reason", "old_locked_by", "new_locked_by",
+             "old_row_version", "new_row_version", "old_cell_kind", "new_cell_kind", "change_kind"],
             ["command_delta_id"])
     ];
 
@@ -406,7 +409,8 @@ internal static class PostgresTableDefinitions
             command_scope_json text null,
             is_undone integer not null default 0,
             superseded_by_batch_id integer null,
-            created_at text not null
+            created_at text not null,
+            undone_at text null
         );
         create table if not exists planning_command_cell_deltas (
             command_delta_id integer primary key,
@@ -420,10 +424,24 @@ internal static class PostgresTableDefinitions
             new_input_value real null,
             old_override_value real null,
             new_override_value real null,
+            old_is_system_generated_override integer not null default 0,
+            new_is_system_generated_override integer not null default 0,
+            old_derived_value real not null,
+            new_derived_value real not null,
             old_effective_value real not null,
             new_effective_value real not null,
+            old_growth_factor real not null default 1.0,
+            new_growth_factor real not null default 1.0,
             old_is_locked integer not null default 0,
             new_is_locked integer not null default 0,
+            old_lock_reason text null,
+            new_lock_reason text null,
+            old_locked_by text null,
+            new_locked_by text null,
+            old_row_version integer not null,
+            new_row_version integer not null,
+            old_cell_kind text not null,
+            new_cell_kind text not null,
             change_kind text not null
         );
         create index if not exists idx_planning_cells_scenario_measure on planning_cells (scenario_version_id, measure_id);

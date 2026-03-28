@@ -14,6 +14,11 @@ public interface IPlanningRepository
     Task AppendAuditAsync(PlanningActionAudit audit, CancellationToken cancellationToken);
     Task<long> GetNextActionIdAsync(CancellationToken cancellationToken);
     Task<IReadOnlyList<PlanningActionAudit>> GetAuditAsync(long scenarioVersionId, long measureId, long storeId, long productNodeId, CancellationToken cancellationToken);
+    Task<long> GetNextCommandBatchIdAsync(CancellationToken cancellationToken);
+    Task AppendCommandBatchAsync(PlanningCommandBatch batch, CancellationToken cancellationToken);
+    Task<PlanningUndoRedoAvailability> GetUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken);
+    Task<PlanningCommandBatch?> UndoLatestCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken);
+    Task<PlanningCommandBatch?> RedoLatestCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken);
     Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, string? selectedDepartmentLabel, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, CancellationToken cancellationToken);
     Task<ProductNode> AddRowAsync(AddRowRequest request, CancellationToken cancellationToken);
     Task<int> DeleteRowAsync(long scenarioVersionId, long productNodeId, CancellationToken cancellationToken);

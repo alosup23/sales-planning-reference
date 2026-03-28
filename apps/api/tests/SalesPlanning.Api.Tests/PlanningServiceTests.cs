@@ -92,6 +92,79 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
+    public async Task UndoAndRedoAsync_ReversesLeafEditAndRestoresAvailability()
+    {
+        var revenueCoordinate = new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202603);
+        var beforeRevenue = await _repository.GetCellAsync(revenueCoordinate, CancellationToken.None);
+        Assert.NotNull(beforeRevenue);
+
+        await _service.ApplyEditsAsync(
+            new EditCellsRequest(
+                1,
+                PlanningMeasures.SalesRevenue,
+                "Undo revenue edit",
+                [new EditCellRequest(101, 2111, 202603, beforeRevenue!.EffectiveValue + 125m, "input", beforeRevenue.RowVersion)]),
+            "planner.one",
+            CancellationToken.None);
+
+        var editedRevenue = await _repository.GetCellAsync(revenueCoordinate, CancellationToken.None);
+        Assert.NotNull(editedRevenue);
+        Assert.NotEqual(beforeRevenue.EffectiveValue, editedRevenue!.EffectiveValue);
+
+        var availabilityAfterEdit = await _service.GetUndoRedoAvailabilityAsync(1, "planner.one", CancellationToken.None);
+        Assert.True(availabilityAfterEdit.CanUndo);
+        Assert.False(availabilityAfterEdit.CanRedo);
+        Assert.Equal(1, availabilityAfterEdit.UndoDepth);
+
+        var undoResult = await _service.UndoAsync(1, "planner.one", CancellationToken.None);
+        var afterUndo = await _repository.GetCellAsync(revenueCoordinate, CancellationToken.None);
+        Assert.NotNull(afterUndo);
+        Assert.Equal("applied", undoResult.Status);
+        Assert.Equal(beforeRevenue.EffectiveValue, afterUndo!.EffectiveValue);
+        Assert.False(undoResult.Availability.CanUndo);
+        Assert.True(undoResult.Availability.CanRedo);
+
+        var redoResult = await _service.RedoAsync(1, "planner.one", CancellationToken.None);
+        var afterRedo = await _repository.GetCellAsync(revenueCoordinate, CancellationToken.None);
+        Assert.NotNull(afterRedo);
+        Assert.Equal("applied", redoResult.Status);
+        Assert.Equal(editedRevenue.EffectiveValue, afterRedo!.EffectiveValue);
+        Assert.True(redoResult.Availability.CanUndo);
+        Assert.False(redoResult.Availability.CanRedo);
+    }
+
+    [Fact]
+    public async Task UndoAndRedoAsync_ReversesLockStateChanges()
+    {
+        var revenueCoordinate = new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202603);
+        var beforeLock = await _repository.GetCellAsync(revenueCoordinate, CancellationToken.None);
+        Assert.NotNull(beforeLock);
+        Assert.False(beforeLock!.IsLocked);
+
+        await _service.ApplyLockAsync(
+            new LockCellsRequest(1, PlanningMeasures.SalesRevenue, true, "Planner hold", [new LockCoordinateDto(101, 2111, 202603)]),
+            "planner.one",
+            CancellationToken.None);
+
+        var lockedCell = await _repository.GetCellAsync(revenueCoordinate, CancellationToken.None);
+        Assert.NotNull(lockedCell);
+        Assert.True(lockedCell!.IsLocked);
+        Assert.Equal("Planner hold", lockedCell.LockReason);
+
+        await _service.UndoAsync(1, "planner.one", CancellationToken.None);
+        var afterUndo = await _repository.GetCellAsync(revenueCoordinate, CancellationToken.None);
+        Assert.NotNull(afterUndo);
+        Assert.False(afterUndo!.IsLocked);
+        Assert.Null(afterUndo.LockReason);
+
+        await _service.RedoAsync(1, "planner.one", CancellationToken.None);
+        var afterRedo = await _repository.GetCellAsync(revenueCoordinate, CancellationToken.None);
+        Assert.NotNull(afterRedo);
+        Assert.True(afterRedo!.IsLocked);
+        Assert.Equal("Planner hold", afterRedo.LockReason);
+    }
+
+    [Fact]
     public async Task ImportWorkbookAsync_LoadsValidRowsAndReturnsExceptionWorkbookForInvalidRows()
     {
         using var workbook = new XLWorkbook();
