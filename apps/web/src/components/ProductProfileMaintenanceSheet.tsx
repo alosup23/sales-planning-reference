@@ -44,6 +44,21 @@ const optionFields = [
   { label: "Active Flag", fieldName: "activeFlag" },
   { label: "Order Flag", fieldName: "orderFlag" },
   { label: "Launch Month", fieldName: "launchMonth" },
+  { label: "Supplier", fieldName: "supplier" },
+  { label: "Lifecycle Stage", fieldName: "lifecycleStage" },
+  { label: "Age Stage", fieldName: "ageStage" },
+  { label: "Gender Target", fieldName: "genderTarget" },
+  { label: "Material", fieldName: "material" },
+  { label: "Pack Size", fieldName: "packSize" },
+  { label: "Size Range", fieldName: "sizeRange" },
+  { label: "Colour Family", fieldName: "colourFamily" },
+  { label: "Price Ladder Group", fieldName: "priceLadderGroup" },
+  { label: "Good Better Best Tier", fieldName: "goodBetterBestTier" },
+  { label: "Season Code", fieldName: "seasonCode" },
+  { label: "Event Code", fieldName: "eventCode" },
+  { label: "Substitute Group", fieldName: "substituteGroup" },
+  { label: "Companion Group", fieldName: "companionGroup" },
+  { label: "Replenishment Type", fieldName: "replenishmentType" },
 ] as const;
 
 function blankProduct(): ProductProfile {
@@ -74,6 +89,34 @@ function blankProduct(): ProductProfile {
     promo: "",
     ramadhanPromo: "",
     isActive: true,
+    supplier: "",
+    lifecycleStage: "",
+    ageStage: "",
+    genderTarget: "",
+    material: "",
+    packSize: "",
+    sizeRange: "",
+    colourFamily: "",
+    kviFlag: false,
+    markdownEligible: false,
+    markdownFloorPrice: null,
+    minimumMarginPct: null,
+    priceLadderGroup: "",
+    goodBetterBestTier: "",
+    seasonCode: "",
+    eventCode: "",
+    launchDate: "",
+    endOfLifeDate: "",
+    substituteGroup: "",
+    companionGroup: "",
+    replenishmentType: "",
+    leadTimeDays: null,
+    moq: null,
+    casePack: null,
+    startingInventory: null,
+    projectedStockOnHand: null,
+    sellThroughTargetPct: null,
+    weeksOfCoverTarget: null,
   };
 }
 
@@ -233,6 +276,40 @@ export function ProductProfileMaintenanceSheet({
             <LabeledInput label="Collection" value={draft.collection ?? ""} onChange={(value) => setField("collection", value)} />
             <LabeledInput label="Promo" value={draft.promo ?? ""} onChange={(value) => setField("promo", value)} />
             <LabeledInput label="Ramadhan Promo" value={draft.ramadhanPromo ?? ""} onChange={(value) => setField("ramadhanPromo", value)} />
+            <LabeledSelect label="Supplier" optionFieldName="supplier" value={draft.supplier ?? ""} options={optionsByField.get("supplier") ?? []} onChange={(value) => setField("supplier", value)} />
+            <LabeledSelect label="Lifecycle Stage" optionFieldName="lifecycleStage" value={draft.lifecycleStage ?? ""} options={optionsByField.get("lifecycleStage") ?? []} onChange={(value) => setField("lifecycleStage", value)} />
+            <LabeledSelect label="Age Stage" optionFieldName="ageStage" value={draft.ageStage ?? ""} options={optionsByField.get("ageStage") ?? []} onChange={(value) => setField("ageStage", value)} />
+            <LabeledSelect label="Gender Target" optionFieldName="genderTarget" value={draft.genderTarget ?? ""} options={optionsByField.get("genderTarget") ?? []} onChange={(value) => setField("genderTarget", value)} />
+            <LabeledSelect label="Material" optionFieldName="material" value={draft.material ?? ""} options={optionsByField.get("material") ?? []} onChange={(value) => setField("material", value)} />
+            <LabeledSelect label="Pack Size" optionFieldName="packSize" value={draft.packSize ?? ""} options={optionsByField.get("packSize") ?? []} onChange={(value) => setField("packSize", value)} />
+            <LabeledSelect label="Size Range" optionFieldName="sizeRange" value={draft.sizeRange ?? ""} options={optionsByField.get("sizeRange") ?? []} onChange={(value) => setField("sizeRange", value)} />
+            <LabeledSelect label="Colour Family" optionFieldName="colourFamily" value={draft.colourFamily ?? ""} options={optionsByField.get("colourFamily") ?? []} onChange={(value) => setField("colourFamily", value)} />
+            <LabeledSelect label="Price Ladder Group" optionFieldName="priceLadderGroup" value={draft.priceLadderGroup ?? ""} options={optionsByField.get("priceLadderGroup") ?? []} onChange={(value) => setField("priceLadderGroup", value)} />
+            <LabeledSelect label="Good Better Best Tier" optionFieldName="goodBetterBestTier" value={draft.goodBetterBestTier ?? ""} options={optionsByField.get("goodBetterBestTier") ?? []} onChange={(value) => setField("goodBetterBestTier", value)} />
+            <LabeledSelect label="Season Code" optionFieldName="seasonCode" value={draft.seasonCode ?? ""} options={optionsByField.get("seasonCode") ?? []} onChange={(value) => setField("seasonCode", value)} />
+            <LabeledSelect label="Event Code" optionFieldName="eventCode" value={draft.eventCode ?? ""} options={optionsByField.get("eventCode") ?? []} onChange={(value) => setField("eventCode", value)} />
+            <LabeledInput label="Launch Date" value={draft.launchDate ?? ""} type="date" onChange={(value) => setField("launchDate", value)} />
+            <LabeledInput label="End Of Life Date" value={draft.endOfLifeDate ?? ""} type="date" onChange={(value) => setField("endOfLifeDate", value)} />
+            <LabeledSelect label="Substitute Group" optionFieldName="substituteGroup" value={draft.substituteGroup ?? ""} options={optionsByField.get("substituteGroup") ?? []} onChange={(value) => setField("substituteGroup", value)} />
+            <LabeledSelect label="Companion Group" optionFieldName="companionGroup" value={draft.companionGroup ?? ""} options={optionsByField.get("companionGroup") ?? []} onChange={(value) => setField("companionGroup", value)} />
+            <LabeledSelect label="Replenishment Type" optionFieldName="replenishmentType" value={draft.replenishmentType ?? ""} options={optionsByField.get("replenishmentType") ?? []} onChange={(value) => setField("replenishmentType", value)} />
+            <LabeledInput label="Lead Time Days" value={draft.leadTimeDays ?? ""} type="number" step="1" onChange={(value) => setField("leadTimeDays", parseNullableInteger(value))} />
+            <LabeledInput label="MOQ" value={draft.moq ?? ""} type="number" step="1" onChange={(value) => setField("moq", parseNullableInteger(value))} />
+            <LabeledInput label="Case Pack" value={draft.casePack ?? ""} type="number" step="1" onChange={(value) => setField("casePack", parseNullableInteger(value))} />
+            <LabeledInput label="Starting Inventory" value={draft.startingInventory ?? ""} type="number" step="0.01" onChange={(value) => setField("startingInventory", parseNullableNumber(value))} />
+            <LabeledInput label="Projected Stock On Hand" value={draft.projectedStockOnHand ?? ""} type="number" step="0.01" onChange={(value) => setField("projectedStockOnHand", parseNullableNumber(value))} />
+            <LabeledInput label="Sell Through Target %" value={draft.sellThroughTargetPct ?? ""} type="number" step="0.01" onChange={(value) => setField("sellThroughTargetPct", parseNullableNumber(value))} />
+            <LabeledInput label="Weeks Of Cover Target" value={draft.weeksOfCoverTarget ?? ""} type="number" step="0.01" onChange={(value) => setField("weeksOfCoverTarget", parseNullableNumber(value))} />
+            <LabeledInput label="Markdown Floor Price" value={draft.markdownFloorPrice ?? ""} type="number" step="0.01" onChange={(value) => setField("markdownFloorPrice", parseNullableNumber(value))} />
+            <LabeledInput label="Minimum Margin %" value={draft.minimumMarginPct ?? ""} type="number" step="0.01" onChange={(value) => setField("minimumMarginPct", parseNullableNumber(value))} />
+            <label className="labeled-field checkbox-field">
+              <span>KVI Flag</span>
+              <input type="checkbox" checked={draft.kviFlag ?? false} onChange={(event) => setField("kviFlag", event.target.checked)} />
+            </label>
+            <label className="labeled-field checkbox-field">
+              <span>Markdown Eligible</span>
+              <input type="checkbox" checked={draft.markdownEligible ?? false} onChange={(event) => setField("markdownEligible", event.target.checked)} />
+            </label>
             <label className="labeled-field checkbox-field">
               <span>Active</span>
               <input type="checkbox" checked={draft.isActive} onChange={(event) => setField("isActive", event.target.checked)} />
@@ -416,4 +493,22 @@ function LabeledSelect({
       </select>
     </label>
   );
+}
+
+function parseNullableNumber(value: string): number | null {
+  if (!value.trim()) {
+    return null;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseNullableInteger(value: string): number | null {
+  if (!value.trim()) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
 }

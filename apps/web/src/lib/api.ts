@@ -1,6 +1,9 @@
 import type {
   AddRowRequest,
   AddRowResponse,
+  InventoryProfile,
+  InventoryProfileImportResponse,
+  InventoryProfileResponse,
   DeleteStoreProfileRequest,
   DeleteRowRequest,
   DeleteYearRequest,
@@ -13,6 +16,9 @@ import type {
   LockCellsRequest,
   PlanningStoreScopeResponse,
   PlanningInsightResponse,
+  PricingPolicy,
+  PricingPolicyImportResponse,
+  PricingPolicyResponse,
   ProductHierarchyResponse,
   ProductProfile,
   ProductProfileImportResponse,
@@ -20,15 +26,25 @@ import type {
   ProductProfileResponse,
   SaveScenarioRequest,
   SaveScenarioResponse,
+  SeasonalityEventProfile,
+  SeasonalityEventProfileImportResponse,
+  SeasonalityEventProfileResponse,
   StoreProfile,
   StoreProfileImportResponse,
   StoreProfileOptionsResponse,
   StoreProfileResponse,
   SplashRequest,
+  UpsertInventoryProfileRequest,
+  UpsertPricingPolicyRequest,
   UpsertStoreProfileOptionRequest,
   UpsertStoreProfileRequest,
   UpsertProductProfileOptionRequest,
   UpsertProductProfileRequest,
+  UpsertSeasonalityEventProfileRequest,
+  UpsertVendorSupplyProfileRequest,
+  VendorSupplyProfile,
+  VendorSupplyProfileImportResponse,
+  VendorSupplyProfileResponse,
 } from "./types";
 import { sampleGridData } from "./sampleGridData";
 import { authEnabled, getAccessToken } from "./auth";
@@ -458,4 +474,244 @@ export async function downloadProductProfileExport(): Promise<void> {
 
   const blob = await response.blob();
   triggerDownload(blob, extractFileName(response.headers.get("content-disposition")) ?? "product-profile-export.xlsx");
+}
+
+export async function getInventoryProfiles(searchTerm?: string, pageNumber = 1, pageSize = 50): Promise<InventoryProfileResponse> {
+  const params = new URLSearchParams({
+    pageNumber: String(pageNumber),
+    pageSize: String(pageSize),
+  });
+  if (searchTerm?.trim()) {
+    params.set("searchTerm", searchTerm.trim());
+  }
+
+  return await fetchJson<InventoryProfileResponse>(`${API_BASE_URL}/inventory-profiles?${params.toString()}`);
+}
+
+export async function postInventoryProfile(request: UpsertInventoryProfileRequest): Promise<InventoryProfile> {
+  return await fetchJson<InventoryProfile>(`${API_BASE_URL}/inventory-profiles`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function postDeleteInventoryProfile(inventoryProfileId: number): Promise<void> {
+  await fetchJson(`${API_BASE_URL}/inventory-profiles/delete`, {
+    method: "POST",
+    body: JSON.stringify({ inventoryProfileId }),
+  });
+}
+
+export async function postInactivateInventoryProfile(inventoryProfileId: number): Promise<InventoryProfile> {
+  return await fetchJson<InventoryProfile>(`${API_BASE_URL}/inventory-profiles/inactivate`, {
+    method: "POST",
+    body: JSON.stringify({ inventoryProfileId }),
+  });
+}
+
+export async function postInventoryProfileImport(file: File): Promise<InventoryProfileImportResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  return await fetchJson<InventoryProfileImportResponse>(`${API_BASE_URL}/imports/inventory-profiles`, {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function downloadInventoryProfileExport(): Promise<void> {
+  const headers = new Headers();
+  if (authEnabled) {
+    const token = await getAccessToken();
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+  }
+
+  const response = await fetch(`${API_BASE_URL}/exports/inventory-profiles`, { headers });
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+
+  const blob = await response.blob();
+  triggerDownload(blob, extractFileName(response.headers.get("content-disposition")) ?? "inventory-profile-export.xlsx");
+}
+
+export async function getPricingPolicies(searchTerm?: string, pageNumber = 1, pageSize = 50): Promise<PricingPolicyResponse> {
+  const params = new URLSearchParams({
+    pageNumber: String(pageNumber),
+    pageSize: String(pageSize),
+  });
+  if (searchTerm?.trim()) {
+    params.set("searchTerm", searchTerm.trim());
+  }
+
+  return await fetchJson<PricingPolicyResponse>(`${API_BASE_URL}/pricing-policies?${params.toString()}`);
+}
+
+export async function postPricingPolicy(request: UpsertPricingPolicyRequest): Promise<PricingPolicy> {
+  return await fetchJson<PricingPolicy>(`${API_BASE_URL}/pricing-policies`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function postDeletePricingPolicy(pricingPolicyId: number): Promise<void> {
+  await fetchJson(`${API_BASE_URL}/pricing-policies/delete`, {
+    method: "POST",
+    body: JSON.stringify({ pricingPolicyId }),
+  });
+}
+
+export async function postInactivatePricingPolicy(pricingPolicyId: number): Promise<PricingPolicy> {
+  return await fetchJson<PricingPolicy>(`${API_BASE_URL}/pricing-policies/inactivate`, {
+    method: "POST",
+    body: JSON.stringify({ pricingPolicyId }),
+  });
+}
+
+export async function postPricingPolicyImport(file: File): Promise<PricingPolicyImportResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  return await fetchJson<PricingPolicyImportResponse>(`${API_BASE_URL}/imports/pricing-policies`, {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function downloadPricingPolicyExport(): Promise<void> {
+  const headers = new Headers();
+  if (authEnabled) {
+    const token = await getAccessToken();
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+  }
+
+  const response = await fetch(`${API_BASE_URL}/exports/pricing-policies`, { headers });
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+
+  const blob = await response.blob();
+  triggerDownload(blob, extractFileName(response.headers.get("content-disposition")) ?? "pricing-policy-export.xlsx");
+}
+
+export async function getSeasonalityEventProfiles(searchTerm?: string, pageNumber = 1, pageSize = 50): Promise<SeasonalityEventProfileResponse> {
+  const params = new URLSearchParams({
+    pageNumber: String(pageNumber),
+    pageSize: String(pageSize),
+  });
+  if (searchTerm?.trim()) {
+    params.set("searchTerm", searchTerm.trim());
+  }
+
+  return await fetchJson<SeasonalityEventProfileResponse>(`${API_BASE_URL}/seasonality-event-profiles?${params.toString()}`);
+}
+
+export async function postSeasonalityEventProfile(request: UpsertSeasonalityEventProfileRequest): Promise<SeasonalityEventProfile> {
+  return await fetchJson<SeasonalityEventProfile>(`${API_BASE_URL}/seasonality-event-profiles`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function postDeleteSeasonalityEventProfile(seasonalityEventProfileId: number): Promise<void> {
+  await fetchJson(`${API_BASE_URL}/seasonality-event-profiles/delete`, {
+    method: "POST",
+    body: JSON.stringify({ seasonalityEventProfileId }),
+  });
+}
+
+export async function postInactivateSeasonalityEventProfile(seasonalityEventProfileId: number): Promise<SeasonalityEventProfile> {
+  return await fetchJson<SeasonalityEventProfile>(`${API_BASE_URL}/seasonality-event-profiles/inactivate`, {
+    method: "POST",
+    body: JSON.stringify({ seasonalityEventProfileId }),
+  });
+}
+
+export async function postSeasonalityEventProfileImport(file: File): Promise<SeasonalityEventProfileImportResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  return await fetchJson<SeasonalityEventProfileImportResponse>(`${API_BASE_URL}/imports/seasonality-event-profiles`, {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function downloadSeasonalityEventProfileExport(): Promise<void> {
+  const headers = new Headers();
+  if (authEnabled) {
+    const token = await getAccessToken();
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+  }
+
+  const response = await fetch(`${API_BASE_URL}/exports/seasonality-event-profiles`, { headers });
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+
+  const blob = await response.blob();
+  triggerDownload(blob, extractFileName(response.headers.get("content-disposition")) ?? "seasonality-events-export.xlsx");
+}
+
+export async function getVendorSupplyProfiles(searchTerm?: string, pageNumber = 1, pageSize = 50): Promise<VendorSupplyProfileResponse> {
+  const params = new URLSearchParams({
+    pageNumber: String(pageNumber),
+    pageSize: String(pageSize),
+  });
+  if (searchTerm?.trim()) {
+    params.set("searchTerm", searchTerm.trim());
+  }
+
+  return await fetchJson<VendorSupplyProfileResponse>(`${API_BASE_URL}/vendor-supply-profiles?${params.toString()}`);
+}
+
+export async function postVendorSupplyProfile(request: UpsertVendorSupplyProfileRequest): Promise<VendorSupplyProfile> {
+  return await fetchJson<VendorSupplyProfile>(`${API_BASE_URL}/vendor-supply-profiles`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function postDeleteVendorSupplyProfile(vendorSupplyProfileId: number): Promise<void> {
+  await fetchJson(`${API_BASE_URL}/vendor-supply-profiles/delete`, {
+    method: "POST",
+    body: JSON.stringify({ vendorSupplyProfileId }),
+  });
+}
+
+export async function postInactivateVendorSupplyProfile(vendorSupplyProfileId: number): Promise<VendorSupplyProfile> {
+  return await fetchJson<VendorSupplyProfile>(`${API_BASE_URL}/vendor-supply-profiles/inactivate`, {
+    method: "POST",
+    body: JSON.stringify({ vendorSupplyProfileId }),
+  });
+}
+
+export async function postVendorSupplyProfileImport(file: File): Promise<VendorSupplyProfileImportResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  return await fetchJson<VendorSupplyProfileImportResponse>(`${API_BASE_URL}/imports/vendor-supply-profiles`, {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function downloadVendorSupplyProfileExport(): Promise<void> {
+  const headers = new Headers();
+  if (authEnabled) {
+    const token = await getAccessToken();
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+  }
+
+  const response = await fetch(`${API_BASE_URL}/exports/vendor-supply-profiles`, { headers });
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+
+  const blob = await response.blob();
+  triggerDownload(blob, extractFileName(response.headers.get("content-disposition")) ?? "vendor-supply-profile-export.xlsx");
 }

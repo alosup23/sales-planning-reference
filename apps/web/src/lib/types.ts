@@ -472,6 +472,29 @@ export type InventoryProfile = {
   isActive: boolean;
 };
 
+export type InventoryProfileResponse = {
+  profiles: InventoryProfile[];
+  totalCount: number;
+  pageNumber: number;
+  pageSize: number;
+  searchTerm?: string | null;
+};
+
+export type UpsertInventoryProfileRequest = InventoryProfile;
+
+export type DeleteInventoryProfileRequest = {
+  inventoryProfileId: number;
+};
+
+export type InventoryProfileImportResponse = {
+  rowsProcessed: number;
+  recordsAdded: number;
+  recordsUpdated: number;
+  status: string;
+  exceptionFileName?: string | null;
+  exceptionWorkbookBase64?: string | null;
+};
+
 export type PricingPolicy = {
   pricingPolicyId?: number | null;
   department?: string | null;
@@ -488,6 +511,29 @@ export type PricingPolicy = {
   isActive: boolean;
 };
 
+export type PricingPolicyResponse = {
+  policies: PricingPolicy[];
+  totalCount: number;
+  pageNumber: number;
+  pageSize: number;
+  searchTerm?: string | null;
+};
+
+export type UpsertPricingPolicyRequest = PricingPolicy;
+
+export type DeletePricingPolicyRequest = {
+  pricingPolicyId: number;
+};
+
+export type PricingPolicyImportResponse = {
+  rowsProcessed: number;
+  recordsAdded: number;
+  recordsUpdated: number;
+  status: string;
+  exceptionFileName?: string | null;
+  exceptionWorkbookBase64?: string | null;
+};
+
 export type SeasonalityEventProfile = {
   seasonalityEventProfileId?: number | null;
   department?: string | null;
@@ -502,6 +548,29 @@ export type SeasonalityEventProfile = {
   isActive: boolean;
 };
 
+export type SeasonalityEventProfileResponse = {
+  profiles: SeasonalityEventProfile[];
+  totalCount: number;
+  pageNumber: number;
+  pageSize: number;
+  searchTerm?: string | null;
+};
+
+export type UpsertSeasonalityEventProfileRequest = SeasonalityEventProfile;
+
+export type DeleteSeasonalityEventProfileRequest = {
+  seasonalityEventProfileId: number;
+};
+
+export type SeasonalityEventProfileImportResponse = {
+  rowsProcessed: number;
+  recordsAdded: number;
+  recordsUpdated: number;
+  status: string;
+  exceptionFileName?: string | null;
+  exceptionWorkbookBase64?: string | null;
+};
+
 export type VendorSupplyProfile = {
   vendorSupplyProfileId?: number | null;
   supplier: string;
@@ -512,6 +581,29 @@ export type VendorSupplyProfile = {
   replenishmentType?: string | null;
   paymentTerms?: string | null;
   isActive: boolean;
+};
+
+export type VendorSupplyProfileResponse = {
+  profiles: VendorSupplyProfile[];
+  totalCount: number;
+  pageNumber: number;
+  pageSize: number;
+  searchTerm?: string | null;
+};
+
+export type UpsertVendorSupplyProfileRequest = VendorSupplyProfile;
+
+export type DeleteVendorSupplyProfileRequest = {
+  vendorSupplyProfileId: number;
+};
+
+export type VendorSupplyProfileImportResponse = {
+  rowsProcessed: number;
+  recordsAdded: number;
+  recordsUpdated: number;
+  status: string;
+  exceptionFileName?: string | null;
+  exceptionWorkbookBase64?: string | null;
 };
 
 export type UndoRedoAvailability = {

@@ -2,51 +2,79 @@ import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiRequestError,
+  downloadInventoryProfileExport,
   downloadProductProfileExport,
+  downloadPricingPolicyExport,
+  downloadSeasonalityEventProfileExport,
   downloadStoreProfileExport,
+  downloadVendorSupplyProfileExport,
   downloadBase64Workbook,
   downloadWorkbookExport,
   getGridSlice,
   getHierarchyMappings,
+  getInventoryProfiles,
   getPlanningStoreScopes,
   getPlanningInsights,
   getProductHierarchy,
   getProductProfileOptions,
   getProductProfiles,
+  getPricingPolicies,
+  getSeasonalityEventProfiles,
   getStoreProfileOptions,
   getStoreProfiles,
+  getVendorSupplyProfiles,
   postAddRow,
+  postDeleteInventoryProfile,
   postDeleteProductHierarchy,
   postDeleteProductProfile,
   postDeleteProductProfileOption,
+  postDeletePricingPolicy,
+  postDeleteSeasonalityEventProfile,
   postDeleteStoreProfile,
   postDeleteRow,
   postDeleteYear,
+  postDeleteVendorSupplyProfile,
   postEdit,
   postGenerateNextYear,
   postGrowthFactor,
   postHierarchyClass,
   postHierarchyDepartment,
   postHierarchySubclass,
+  postInactivateInventoryProfile,
   postLock,
   postProductHierarchy,
   postProductProfile,
   postProductProfileImport,
   postProductProfileOption,
   postInactivateProductProfile,
+  postInactivateSeasonalityEventProfile,
+  postInactivatePricingPolicy,
   postSave,
+  postSeasonalityEventProfile,
+  postSeasonalityEventProfileImport,
   postSplash,
+  postInventoryProfile,
+  postInventoryProfileImport,
+  postPricingPolicy,
+  postPricingPolicyImport,
   postStoreProfile,
   postStoreProfileImport,
   postStoreProfileOption,
   postDeleteStoreProfileOption,
   postInactivateStoreProfile,
+  postInactivateVendorSupplyProfile,
+  postVendorSupplyProfile,
+  postVendorSupplyProfileImport,
   postWorkbookImport,
 } from "./lib/api";
 import { SignedInUserMenu } from "./components/AuthShell";
 import { HierarchyMaintenanceSheet } from "./components/HierarchyMaintenanceSheet";
+import { InventoryProfileMaintenanceSheet } from "./components/InventoryProfileMaintenanceSheet";
+import { PricingPolicyMaintenanceSheet } from "./components/PricingPolicyMaintenanceSheet";
 import { ProductProfileMaintenanceSheet } from "./components/ProductProfileMaintenanceSheet";
+import { SeasonalityEventMaintenanceSheet } from "./components/SeasonalityEventMaintenanceSheet";
 import { StoreProfileMaintenanceSheet } from "./components/StoreProfileMaintenanceSheet";
+import { VendorSupplyProfileMaintenanceSheet } from "./components/VendorSupplyProfileMaintenanceSheet";
 import { authEnabled } from "./lib/auth";
 import type {
   AddRowResponse,
@@ -54,13 +82,21 @@ import type {
   GridMeasure,
   GridRow,
   GridSliceResponse,
+  InventoryProfile,
   PlanningStoreScope,
   PlanningInsightResponse,
+  PricingPolicy,
   ProductHierarchyCatalog,
   ProductProfile,
+  SeasonalityEventProfile,
   StoreProfile,
+  UpsertInventoryProfileRequest,
+  UpsertPricingPolicyRequest,
   UpsertProductProfileRequest,
+  UpsertSeasonalityEventProfileRequest,
   UpsertStoreProfileRequest,
+  UpsertVendorSupplyProfileRequest,
+  VendorSupplyProfile,
 } from "./lib/types";
 
 const preloadPlanningGrid = () => import("./components/PlanningGrid");
@@ -70,7 +106,16 @@ const PlanningGrid = lazy(async () => {
   return { default: module.PlanningGrid };
 });
 
-type ActiveView = "planning-store" | "planning-department" | "hierarchy" | "store-profile" | "product-profile";
+type ActiveView =
+  | "planning-store"
+  | "planning-department"
+  | "hierarchy"
+  | "store-profile"
+  | "product-profile"
+  | "inventory-profile"
+  | "pricing-policy"
+  | "seasonality-event"
+  | "vendor-supply";
 type DepartmentLayout = "department-store-class" | "department-class-store";
 
 export default function App() {
@@ -85,6 +130,14 @@ export default function App() {
   const [pendingRevealRow, setPendingRevealRow] = useState<AddRowResponse | null>(null);
   const [productSearchTerm, setProductSearchTerm] = useState("");
   const [productPageNumber, setProductPageNumber] = useState(1);
+  const [inventorySearchTerm, setInventorySearchTerm] = useState("");
+  const [inventoryPageNumber, setInventoryPageNumber] = useState(1);
+  const [pricingSearchTerm, setPricingSearchTerm] = useState("");
+  const [pricingPageNumber, setPricingPageNumber] = useState(1);
+  const [seasonalitySearchTerm, setSeasonalitySearchTerm] = useState("");
+  const [seasonalityPageNumber, setSeasonalityPageNumber] = useState(1);
+  const [vendorSearchTerm, setVendorSearchTerm] = useState("");
+  const [vendorPageNumber, setVendorPageNumber] = useState(1);
   const [selectedPlanningStoreId, setSelectedPlanningStoreId] = useState<number | null>(null);
   const [selectedDepartmentLabel, setSelectedDepartmentLabel] = useState<string | null>(null);
   const [expandedBranchNodeIds, setExpandedBranchNodeIds] = useState<number[]>([]);
@@ -139,6 +192,26 @@ export default function App() {
     queryFn: getProductHierarchy,
     enabled: activeView === "product-profile",
   });
+  const inventoryProfileQuery = useQuery({
+    queryKey: ["inventory-profiles", inventorySearchTerm, inventoryPageNumber],
+    queryFn: () => getInventoryProfiles(inventorySearchTerm, inventoryPageNumber, 50),
+    enabled: activeView === "inventory-profile",
+  });
+  const pricingPolicyQuery = useQuery({
+    queryKey: ["pricing-policies", pricingSearchTerm, pricingPageNumber],
+    queryFn: () => getPricingPolicies(pricingSearchTerm, pricingPageNumber, 50),
+    enabled: activeView === "pricing-policy",
+  });
+  const seasonalityEventQuery = useQuery({
+    queryKey: ["seasonality-event-profiles", seasonalitySearchTerm, seasonalityPageNumber],
+    queryFn: () => getSeasonalityEventProfiles(seasonalitySearchTerm, seasonalityPageNumber, 50),
+    enabled: activeView === "seasonality-event",
+  });
+  const vendorSupplyQuery = useQuery({
+    queryKey: ["vendor-supply-profiles", vendorSearchTerm, vendorPageNumber],
+    queryFn: () => getVendorSupplyProfiles(vendorSearchTerm, vendorPageNumber, 50),
+    enabled: activeView === "vendor-supply",
+  });
   const insightQuery = useQuery({
     queryKey: ["planning-insights", insightScope?.storeId, insightScope?.productNodeId, insightScope?.yearTimePeriodId],
     queryFn: () => getPlanningInsights(insightScope!.storeId, insightScope!.productNodeId, insightScope!.yearTimePeriodId),
@@ -182,6 +255,10 @@ export default function App() {
       queryClient.refetchQueries({ queryKey: ["product-profiles"], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["product-profile-options"], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["product-hierarchy"], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["inventory-profiles"], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["pricing-policies"], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["seasonality-event-profiles"], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["vendor-supply-profiles"], type: "active" }),
     ]);
   };
 
@@ -487,6 +564,190 @@ export default function App() {
     onError: (error: Error) => setLastError(error.message),
   });
 
+  const upsertInventoryProfileMutation = useMutation({
+    mutationFn: postInventoryProfile,
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const deleteInventoryProfileMutation = useMutation({
+    mutationFn: postDeleteInventoryProfile,
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const inactivateInventoryProfileMutation = useMutation({
+    mutationFn: postInactivateInventoryProfile,
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const inventoryProfileImportMutation = useMutation({
+    mutationFn: postInventoryProfileImport,
+    onSuccess: async (result) => {
+      setLastError(null);
+      if (result.exceptionWorkbookBase64 && result.exceptionFileName) {
+        downloadBase64Workbook(result.exceptionWorkbookBase64, result.exceptionFileName);
+      }
+
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const inventoryProfileExportMutation = useMutation({
+    mutationFn: downloadInventoryProfileExport,
+    onSuccess: () => setLastError(null),
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const upsertPricingPolicyMutation = useMutation({
+    mutationFn: postPricingPolicy,
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const deletePricingPolicyMutation = useMutation({
+    mutationFn: postDeletePricingPolicy,
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const inactivatePricingPolicyMutation = useMutation({
+    mutationFn: postInactivatePricingPolicy,
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const pricingPolicyImportMutation = useMutation({
+    mutationFn: postPricingPolicyImport,
+    onSuccess: async (result) => {
+      setLastError(null);
+      if (result.exceptionWorkbookBase64 && result.exceptionFileName) {
+        downloadBase64Workbook(result.exceptionWorkbookBase64, result.exceptionFileName);
+      }
+
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const pricingPolicyExportMutation = useMutation({
+    mutationFn: downloadPricingPolicyExport,
+    onSuccess: () => setLastError(null),
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const upsertSeasonalityEventMutation = useMutation({
+    mutationFn: postSeasonalityEventProfile,
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const deleteSeasonalityEventMutation = useMutation({
+    mutationFn: postDeleteSeasonalityEventProfile,
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const inactivateSeasonalityEventMutation = useMutation({
+    mutationFn: postInactivateSeasonalityEventProfile,
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const seasonalityEventImportMutation = useMutation({
+    mutationFn: postSeasonalityEventProfileImport,
+    onSuccess: async (result) => {
+      setLastError(null);
+      if (result.exceptionWorkbookBase64 && result.exceptionFileName) {
+        downloadBase64Workbook(result.exceptionWorkbookBase64, result.exceptionFileName);
+      }
+
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const seasonalityEventExportMutation = useMutation({
+    mutationFn: downloadSeasonalityEventProfileExport,
+    onSuccess: () => setLastError(null),
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const upsertVendorSupplyMutation = useMutation({
+    mutationFn: postVendorSupplyProfile,
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const deleteVendorSupplyMutation = useMutation({
+    mutationFn: postDeleteVendorSupplyProfile,
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const inactivateVendorSupplyMutation = useMutation({
+    mutationFn: postInactivateVendorSupplyProfile,
+    onSuccess: async () => {
+      setLastError(null);
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const vendorSupplyImportMutation = useMutation({
+    mutationFn: postVendorSupplyProfileImport,
+    onSuccess: async (result) => {
+      setLastError(null);
+      if (result.exceptionWorkbookBase64 && result.exceptionFileName) {
+        downloadBase64Workbook(result.exceptionWorkbookBase64, result.exceptionFileName);
+      }
+
+      await refresh();
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const vendorSupplyExportMutation = useMutation({
+    mutationFn: downloadVendorSupplyProfileExport,
+    onSuccess: () => setLastError(null),
+    onError: (error: Error) => setLastError(error.message),
+  });
+
   useEffect(() => {
     const interval = window.setInterval(() => {
       if (!hasUnsavedChanges || saveMutation.isPending) {
@@ -529,7 +790,27 @@ export default function App() {
     productProfileOptionMutation.isPending ||
     deleteProductProfileOptionMutation.isPending ||
     productHierarchyMutation.isPending ||
-    deleteProductHierarchyMutation.isPending;
+    deleteProductHierarchyMutation.isPending ||
+    upsertInventoryProfileMutation.isPending ||
+    deleteInventoryProfileMutation.isPending ||
+    inactivateInventoryProfileMutation.isPending ||
+    inventoryProfileImportMutation.isPending ||
+    inventoryProfileExportMutation.isPending ||
+    upsertPricingPolicyMutation.isPending ||
+    deletePricingPolicyMutation.isPending ||
+    inactivatePricingPolicyMutation.isPending ||
+    pricingPolicyImportMutation.isPending ||
+    pricingPolicyExportMutation.isPending ||
+    upsertSeasonalityEventMutation.isPending ||
+    deleteSeasonalityEventMutation.isPending ||
+    inactivateSeasonalityEventMutation.isPending ||
+    seasonalityEventImportMutation.isPending ||
+    seasonalityEventExportMutation.isPending ||
+    upsertVendorSupplyMutation.isPending ||
+    deleteVendorSupplyMutation.isPending ||
+    inactivateVendorSupplyMutation.isPending ||
+    vendorSupplyImportMutation.isPending ||
+    vendorSupplyExportMutation.isPending;
 
   const statusText = useMemo(() => {
     const planningViewActive = activeView === "planning-store" || activeView === "planning-department";
@@ -537,7 +818,11 @@ export default function App() {
       || (activeView === "store-profile" && storeProfileQuery.isLoading)
       || (activeView === "hierarchy" && hierarchyQuery.isLoading)
       || (activeView === "store-profile" && storeProfileOptionsQuery.isLoading)
-      || (activeView === "product-profile" && (productProfileQuery.isLoading || productProfileOptionsQuery.isLoading || productHierarchyQuery.isLoading))) {
+      || (activeView === "product-profile" && (productProfileQuery.isLoading || productProfileOptionsQuery.isLoading || productHierarchyQuery.isLoading))
+      || (activeView === "inventory-profile" && inventoryProfileQuery.isLoading)
+      || (activeView === "pricing-policy" && pricingPolicyQuery.isLoading)
+      || (activeView === "seasonality-event" && seasonalityEventQuery.isLoading)
+      || (activeView === "vendor-supply" && vendorSupplyQuery.isLoading)) {
       return "Loading planning slice...";
     }
 
@@ -551,7 +836,11 @@ export default function App() {
       (activeView === "store-profile" ? storeProfileQuery.error : null) ??
       (activeView === "hierarchy" ? hierarchyQuery.error : null) ??
       (activeView === "store-profile" ? storeProfileOptionsQuery.error : null) ??
-      (activeView === "product-profile" ? (productProfileQuery.error ?? productProfileOptionsQuery.error ?? productHierarchyQuery.error) : null);
+      (activeView === "product-profile" ? (productProfileQuery.error ?? productProfileOptionsQuery.error ?? productHierarchyQuery.error) : null) ??
+      (activeView === "inventory-profile" ? inventoryProfileQuery.error : null) ??
+      (activeView === "pricing-policy" ? pricingPolicyQuery.error : null) ??
+      (activeView === "seasonality-event" ? seasonalityEventQuery.error : null) ??
+      (activeView === "vendor-supply" ? vendorSupplyQuery.error : null);
 
     if (activeError) {
       if (activeError instanceof ApiRequestError) {
@@ -595,8 +884,16 @@ export default function App() {
         ? "Store profile maintenance ready."
         : activeView === "product-profile"
           ? "Product profile maintenance ready."
+          : activeView === "inventory-profile"
+            ? "Inventory profile maintenance ready."
+            : activeView === "pricing-policy"
+              ? "Pricing policy maintenance ready."
+              : activeView === "seasonality-event"
+                ? "Seasonality and events maintenance ready."
+                : activeView === "vendor-supply"
+                  ? "Vendor supply maintenance ready."
       : "Multi-year planning grid ready.";
-  }, [activeView, gridQuery.error, gridQuery.isFetching, gridQuery.isLoading, hasUnsavedChanges, hierarchyQuery.error, hierarchyQuery.isLoading, isMutating, lastError, lastSavedAt, planningStoreScopeQuery.error, planningStoreScopeQuery.isLoading, productHierarchyQuery.error, productHierarchyQuery.isLoading, productProfileOptionsQuery.error, productProfileOptionsQuery.isLoading, productProfileQuery.error, productProfileQuery.isLoading, storeProfileOptionsQuery.error, storeProfileOptionsQuery.isLoading, storeProfileQuery.error, storeProfileQuery.isLoading]);
+  }, [activeView, gridQuery.error, gridQuery.isFetching, gridQuery.isLoading, hasUnsavedChanges, hierarchyQuery.error, hierarchyQuery.isLoading, inventoryProfileQuery.error, inventoryProfileQuery.isLoading, isMutating, lastError, lastSavedAt, planningStoreScopeQuery.error, planningStoreScopeQuery.isLoading, pricingPolicyQuery.error, pricingPolicyQuery.isLoading, productHierarchyQuery.error, productHierarchyQuery.isLoading, productProfileOptionsQuery.error, productProfileOptionsQuery.isLoading, productProfileQuery.error, productProfileQuery.isLoading, seasonalityEventQuery.error, seasonalityEventQuery.isLoading, storeProfileOptionsQuery.error, storeProfileOptionsQuery.isLoading, storeProfileQuery.error, storeProfileQuery.isLoading, vendorSupplyQuery.error, vendorSupplyQuery.isLoading]);
 
   const storeViewData = useMemo(
     () => (gridQuery.data ? buildStoreView(gridQuery.data) : null),
@@ -628,8 +925,12 @@ export default function App() {
   const hierarchyReady = activeView !== "hierarchy" || !!hierarchyQuery.data;
   const storeProfileReady = activeView !== "store-profile" || (!!storeProfileQuery.data && !!storeProfileOptionsQuery.data);
   const productMaintenanceReady = activeView !== "product-profile" || (productProfileQuery.data && productProfileOptionsQuery.data && productHierarchyQuery.data);
+  const inventoryMaintenanceReady = activeView !== "inventory-profile" || !!inventoryProfileQuery.data;
+  const pricingMaintenanceReady = activeView !== "pricing-policy" || !!pricingPolicyQuery.data;
+  const seasonalityMaintenanceReady = activeView !== "seasonality-event" || !!seasonalityEventQuery.data;
+  const vendorSupplyMaintenanceReady = activeView !== "vendor-supply" || !!vendorSupplyQuery.data;
 
-  if (!planningReady || !hierarchyReady || !storeProfileReady || !productMaintenanceReady) {
+  if (!planningReady || !hierarchyReady || !storeProfileReady || !productMaintenanceReady || !inventoryMaintenanceReady || !pricingMaintenanceReady || !seasonalityMaintenanceReady || !vendorSupplyMaintenanceReady) {
     return (
       <main className="app-shell">
         <section className="hero">
@@ -994,6 +1295,18 @@ export default function App() {
       lifecycleState: store.lifecycleState,
       rampProfileCode: store.rampProfileCode ?? null,
       isActive: store.isActive,
+      storeClusterRole: store.storeClusterRole ?? null,
+      storeCapacitySqFt: store.storeCapacitySqFt ?? null,
+      storeFormatTier: store.storeFormatTier ?? null,
+      catchmentType: store.catchmentType ?? null,
+      demographicSegment: store.demographicSegment ?? null,
+      climateZone: store.climateZone ?? null,
+      fulfilmentEnabled: store.fulfilmentEnabled ?? false,
+      onlineFulfilmentNode: store.onlineFulfilmentNode ?? false,
+      storeOpeningSeason: store.storeOpeningSeason ?? null,
+      storeClosureDate: store.storeClosureDate ?? null,
+      refurbishmentDate: store.refurbishmentDate ?? null,
+      storePriority: store.storePriority ?? null,
     };
     await upsertStoreProfileMutation.mutateAsync(request);
   };
@@ -1052,6 +1365,42 @@ export default function App() {
     await productProfileExportMutation.mutateAsync();
   };
 
+  const handleImportInventoryProfiles = async (file: File) => {
+    await inventoryProfileImportMutation.mutateAsync(file);
+    setInventoryPageNumber(1);
+  };
+
+  const handleExportInventoryProfiles = async () => {
+    await inventoryProfileExportMutation.mutateAsync();
+  };
+
+  const handleImportPricingPolicies = async (file: File) => {
+    await pricingPolicyImportMutation.mutateAsync(file);
+    setPricingPageNumber(1);
+  };
+
+  const handleExportPricingPolicies = async () => {
+    await pricingPolicyExportMutation.mutateAsync();
+  };
+
+  const handleImportSeasonalityEvents = async (file: File) => {
+    await seasonalityEventImportMutation.mutateAsync(file);
+    setSeasonalityPageNumber(1);
+  };
+
+  const handleExportSeasonalityEvents = async () => {
+    await seasonalityEventExportMutation.mutateAsync();
+  };
+
+  const handleImportVendorSupplyProfiles = async (file: File) => {
+    await vendorSupplyImportMutation.mutateAsync(file);
+    setVendorPageNumber(1);
+  };
+
+  const handleExportVendorSupplyProfiles = async () => {
+    await vendorSupplyExportMutation.mutateAsync();
+  };
+
   const handleSaveProductHierarchy = async (row: ProductHierarchyCatalog) => {
     await productHierarchyMutation.mutateAsync(row);
   };
@@ -1062,6 +1411,90 @@ export default function App() {
     }
 
     await deleteProductHierarchyMutation.mutateAsync({ dptNo: row.dptNo, clssNo: row.clssNo });
+  };
+
+  const handleSaveInventoryProfile = async (profile: InventoryProfile) => {
+    const request: UpsertInventoryProfileRequest = { ...profile };
+    await upsertInventoryProfileMutation.mutateAsync(request);
+  };
+
+  const handleDeleteInventoryProfile = async (profile: InventoryProfile) => {
+    if (!profile.inventoryProfileId || !window.confirm(`Delete inventory row '${profile.storeCode} / ${profile.productCode}'? Deletes cannot be undone.`)) {
+      return;
+    }
+
+    await deleteInventoryProfileMutation.mutateAsync(profile.inventoryProfileId);
+  };
+
+  const handleInactivateInventoryProfile = async (profile: InventoryProfile) => {
+    if (!profile.inventoryProfileId || !window.confirm(`Inactivate inventory row '${profile.storeCode} / ${profile.productCode}'?`)) {
+      return;
+    }
+
+    await inactivateInventoryProfileMutation.mutateAsync(profile.inventoryProfileId);
+  };
+
+  const handleSavePricingPolicy = async (policy: PricingPolicy) => {
+    const request: UpsertPricingPolicyRequest = { ...policy };
+    await upsertPricingPolicyMutation.mutateAsync(request);
+  };
+
+  const handleDeletePricingPolicy = async (policy: PricingPolicy) => {
+    if (!policy.pricingPolicyId || !window.confirm("Delete this pricing policy row? Deletes cannot be undone.")) {
+      return;
+    }
+
+    await deletePricingPolicyMutation.mutateAsync(policy.pricingPolicyId);
+  };
+
+  const handleInactivatePricingPolicy = async (policy: PricingPolicy) => {
+    if (!policy.pricingPolicyId || !window.confirm("Inactivate this pricing policy row?")) {
+      return;
+    }
+
+    await inactivatePricingPolicyMutation.mutateAsync(policy.pricingPolicyId);
+  };
+
+  const handleSaveSeasonalityEvent = async (profile: SeasonalityEventProfile) => {
+    const request: UpsertSeasonalityEventProfileRequest = { ...profile };
+    await upsertSeasonalityEventMutation.mutateAsync(request);
+  };
+
+  const handleDeleteSeasonalityEvent = async (profile: SeasonalityEventProfile) => {
+    if (!profile.seasonalityEventProfileId || !window.confirm("Delete this seasonality row? Deletes cannot be undone.")) {
+      return;
+    }
+
+    await deleteSeasonalityEventMutation.mutateAsync(profile.seasonalityEventProfileId);
+  };
+
+  const handleInactivateSeasonalityEvent = async (profile: SeasonalityEventProfile) => {
+    if (!profile.seasonalityEventProfileId || !window.confirm("Inactivate this seasonality row?")) {
+      return;
+    }
+
+    await inactivateSeasonalityEventMutation.mutateAsync(profile.seasonalityEventProfileId);
+  };
+
+  const handleSaveVendorSupply = async (profile: VendorSupplyProfile) => {
+    const request: UpsertVendorSupplyProfileRequest = { ...profile };
+    await upsertVendorSupplyMutation.mutateAsync(request);
+  };
+
+  const handleDeleteVendorSupply = async (profile: VendorSupplyProfile) => {
+    if (!profile.vendorSupplyProfileId || !window.confirm(`Delete supplier row '${profile.supplier}'? Deletes cannot be undone.`)) {
+      return;
+    }
+
+    await deleteVendorSupplyMutation.mutateAsync(profile.vendorSupplyProfileId);
+  };
+
+  const handleInactivateVendorSupply = async (profile: VendorSupplyProfile) => {
+    if (!profile.vendorSupplyProfileId || !window.confirm(`Inactivate supplier row '${profile.supplier}'?`)) {
+      return;
+    }
+
+    await inactivateVendorSupplyMutation.mutateAsync(profile.vendorSupplyProfileId);
   };
 
   return (
@@ -1091,6 +1524,10 @@ export default function App() {
             <option value="hierarchy">Hierarchy Maintenance</option>
             <option value="store-profile">Store Profile Maintenance</option>
             <option value="product-profile">Product Profile Maintenance</option>
+            <option value="inventory-profile">Inventory Profile Maintenance</option>
+            <option value="pricing-policy">Pricing Policy Maintenance</option>
+            <option value="seasonality-event">Seasonality & Events Maintenance</option>
+            <option value="vendor-supply">Vendor Supply Maintenance</option>
           </select>
         </label>
         {activeView === "planning-store" ? (
@@ -1213,6 +1650,78 @@ export default function App() {
           }}
           onSaveHierarchy={handleSaveProductHierarchy}
           onDeleteHierarchy={handleDeleteProductHierarchy}
+        />
+      ) : activeView === "inventory-profile" ? (
+        <InventoryProfileMaintenanceSheet
+          profiles={inventoryProfileQuery.data!.profiles}
+          totalCount={inventoryProfileQuery.data!.totalCount}
+          pageNumber={inventoryProfileQuery.data!.pageNumber}
+          pageSize={inventoryProfileQuery.data!.pageSize}
+          searchTerm={inventorySearchTerm}
+          onSearchChange={(value) => {
+            setInventorySearchTerm(value);
+            setInventoryPageNumber(1);
+          }}
+          onPageChange={setInventoryPageNumber}
+          onSave={handleSaveInventoryProfile}
+          onDelete={handleDeleteInventoryProfile}
+          onInactivate={handleInactivateInventoryProfile}
+          onImport={handleImportInventoryProfiles}
+          onExport={handleExportInventoryProfiles}
+        />
+      ) : activeView === "pricing-policy" ? (
+        <PricingPolicyMaintenanceSheet
+          policies={pricingPolicyQuery.data!.policies}
+          totalCount={pricingPolicyQuery.data!.totalCount}
+          pageNumber={pricingPolicyQuery.data!.pageNumber}
+          pageSize={pricingPolicyQuery.data!.pageSize}
+          searchTerm={pricingSearchTerm}
+          onSearchChange={(value) => {
+            setPricingSearchTerm(value);
+            setPricingPageNumber(1);
+          }}
+          onPageChange={setPricingPageNumber}
+          onSave={handleSavePricingPolicy}
+          onDelete={handleDeletePricingPolicy}
+          onInactivate={handleInactivatePricingPolicy}
+          onImport={handleImportPricingPolicies}
+          onExport={handleExportPricingPolicies}
+        />
+      ) : activeView === "seasonality-event" ? (
+        <SeasonalityEventMaintenanceSheet
+          profiles={seasonalityEventQuery.data!.profiles}
+          totalCount={seasonalityEventQuery.data!.totalCount}
+          pageNumber={seasonalityEventQuery.data!.pageNumber}
+          pageSize={seasonalityEventQuery.data!.pageSize}
+          searchTerm={seasonalitySearchTerm}
+          onSearchChange={(value) => {
+            setSeasonalitySearchTerm(value);
+            setSeasonalityPageNumber(1);
+          }}
+          onPageChange={setSeasonalityPageNumber}
+          onSave={handleSaveSeasonalityEvent}
+          onDelete={handleDeleteSeasonalityEvent}
+          onInactivate={handleInactivateSeasonalityEvent}
+          onImport={handleImportSeasonalityEvents}
+          onExport={handleExportSeasonalityEvents}
+        />
+      ) : activeView === "vendor-supply" ? (
+        <VendorSupplyProfileMaintenanceSheet
+          profiles={vendorSupplyQuery.data!.profiles}
+          totalCount={vendorSupplyQuery.data!.totalCount}
+          pageNumber={vendorSupplyQuery.data!.pageNumber}
+          pageSize={vendorSupplyQuery.data!.pageSize}
+          searchTerm={vendorSearchTerm}
+          onSearchChange={(value) => {
+            setVendorSearchTerm(value);
+            setVendorPageNumber(1);
+          }}
+          onPageChange={setVendorPageNumber}
+          onSave={handleSaveVendorSupply}
+          onDelete={handleDeleteVendorSupply}
+          onInactivate={handleInactivateVendorSupply}
+          onImport={handleImportVendorSupplyProfiles}
+          onExport={handleExportVendorSupplyProfiles}
         />
       ) : (
         <div className="planning-workspace">

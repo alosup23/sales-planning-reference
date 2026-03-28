@@ -285,6 +285,21 @@ public sealed class PlanningController : ControllerBase
         return _planningService.InactivateInventoryProfileAsync(request, cancellationToken);
     }
 
+    [HttpPost("imports/inventory-profiles")]
+    [RequestSizeLimit(10_000_000)]
+    public async Task<InventoryProfileImportResponse> ImportInventoryProfiles([FromForm] IFormFile file, CancellationToken cancellationToken)
+    {
+        await using var stream = file.OpenReadStream();
+        return await _planningService.ImportInventoryProfilesAsync(stream, file.FileName, cancellationToken);
+    }
+
+    [HttpGet("exports/inventory-profiles")]
+    public async Task<IActionResult> ExportInventoryProfiles(CancellationToken cancellationToken = default)
+    {
+        var result = await _planningService.ExportInventoryProfilesAsync(cancellationToken);
+        return File(result.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", result.FileName);
+    }
+
     [HttpGet("pricing-policies")]
     public Task<PricingPolicyResponse> GetPricingPolicies(
         [FromQuery] string? searchTerm,
@@ -311,6 +326,21 @@ public sealed class PlanningController : ControllerBase
     public Task<PricingPolicyDto> InactivatePricingPolicy([FromBody] InactivatePricingPolicyRequest request, CancellationToken cancellationToken)
     {
         return _planningService.InactivatePricingPolicyAsync(request, cancellationToken);
+    }
+
+    [HttpPost("imports/pricing-policies")]
+    [RequestSizeLimit(10_000_000)]
+    public async Task<PricingPolicyImportResponse> ImportPricingPolicies([FromForm] IFormFile file, CancellationToken cancellationToken)
+    {
+        await using var stream = file.OpenReadStream();
+        return await _planningService.ImportPricingPoliciesAsync(stream, file.FileName, cancellationToken);
+    }
+
+    [HttpGet("exports/pricing-policies")]
+    public async Task<IActionResult> ExportPricingPolicies(CancellationToken cancellationToken = default)
+    {
+        var result = await _planningService.ExportPricingPoliciesAsync(cancellationToken);
+        return File(result.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", result.FileName);
     }
 
     [HttpGet("seasonality-event-profiles")]
@@ -341,6 +371,21 @@ public sealed class PlanningController : ControllerBase
         return _planningService.InactivateSeasonalityEventProfileAsync(request, cancellationToken);
     }
 
+    [HttpPost("imports/seasonality-event-profiles")]
+    [RequestSizeLimit(10_000_000)]
+    public async Task<SeasonalityEventProfileImportResponse> ImportSeasonalityEventProfiles([FromForm] IFormFile file, CancellationToken cancellationToken)
+    {
+        await using var stream = file.OpenReadStream();
+        return await _planningService.ImportSeasonalityEventProfilesAsync(stream, file.FileName, cancellationToken);
+    }
+
+    [HttpGet("exports/seasonality-event-profiles")]
+    public async Task<IActionResult> ExportSeasonalityEventProfiles(CancellationToken cancellationToken = default)
+    {
+        var result = await _planningService.ExportSeasonalityEventProfilesAsync(cancellationToken);
+        return File(result.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", result.FileName);
+    }
+
     [HttpGet("vendor-supply-profiles")]
     public Task<VendorSupplyProfileResponse> GetVendorSupplyProfiles(
         [FromQuery] string? searchTerm,
@@ -367,6 +412,21 @@ public sealed class PlanningController : ControllerBase
     public Task<VendorSupplyProfileDto> InactivateVendorSupplyProfile([FromBody] InactivateVendorSupplyProfileRequest request, CancellationToken cancellationToken)
     {
         return _planningService.InactivateVendorSupplyProfileAsync(request, cancellationToken);
+    }
+
+    [HttpPost("imports/vendor-supply-profiles")]
+    [RequestSizeLimit(10_000_000)]
+    public async Task<VendorSupplyProfileImportResponse> ImportVendorSupplyProfiles([FromForm] IFormFile file, CancellationToken cancellationToken)
+    {
+        await using var stream = file.OpenReadStream();
+        return await _planningService.ImportVendorSupplyProfilesAsync(stream, file.FileName, cancellationToken);
+    }
+
+    [HttpGet("exports/vendor-supply-profiles")]
+    public async Task<IActionResult> ExportVendorSupplyProfiles(CancellationToken cancellationToken = default)
+    {
+        var result = await _planningService.ExportVendorSupplyProfilesAsync(cancellationToken);
+        return File(result.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", result.FileName);
     }
 
     [HttpPost("product-hierarchy/delete")]

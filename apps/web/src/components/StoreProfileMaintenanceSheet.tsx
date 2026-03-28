@@ -23,6 +23,13 @@ const optionFields: Array<{ key: keyof StoreProfile; label: string; optionFieldN
   { key: "buildingStatus", label: "Building Status", optionFieldName: "buildingStatus" },
   { key: "lifecycleState", label: "Lifecycle State", optionFieldName: "lifecycleState" },
   { key: "rampProfileCode", label: "Ramp Profile", optionFieldName: "rampProfileCode" },
+  { key: "storeClusterRole", label: "Store Cluster Role", optionFieldName: "storeClusterRole" },
+  { key: "storeFormatTier", label: "Store Format Tier", optionFieldName: "storeFormatTier" },
+  { key: "catchmentType", label: "Catchment Type", optionFieldName: "catchmentType" },
+  { key: "demographicSegment", label: "Demographic Segment", optionFieldName: "demographicSegment" },
+  { key: "climateZone", label: "Climate Zone", optionFieldName: "climateZone" },
+  { key: "storeOpeningSeason", label: "Store Opening Season", optionFieldName: "storeOpeningSeason" },
+  { key: "storePriority", label: "Store Priority", optionFieldName: "storePriority" },
 ];
 
 function blankStore(): StoreProfile {
@@ -49,6 +56,18 @@ function blankStore(): StoreProfile {
     lifecycleState: "active",
     rampProfileCode: "",
     isActive: true,
+    storeClusterRole: "",
+    storeCapacitySqFt: null,
+    storeFormatTier: "",
+    catchmentType: "",
+    demographicSegment: "",
+    climateZone: "",
+    fulfilmentEnabled: false,
+    onlineFulfilmentNode: false,
+    storeOpeningSeason: "",
+    storeClosureDate: "",
+    refurbishmentDate: "",
+    storePriority: "",
   };
 }
 
@@ -161,6 +180,24 @@ export function StoreProfileMaintenanceSheet({
             <LabeledInput label="Rental" value={draft.rental ?? ""} type="number" step="0.01" onChange={(value) => setField("rental", parseNullableNumber(value))} />
             <LabeledSelect label="Lifecycle State" optionFieldName="lifecycleState" value={draft.lifecycleState} options={optionsByField.get("lifecycleState") ?? []} onChange={(value) => setField("lifecycleState", value)} />
             <LabeledSelect label="Ramp Profile" optionFieldName="rampProfileCode" value={draft.rampProfileCode ?? ""} options={optionsByField.get("rampProfileCode") ?? []} onChange={(value) => setField("rampProfileCode", value)} />
+            <LabeledSelect label="Store Cluster Role" optionFieldName="storeClusterRole" value={draft.storeClusterRole ?? ""} options={optionsByField.get("storeClusterRole") ?? []} onChange={(value) => setField("storeClusterRole", value)} />
+            <LabeledInput label="Store Capacity SqFt" value={draft.storeCapacitySqFt ?? ""} type="number" step="0.01" onChange={(value) => setField("storeCapacitySqFt", parseNullableNumber(value))} />
+            <LabeledSelect label="Store Format Tier" optionFieldName="storeFormatTier" value={draft.storeFormatTier ?? ""} options={optionsByField.get("storeFormatTier") ?? []} onChange={(value) => setField("storeFormatTier", value)} />
+            <LabeledSelect label="Catchment Type" optionFieldName="catchmentType" value={draft.catchmentType ?? ""} options={optionsByField.get("catchmentType") ?? []} onChange={(value) => setField("catchmentType", value)} />
+            <LabeledSelect label="Demographic Segment" optionFieldName="demographicSegment" value={draft.demographicSegment ?? ""} options={optionsByField.get("demographicSegment") ?? []} onChange={(value) => setField("demographicSegment", value)} />
+            <LabeledSelect label="Climate Zone" optionFieldName="climateZone" value={draft.climateZone ?? ""} options={optionsByField.get("climateZone") ?? []} onChange={(value) => setField("climateZone", value)} />
+            <LabeledSelect label="Store Opening Season" optionFieldName="storeOpeningSeason" value={draft.storeOpeningSeason ?? ""} options={optionsByField.get("storeOpeningSeason") ?? []} onChange={(value) => setField("storeOpeningSeason", value)} />
+            <LabeledInput label="Store Closure Date" value={draft.storeClosureDate ?? ""} type="date" onChange={(value) => setField("storeClosureDate", value)} />
+            <LabeledInput label="Refurbishment Date" value={draft.refurbishmentDate ?? ""} type="date" onChange={(value) => setField("refurbishmentDate", value)} />
+            <LabeledSelect label="Store Priority" optionFieldName="storePriority" value={draft.storePriority ?? ""} options={optionsByField.get("storePriority") ?? []} onChange={(value) => setField("storePriority", value)} />
+            <label className="labeled-field checkbox-field">
+              <span>Fulfilment Enabled</span>
+              <input type="checkbox" checked={draft.fulfilmentEnabled ?? false} onChange={(event) => setField("fulfilmentEnabled", event.target.checked)} />
+            </label>
+            <label className="labeled-field checkbox-field">
+              <span>Online Fulfilment Node</span>
+              <input type="checkbox" checked={draft.onlineFulfilmentNode ?? false} onChange={(event) => setField("onlineFulfilmentNode", event.target.checked)} />
+            </label>
             <label className="labeled-field checkbox-field">
               <span>Active</span>
               <input type="checkbox" checked={draft.isActive} onChange={(event) => setField("isActive", event.target.checked)} />
