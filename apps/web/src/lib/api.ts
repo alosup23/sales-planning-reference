@@ -124,8 +124,17 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     throw new ApiRequestError(detail, response.status, code);
   }
 
+  if (response.status === 204 || response.status === 205) {
+    return undefined as T;
+  }
+
   try {
-    return (await response.json()) as T;
+    const rawBody = await response.text();
+    if (!rawBody.trim()) {
+      return undefined as T;
+    }
+
+    return JSON.parse(rawBody) as T;
   } catch {
     throw new ApiRequestError("The planning API returned an invalid response.", response.status, "invalid-response");
   }
