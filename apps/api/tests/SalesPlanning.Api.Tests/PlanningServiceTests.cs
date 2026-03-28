@@ -478,6 +478,130 @@ public sealed class PlanningServiceTests
         Assert.Contains(result.Options, option => option.FieldName == "clusterLabel" && option.Value == "Baby Mall" && option.IsActive);
     }
 
+    [Fact]
+    public async Task InventoryProfileImportExport_RoundTripsWorkbookShape()
+    {
+        using var workbook = new XLWorkbook();
+        var sheet = workbook.AddWorksheet("Inventory Profile");
+        WriteInventoryProfileHeader(sheet);
+        WriteRow(sheet, 2, "MKDW", "SKU-001", "125", "12", "5", "108", "20", "6.5", "55", "Active");
+
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        stream.Position = 0;
+
+        var importResult = await _service.ImportInventoryProfilesAsync(stream, "inventory-profile.xlsx", CancellationToken.None);
+        var response = await _service.GetInventoryProfilesAsync(null, 1, 50, CancellationToken.None);
+        var imported = response.Profiles.Single(profile => profile.StoreCode == "MKDW" && profile.ProductCode == "SKU-001");
+
+        Assert.Equal("applied", importResult.Status);
+        Assert.Equal(1, importResult.RowsProcessed);
+        Assert.Equal(125m, imported.StartingInventory);
+        Assert.Equal(108m, imported.ProjectedStockOnHand);
+
+        var export = await _service.ExportInventoryProfilesAsync(CancellationToken.None);
+        using var exportStream = new MemoryStream(export.Content);
+        using var exportedWorkbook = new XLWorkbook(exportStream);
+        var exportSheet = exportedWorkbook.Worksheet("Inventory Profile");
+        Assert.Equal("CompCode", exportSheet.Cell(1, 1).GetString());
+        Assert.Equal("Product Code", exportSheet.Cell(1, 2).GetString());
+        Assert.Equal("MKDW", exportSheet.Cell(2, 1).GetString());
+        Assert.Equal("SKU-001", exportSheet.Cell(2, 2).GetString());
+    }
+
+    [Fact]
+    public async Task PricingPolicyImportExport_RoundTripsWorkbookShape()
+    {
+        using var workbook = new XLWorkbook();
+        var sheet = workbook.AddWorksheet("Pricing Policy");
+        WritePricingPolicyHeader(sheet);
+        WriteRow(sheet, 2, "Feeding", "Bottles", "Glass Bottles", "Tommee Tippee", "Premium", "29.90", "49.90", "24.90", "35", "true", "true", "Active");
+
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        stream.Position = 0;
+
+        var importResult = await _service.ImportPricingPoliciesAsync(stream, "pricing-policy.xlsx", CancellationToken.None);
+        var response = await _service.GetPricingPoliciesAsync(null, 1, 50, CancellationToken.None);
+        var imported = response.Policies.Single(policy => policy.Department == "Feeding" && policy.Class == "Bottles" && policy.Subclass == "Glass Bottles");
+
+        Assert.Equal("applied", importResult.Status);
+        Assert.Equal(1, importResult.RowsProcessed);
+        Assert.Equal(29.90m, imported.MinPrice);
+        Assert.True(imported.KviFlag);
+
+        var export = await _service.ExportPricingPoliciesAsync(CancellationToken.None);
+        using var exportStream = new MemoryStream(export.Content);
+        using var exportedWorkbook = new XLWorkbook(exportStream);
+        var exportSheet = exportedWorkbook.Worksheet("Pricing Policy");
+        Assert.Equal("Department", exportSheet.Cell(1, 1).GetString());
+        Assert.Equal("Price Ladder Group", exportSheet.Cell(1, 5).GetString());
+        Assert.Equal("Feeding", exportSheet.Cell(2, 1).GetString());
+    }
+
+    [Fact]
+    public async Task SeasonalityEventImportExport_RoundTripsWorkbookShape()
+    {
+        using var workbook = new XLWorkbook();
+        var sheet = workbook.AddWorksheet("Seasonality & Events");
+        WriteSeasonalityEventHeader(sheet);
+        WriteRow(sheet, 2, "Feeding", "Bottles", "Glass Bottles", "RAMADHAN", "MEGA-SALE", "3", "1.35", "Mar Wk1-Wk2", "true", "Active");
+
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        stream.Position = 0;
+
+        var importResult = await _service.ImportSeasonalityEventProfilesAsync(stream, "seasonality-events.xlsx", CancellationToken.None);
+        var response = await _service.GetSeasonalityEventProfilesAsync(null, 1, 50, CancellationToken.None);
+        var imported = response.Profiles.Single(profile =>
+            profile.Department == "Feeding"
+            && profile.Class == "Bottles"
+            && profile.Subclass == "Glass Bottles"
+            && profile.Month == 3);
+
+        Assert.Equal("applied", importResult.Status);
+        Assert.Equal(1, importResult.RowsProcessed);
+        Assert.Equal(1.35m, imported.Weight);
+        Assert.True(imported.PeakFlag);
+
+        var export = await _service.ExportSeasonalityEventProfilesAsync(CancellationToken.None);
+        using var exportStream = new MemoryStream(export.Content);
+        using var exportedWorkbook = new XLWorkbook(exportStream);
+        var exportSheet = exportedWorkbook.Worksheet("Seasonality & Events");
+        Assert.Equal("Season Code", exportSheet.Cell(1, 4).GetString());
+        Assert.Equal("MEGA-SALE", exportSheet.Cell(2, 5).GetString());
+    }
+
+    [Fact]
+    public async Task VendorSupplyImportExport_RoundTripsWorkbookShape()
+    {
+        using var workbook = new XLWorkbook();
+        var sheet = workbook.AddWorksheet("Vendor Supply Profile");
+        WriteVendorSupplyHeader(sheet);
+        WriteRow(sheet, 2, "Pigeon", "Pigeon", "45", "100", "12", "Auto Replenish", "Net 30", "Active");
+
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        stream.Position = 0;
+
+        var importResult = await _service.ImportVendorSupplyProfilesAsync(stream, "vendor-supply.xlsx", CancellationToken.None);
+        var response = await _service.GetVendorSupplyProfilesAsync(null, 1, 50, CancellationToken.None);
+        var imported = response.Profiles.Single(profile => profile.Supplier == "Pigeon" && profile.Brand == "Pigeon");
+
+        Assert.Equal("applied", importResult.Status);
+        Assert.Equal(1, importResult.RowsProcessed);
+        Assert.Equal(45, imported.LeadTimeDays);
+        Assert.Equal("Auto Replenish", imported.ReplenishmentType);
+
+        var export = await _service.ExportVendorSupplyProfilesAsync(CancellationToken.None);
+        using var exportStream = new MemoryStream(export.Content);
+        using var exportedWorkbook = new XLWorkbook(exportStream);
+        var exportSheet = exportedWorkbook.Worksheet("Vendor Supply Profile");
+        Assert.Equal("Supplier", exportSheet.Cell(1, 1).GetString());
+        Assert.Equal("Payment Terms", exportSheet.Cell(1, 7).GetString());
+        Assert.Equal("Pigeon", exportSheet.Cell(2, 1).GetString());
+    }
+
     private static void WriteImportHeader(IXLWorksheet sheet, bool includeRemark = false)
     {
         sheet.Cell(1, 1).Value = "Store";
@@ -592,6 +716,34 @@ public sealed class PlanningServiceTests
         for (var index = 0; index < values.Length; index += 1)
         {
             sheet.Cell(rowIndex, index + 1).Value = values[index].ToString();
+        }
+    }
+
+    private static void WriteInventoryProfileHeader(IXLWorksheet sheet) =>
+        WriteHeaderRow(sheet, "CompCode", "Product Code", "Starting Inventory", "Inbound Qty", "Reserved Qty", "Projected Stock On Hand", "Safety Stock", "Weeks Of Cover Target", "Sell Through Target Pct", "Status");
+
+    private static void WritePricingPolicyHeader(IXLWorksheet sheet) =>
+        WriteHeaderRow(sheet, "Department", "Class", "Subclass", "Brand", "Price Ladder Group", "Min Price", "Max Price", "Markdown Floor Price", "Minimum Margin Pct", "KVI Flag", "Markdown Eligible", "Status");
+
+    private static void WriteSeasonalityEventHeader(IXLWorksheet sheet) =>
+        WriteHeaderRow(sheet, "Department", "Class", "Subclass", "Season Code", "Event Code", "Month", "Weight", "Promo Window", "Peak Flag", "Status");
+
+    private static void WriteVendorSupplyHeader(IXLWorksheet sheet) =>
+        WriteHeaderRow(sheet, "Supplier", "Brand", "Lead Time Days", "MOQ", "Case Pack", "Replenishment Type", "Payment Terms", "Status");
+
+    private static void WriteHeaderRow(IXLWorksheet sheet, params string[] headers)
+    {
+        for (var index = 0; index < headers.Length; index += 1)
+        {
+            sheet.Cell(1, index + 1).Value = headers[index];
+        }
+    }
+
+    private static void WriteRow(IXLWorksheet sheet, int rowIndex, params string[] values)
+    {
+        for (var index = 0; index < values.Length; index += 1)
+        {
+            sheet.Cell(rowIndex, index + 1).Value = values[index];
         }
     }
 }

@@ -25,7 +25,7 @@ async function expandYears(page: import("@playwright/test").Page) {
   await page.getByRole("button", { name: "Expand Years" }).click();
 }
 
-async function selectWorkspace(page: import("@playwright/test").Page, value: "planning-store" | "planning-department" | "hierarchy" | "store-profile") {
+async function selectWorkspace(page: import("@playwright/test").Page, value: string) {
   await page.locator(".view-menu-bar select").first().selectOption(value);
 }
 
@@ -357,6 +357,55 @@ test("supports All Stores scope and keeps department expansion independent from 
   await expectReady(page);
   await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store A" }).first()).toBeVisible();
   await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store B" }).first()).toBeVisible();
+});
+
+test("renders every Phase 1 maintenance workspace with core CRUD and import export affordances", async ({ page }) => {
+  await openGrid(page);
+
+  await selectWorkspace(page, "hierarchy");
+  await expectReady(page);
+  await expect(page.getByText("Department / Class / Subclass Mapping")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add Department" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add Class" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add Subclass" })).toBeVisible();
+
+  await selectWorkspace(page, "store-profile");
+  await expectReady(page);
+  await expect(page.getByRole("heading", { name: "Store Profile" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New Store" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Export Store Profiles" })).toBeVisible();
+  await expect(page.getByText("Option maintenance")).toBeVisible();
+
+  await selectWorkspace(page, "product-profile");
+  await expectReady(page);
+  await expect(page.getByRole("heading", { name: "Product Profile" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Export Product Profiles" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save Hierarchy Row" })).toBeVisible();
+  await expect(page.getByText("Option maintenance")).toBeVisible();
+
+  await selectWorkspace(page, "inventory-profile");
+  await expectReady(page);
+  await expect(page.getByRole("heading", { name: "Inventory Profile" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New Inventory Row" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Export Inventory Profile" })).toBeVisible();
+
+  await selectWorkspace(page, "pricing-policy");
+  await expectReady(page);
+  await expect(page.getByRole("heading", { name: "Pricing Policy" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New Policy" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Export Pricing Policy" })).toBeVisible();
+
+  await selectWorkspace(page, "seasonality-event");
+  await expectReady(page);
+  await expect(page.getByRole("heading", { name: "Seasonality & Events" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New Seasonality Row" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Export Seasonality & Events" })).toBeVisible();
+
+  await selectWorkspace(page, "vendor-supply");
+  await expectReady(page);
+  await expect(page.getByRole("heading", { name: "Vendor Supply Profile" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New Vendor Row" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Export Vendor Supply Profile" })).toBeVisible();
 });
 
 test("editing a visible Sales Revenue month persists the updated value", async ({ page }) => {
