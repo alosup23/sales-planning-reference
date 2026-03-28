@@ -9,5 +9,7 @@ public sealed record LockCellsRequest(
 
 public sealed record LockCoordinateDto(long StoreId, long ProductNodeId, long TimePeriodId);
 
-public sealed record LockCellsResponse(int UpdatedCellCount, bool Locked);
-
+public sealed record LockCellsResponse(
+    int UpdatedCellCount,
+    bool Locked,
+    UndoRedoAvailabilityDto Availability);

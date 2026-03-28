@@ -14,5 +14,9 @@ public sealed record EditCellRequest(
     string EditMode,
     long? RowVersion);
 
-public sealed record EditCellsResponse(long ActionId, int UpdatedCellCount, string Status);
-
+public sealed record EditCellsResponse(
+    long ActionId,
+    int UpdatedCellCount,
+    string Status,
+    PlanningGridPatchDto? Patch,
+    UndoRedoAvailabilityDto Availability);

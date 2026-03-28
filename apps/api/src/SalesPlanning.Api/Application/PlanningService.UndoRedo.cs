@@ -8,6 +8,31 @@ public sealed partial class PlanningService
 {
     private const int UndoRedoLimit = 30;
 
+    private static PlanningGridPatchDto? BuildGridPatch(long scenarioVersionId, IReadOnlyList<PlanningCommandCellDelta> deltas)
+    {
+        if (deltas.Count == 0)
+        {
+            return null;
+        }
+
+        return new PlanningGridPatchDto(
+            scenarioVersionId,
+            deltas.Select(delta => new GridCellPatchDto(
+                    delta.Coordinate.StoreId,
+                    delta.Coordinate.ProductNodeId,
+                    delta.Coordinate.TimePeriodId,
+                    delta.Coordinate.MeasureId,
+                    new GridCellDto(
+                        delta.NewState.EffectiveValue,
+                        delta.NewState.GrowthFactor,
+                        delta.NewState.IsLocked,
+                        string.Equals(delta.NewState.CellKind, "calculated", StringComparison.OrdinalIgnoreCase),
+                        delta.NewState.OverrideValue is not null,
+                        delta.NewState.RowVersion,
+                        delta.NewState.CellKind)))
+                .ToList());
+    }
+
     private static IReadOnlyList<PlanningCellDeltaAudit> BuildAuditDeltas(IReadOnlyList<PlanningCommandCellDelta> deltas)
     {
         return deltas

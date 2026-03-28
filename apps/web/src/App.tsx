@@ -79,10 +79,12 @@ import { SeasonalityEventMaintenanceSheet } from "./components/SeasonalityEventM
 import { StoreProfileMaintenanceSheet } from "./components/StoreProfileMaintenanceSheet";
 import { VendorSupplyProfileMaintenanceSheet } from "./components/VendorSupplyProfileMaintenanceSheet";
 import { authEnabled } from "./lib/auth";
+import { applyPlanningGridPatch } from "./lib/gridPatch";
 import type {
   AddRowResponse,
   GridCell,
   GridMeasure,
+  PlanningGridPatch,
   GridRow,
   GridSliceResponse,
   InventoryProfile,
@@ -146,13 +148,19 @@ export default function App() {
   const [selectedDepartmentLabel, setSelectedDepartmentLabel] = useState<string | null>(null);
   const [expandedBranchNodeIds, setExpandedBranchNodeIds] = useState<number[]>([]);
   const [expandAllBranches, setExpandAllBranches] = useState(false);
+  const gridSliceQueryKey = useMemo(
+    () => ["grid-slice", 1, activeView, selectedPlanningStoreId, selectedDepartmentLabel, expandedBranchNodeIds.join(","), expandAllBranches ? "all" : "branch"] as const,
+    [activeView, expandAllBranches, expandedBranchNodeIds, selectedDepartmentLabel, selectedPlanningStoreId],
+  );
+  const planningStoreScopesQueryKey = ["planning-store-scopes"] as const;
+  const undoRedoQueryKey = ["undo-redo-availability", 1] as const;
 
   useEffect(() => {
     void preloadPlanningGrid();
   }, []);
 
   const gridQuery = useQuery({
-    queryKey: ["grid-slice", 1, activeView, selectedPlanningStoreId, selectedDepartmentLabel, expandedBranchNodeIds.join(","), expandAllBranches ? "all" : "branch"],
+    queryKey: gridSliceQueryKey,
     queryFn: () => getGridSlice({
       selectedStoreId: activeView === "planning-store" ? selectedPlanningStoreId : null,
       selectedDepartmentLabel: activeView === "planning-department" ? selectedDepartmentLabel : null,
@@ -163,12 +171,12 @@ export default function App() {
     placeholderData: (previousData) => previousData,
   });
   const planningStoreScopeQuery = useQuery({
-    queryKey: ["planning-store-scopes"],
+    queryKey: planningStoreScopesQueryKey,
     queryFn: getPlanningStoreScopes,
     enabled: activeView === "planning-store" || activeView === "planning-department",
   });
   const undoRedoAvailabilityQuery = useQuery({
-    queryKey: ["undo-redo-availability", 1],
+    queryKey: undoRedoQueryKey,
     queryFn: () => getUndoRedoAvailability(1),
     enabled: activeView === "planning-store" || activeView === "planning-department",
   });
@@ -255,6 +263,82 @@ export default function App() {
     setSelectedYearId(firstYear?.timePeriodId ?? null);
   }, [gridQuery.data, selectedYearId]);
 
+  const applyPatchToVisiblePlanningSlice = (patch?: PlanningGridPatch | null) => {
+    if (!patch) {
+      return false;
+    }
+
+    let didChange = false;
+    queryClient.setQueryData<GridSliceResponse | undefined>(gridSliceQueryKey, (current) => {
+      const next = applyPlanningGridPatch(current, patch);
+      didChange = next !== current;
+      return next;
+    });
+
+    return didChange;
+  };
+
+  const syncUndoRedoAvailability = (availability?: UndoRedoAvailability | null) => {
+    if (!availability) {
+      return;
+    }
+
+    queryClient.setQueryData<UndoRedoAvailability>(undoRedoQueryKey, availability);
+  };
+
+  const refreshPlanningQueries = async ({
+    includeStoreScopes = false,
+    includeUndoRedo = true,
+    includeInsights = true,
+    includeGrid = true,
+  }: {
+    includeStoreScopes?: boolean;
+    includeUndoRedo?: boolean;
+    includeInsights?: boolean;
+    includeGrid?: boolean;
+  } = {}) => {
+    const tasks: Array<Promise<unknown>> = [];
+
+    if (includeGrid) {
+      tasks.push(queryClient.refetchQueries({ queryKey: gridSliceQueryKey, exact: true, type: "active" }));
+    }
+
+    if (includeStoreScopes) {
+      tasks.push(queryClient.refetchQueries({ queryKey: planningStoreScopesQueryKey, exact: true, type: "active" }));
+    }
+
+    if (includeUndoRedo) {
+      tasks.push(queryClient.refetchQueries({ queryKey: undoRedoQueryKey, exact: true, type: "active" }));
+    }
+
+    if (includeInsights) {
+      tasks.push(queryClient.refetchQueries({ queryKey: ["planning-insights"], type: "active" }));
+    }
+
+    await Promise.all(tasks);
+  };
+
+  const applyPlanningCommandResult = async (
+    result: {
+      patch?: PlanningGridPatch | null;
+      availability?: UndoRedoAvailability | null;
+    },
+    options?: {
+      includeStoreScopes?: boolean;
+      forceGridRefresh?: boolean;
+    },
+  ) => {
+    syncUndoRedoAvailability(result.availability);
+    const patched = !(options?.forceGridRefresh ?? false) && applyPatchToVisiblePlanningSlice(result.patch);
+
+    await refreshPlanningQueries({
+      includeStoreScopes: options?.includeStoreScopes ?? false,
+      includeUndoRedo: !result.availability,
+      includeInsights: true,
+      includeGrid: !patched,
+    });
+  };
+
   const refresh = async () => {
     await Promise.all([
       queryClient.refetchQueries({ queryKey: ["grid-slice", 1], type: "active" }),
@@ -275,30 +359,30 @@ export default function App() {
 
   const editMutation = useMutation({
     mutationFn: postEdit,
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      await refresh();
+      await applyPlanningCommandResult(result);
     },
     onError: (error: Error) => setLastError(error.message),
   });
 
   const lockMutation = useMutation({
     mutationFn: postLock,
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      await refresh();
+      await applyPlanningCommandResult(result, { forceGridRefresh: true });
     },
     onError: (error: Error) => setLastError(error.message),
   });
 
   const splashMutation = useMutation({
     mutationFn: postSplash,
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      await refresh();
+      await applyPlanningCommandResult(result);
     },
     onError: (error: Error) => setLastError(error.message),
   });
@@ -308,7 +392,7 @@ export default function App() {
     onSuccess: async () => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      await refresh();
+      await refreshPlanningQueries({ includeStoreScopes: true });
     },
     onError: (error: Error) => setLastError(error.message),
   });
@@ -318,7 +402,7 @@ export default function App() {
     onSuccess: async () => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      await refresh();
+      await refreshPlanningQueries({ includeStoreScopes: true });
     },
     onError: (error: Error) => setLastError(error.message),
   });
@@ -328,7 +412,7 @@ export default function App() {
     onSuccess: async () => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      await refresh();
+      await refreshPlanningQueries({ includeStoreScopes: true });
     },
     onError: (error: Error) => setLastError(error.message),
   });
@@ -338,7 +422,7 @@ export default function App() {
     onSuccess: async () => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      await refresh();
+      await refreshPlanningQueries({ includeStoreScopes: true });
     },
     onError: (error: Error) => setLastError(error.message),
   });
@@ -352,7 +436,7 @@ export default function App() {
         downloadBase64Workbook(result.exceptionWorkbookBase64, result.exceptionFileName);
       }
 
-      await refresh();
+      await refreshPlanningQueries({ includeStoreScopes: true });
     },
     onError: (error: Error) => setLastError(error.message),
   });
@@ -365,30 +449,30 @@ export default function App() {
 
   const growthFactorMutation = useMutation({
     mutationFn: postGrowthFactor,
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      await refresh();
+      await applyPlanningCommandResult(result);
     },
     onError: (error: Error) => setLastError(error.message),
   });
 
   const undoMutation = useMutation({
     mutationFn: () => postUndo(1),
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      await refresh();
+      await applyPlanningCommandResult(result, { forceGridRefresh: true });
     },
     onError: (error: Error) => setLastError(error.message),
   });
 
   const redoMutation = useMutation({
     mutationFn: () => postRedo(1),
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      await refresh();
+      await applyPlanningCommandResult(result, { forceGridRefresh: true });
     },
     onError: (error: Error) => setLastError(error.message),
   });

@@ -35,7 +35,7 @@ public sealed class PlanningServiceTests
         var gpPercentCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.GrossProfitPercent, 101, 2111, 202603), CancellationToken.None);
         Assert.NotNull(gpPercentCell);
 
-        await _service.ApplyEditsAsync(
+        var result = await _service.ApplyEditsAsync(
             new EditCellsRequest(
                 1,
                 PlanningMeasures.GrossProfitPercent,
@@ -46,6 +46,11 @@ public sealed class PlanningServiceTests
                 }),
             "planner.one",
             CancellationToken.None);
+
+        Assert.NotNull(result.Patch);
+        Assert.True(result.Availability.CanUndo);
+        Assert.Contains(result.Patch!.Cells, cell => cell.StoreId == 101 && cell.ProductNodeId == 2111 && cell.TimePeriodId == 202603 && cell.MeasureId == PlanningMeasures.GrossProfitPercent);
+        Assert.Contains(result.Patch.Cells, cell => cell.StoreId == 101 && cell.ProductNodeId == 2111 && cell.TimePeriodId == 202603 && cell.MeasureId == PlanningMeasures.AverageSellingPrice);
 
         var quantityCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2111, 202603), CancellationToken.None);
         var aspCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.AverageSellingPrice, 101, 2111, 202603), CancellationToken.None);
@@ -68,10 +73,12 @@ public sealed class PlanningServiceTests
     [Fact]
     public async Task ApplyLockAsync_WhenYearRevenueIsLocked_DescendantRevenueEditFails()
     {
-        await _service.ApplyLockAsync(
+        var lockResult = await _service.ApplyLockAsync(
             new LockCellsRequest(1, PlanningMeasures.SalesRevenue, true, "Freeze year", new[] { new LockCoordinateDto(101, 2100, 202600) }),
             "manager.one",
             CancellationToken.None);
+
+        Assert.True(lockResult.Availability.CanUndo);
 
         var revenueCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2121, 202603), CancellationToken.None);
         Assert.NotNull(revenueCell);
@@ -277,7 +284,7 @@ public sealed class PlanningServiceTests
         Assert.NotNull(beforeYearRevenue);
         Assert.NotNull(beforeMonthRevenue);
 
-        await _service.ApplyGrowthFactorAsync(
+        var result = await _service.ApplyGrowthFactorAsync(
             new ApplyGrowthFactorRequest(
                 1,
                 PlanningMeasures.SalesRevenue,
@@ -288,6 +295,10 @@ public sealed class PlanningServiceTests
                 null),
             "planner.one",
             CancellationToken.None);
+
+        Assert.NotNull(result.Patch);
+        Assert.True(result.Availability.CanUndo);
+        Assert.Contains(result.Patch!.Cells, cell => cell.StoreId == 101 && cell.ProductNodeId == 2111 && cell.TimePeriodId == 202603 && cell.MeasureId == PlanningMeasures.SalesRevenue);
 
         var updatedMonthRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202603), CancellationToken.None);
         var updatedYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202600), CancellationToken.None);

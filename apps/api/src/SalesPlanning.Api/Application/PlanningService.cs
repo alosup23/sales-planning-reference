@@ -101,7 +101,8 @@ public sealed partial class PlanningService : IPlanningService
                 },
                 deltas,
                 ct);
-            return new EditCellsResponse(actionId, deltas.Count, "applied");
+            var availability = await _repository.GetUndoRedoAvailabilityAsync(request.ScenarioVersionId, userId, UndoRedoLimit, ct);
+            return new EditCellsResponse(actionId, deltas.Count, "applied", BuildGridPatch(request.ScenarioVersionId, deltas), ToUndoRedoAvailabilityDto(availability));
         }, cancellationToken);
     }
 
@@ -160,7 +161,14 @@ public sealed partial class PlanningService : IPlanningService
                 },
                 deltas,
                 ct);
-            return new SplashResponse(actionId, "applied", deltas.Count, deltas.Count(delta => delta.OldState.IsLocked));
+            var availability = await _repository.GetUndoRedoAvailabilityAsync(request.ScenarioVersionId, userId, UndoRedoLimit, ct);
+            return new SplashResponse(
+                actionId,
+                "applied",
+                deltas.Count,
+                deltas.Count(delta => delta.OldState.IsLocked),
+                BuildGridPatch(request.ScenarioVersionId, deltas),
+                ToUndoRedoAvailabilityDto(availability));
         }, cancellationToken);
     }
 
@@ -210,7 +218,8 @@ public sealed partial class PlanningService : IPlanningService
                 },
                 deltas,
                 ct);
-            return new LockCellsResponse(request.Coordinates.Count, request.Locked);
+            var availability = await _repository.GetUndoRedoAvailabilityAsync(request.ScenarioVersionId, userId, UndoRedoLimit, ct);
+            return new LockCellsResponse(request.Coordinates.Count, request.Locked, ToUndoRedoAvailabilityDto(availability));
         }, cancellationToken);
     }
 
@@ -472,7 +481,14 @@ public sealed partial class PlanningService : IPlanningService
                 },
                 deltas,
                 ct);
-            return new ApplyGrowthFactorResponse(actionId, "applied", growthFactor, deltas.Count);
+            var availability = await _repository.GetUndoRedoAvailabilityAsync(request.ScenarioVersionId, userId, UndoRedoLimit, ct);
+            return new ApplyGrowthFactorResponse(
+                actionId,
+                "applied",
+                growthFactor,
+                deltas.Count,
+                BuildGridPatch(request.ScenarioVersionId, deltas),
+                ToUndoRedoAvailabilityDto(availability));
         }, cancellationToken);
     }
 

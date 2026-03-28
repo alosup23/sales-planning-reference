@@ -9,4 +9,10 @@ public sealed record ApplyGrowthFactorRequest(
     string? Comment,
     IReadOnlyList<SplashScopeRootDto>? ScopeRoots);
 
-public sealed record ApplyGrowthFactorResponse(long ActionId, string Status, decimal GrowthFactor, int UpdatedCellCount);
+public sealed record ApplyGrowthFactorResponse(
+    long ActionId,
+    string Status,
+    decimal GrowthFactor,
+    int UpdatedCellCount,
+    PlanningGridPatchDto? Patch,
+    UndoRedoAvailabilityDto Availability);

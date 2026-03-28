@@ -63,6 +63,19 @@ export type GridSliceResponse = {
   rows: GridRow[];
 };
 
+export type GridCellPatch = {
+  storeId: number;
+  productNodeId: number;
+  timePeriodId: number;
+  measureId: number;
+  cell: GridCell;
+};
+
+export type PlanningGridPatch = {
+  scenarioVersionId: number;
+  cells: GridCellPatch[];
+};
+
 export type SplashRequest = {
   scenarioVersionId: number;
   measureId: number;
@@ -177,6 +190,38 @@ export type SaveScenarioResponse = {
   status: string;
   mode: string;
   savedAt: string;
+};
+
+export type EditCellsResponse = {
+  actionId: number;
+  updatedCellCount: number;
+  status: string;
+  patch?: PlanningGridPatch | null;
+  availability: UndoRedoAvailability;
+};
+
+export type SplashResponse = {
+  actionId: number;
+  status: string;
+  cellsUpdated: number;
+  lockedCellsSkipped: number;
+  patch?: PlanningGridPatch | null;
+  availability: UndoRedoAvailability;
+};
+
+export type LockCellsResponse = {
+  updatedCellCount: number;
+  locked: boolean;
+  availability: UndoRedoAvailability;
+};
+
+export type ApplyGrowthFactorResponse = {
+  actionId: number;
+  status: string;
+  growthFactor: number;
+  updatedCellCount: number;
+  patch?: PlanningGridPatch | null;
+  availability: UndoRedoAvailability;
 };
 
 export type HierarchyDepartment = {

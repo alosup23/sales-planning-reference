@@ -14,4 +14,10 @@ public sealed record SplashRequest(
 public sealed record SplashCoordinateDto(long StoreId, long ProductNodeId, long TimePeriodId);
 public sealed record SplashScopeRootDto(long StoreId, long ProductNodeId);
 
-public sealed record SplashResponse(long ActionId, string Status, int CellsUpdated, int LockedCellsSkipped);
+public sealed record SplashResponse(
+    long ActionId,
+    string Status,
+    int CellsUpdated,
+    int LockedCellsSkipped,
+    PlanningGridPatchDto? Patch,
+    UndoRedoAvailabilityDto Availability);

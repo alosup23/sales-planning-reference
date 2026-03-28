@@ -1,6 +1,8 @@
 import type {
   AddRowRequest,
   AddRowResponse,
+  ApplyGrowthFactorResponse,
+  EditCellsResponse,
   InventoryProfile,
   InventoryProfileImportResponse,
   InventoryProfileResponse,
@@ -13,6 +15,7 @@ import type {
   GridSliceResponse,
   HierarchyMappingResponse,
   ImportWorkbookResponse,
+  LockCellsResponse,
   LockCellsRequest,
   PlanningStoreScopeResponse,
   PlanningInsightResponse,
@@ -36,6 +39,7 @@ import type {
   StoreProfileImportResponse,
   StoreProfileOptionsResponse,
   StoreProfileResponse,
+  SplashResponse,
   SplashRequest,
   UpsertInventoryProfileRequest,
   UpsertPricingPolicyRequest,
@@ -163,29 +167,29 @@ export async function getPlanningStoreScopes(): Promise<PlanningStoreScopeRespon
   return await fetchJson<PlanningStoreScopeResponse>(`${API_BASE_URL}/planning-store-scopes`);
 }
 
-export async function postEdit(request: EditCellsRequest): Promise<void> {
-  await fetchJson(`${API_BASE_URL}/cell-edits`, {
+export async function postEdit(request: EditCellsRequest): Promise<EditCellsResponse> {
+  return await fetchJson<EditCellsResponse>(`${API_BASE_URL}/cell-edits`, {
     method: "POST",
     body: JSON.stringify(request),
   });
 }
 
-export async function postSplash(request: SplashRequest): Promise<void> {
-  await fetchJson(`${API_BASE_URL}/actions/splash`, {
+export async function postSplash(request: SplashRequest): Promise<SplashResponse> {
+  return await fetchJson<SplashResponse>(`${API_BASE_URL}/actions/splash`, {
     method: "POST",
     body: JSON.stringify(request),
   });
 }
 
-export async function postGrowthFactor(request: GrowthFactorRequest): Promise<void> {
-  await fetchJson(`${API_BASE_URL}/growth-factors/apply`, {
+export async function postGrowthFactor(request: GrowthFactorRequest): Promise<ApplyGrowthFactorResponse> {
+  return await fetchJson<ApplyGrowthFactorResponse>(`${API_BASE_URL}/growth-factors/apply`, {
     method: "POST",
     body: JSON.stringify(request),
   });
 }
 
-export async function postLock(request: LockCellsRequest): Promise<void> {
-  await fetchJson(`${API_BASE_URL}/locks`, {
+export async function postLock(request: LockCellsRequest): Promise<LockCellsResponse> {
+  return await fetchJson<LockCellsResponse>(`${API_BASE_URL}/locks`, {
     method: "POST",
     body: JSON.stringify(request),
   });
