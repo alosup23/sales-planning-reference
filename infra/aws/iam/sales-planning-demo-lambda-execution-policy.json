@@ -22,6 +22,16 @@
       "Resource": [
         "arn:aws:s3:::sales-planning-demo-files-427304877733-ap-southeast-5-an"
       ]
+    },
+    {
+      "Sid": "AllowPostgresSecretRead",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue"
+      ],
+      "Resource": [
+        "arn:aws:secretsmanager:ap-southeast-5:427304877733:secret:rds!db-c3a5f4d8-c142-45cf-92ad-074a40299442-wKsUmu"
+      ]
     }
   ]
 }

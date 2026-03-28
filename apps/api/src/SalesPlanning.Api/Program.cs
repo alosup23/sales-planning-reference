@@ -6,13 +6,14 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using SalesPlanning.Api.Application;
 using SalesPlanning.Api.Infrastructure;
+using SalesPlanning.Api.Infrastructure.Postgres;
 
 var builder = WebApplication.CreateBuilder(args);
 var storageMode = builder.Configuration["PlanningStorageMode"] ?? "local-sqlite";
 var securityMode = builder.Configuration["PlanningSecurityMode"] ?? "entra";
 var authEnabled = !string.Equals(securityMode, "disabled", StringComparison.OrdinalIgnoreCase);
 var planningDbPath = builder.Configuration["PlanningDbPath"]
-    ?? (storageMode.Equals("s3-sqlite", StringComparison.OrdinalIgnoreCase)
+    ?? (storageMode.Equals("s3-sqlite", StringComparison.OrdinalIgnoreCase) || storageMode.Equals("postgres", StringComparison.OrdinalIgnoreCase)
         ? Path.Combine(Path.GetTempPath(), "sales-planning-demo", "planning.db")
         : Path.Combine(builder.Environment.ContentRootPath, "App_Data", "planning.db"));
 var corsAllowedOrigins = (builder.Configuration["CorsAllowedOrigins"] ?? "http://localhost:5173,https://localhost:5173,https://d22xc0mfhkv9bk.cloudfront.net")
@@ -37,6 +38,28 @@ if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("AWS_LAMBDA_FU
 
 builder.Services.AddSingleton<IPlanningRepository>(serviceProvider =>
 {
+    if (storageMode.Equals("postgres", StringComparison.OrdinalIgnoreCase))
+    {
+        var postgresLogger = serviceProvider.GetRequiredService<ILogger<PostgresBackedSqlitePlanningRepository>>();
+        var connectionString = PostgresConnectionStringResolver.ResolveAsync(builder.Configuration, CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
+        var migrationsDirectory = Path.Combine(builder.Environment.ContentRootPath, "Infrastructure", "Postgres", "Migrations");
+        var applyMigrationsOnStartup = bool.TryParse(builder.Configuration["PlanningApplyMigrationsOnStartup"], out var parsedApplyMigrations)
+            ? parsedApplyMigrations
+            : true;
+        return new PostgresBackedSqlitePlanningRepository(
+            connectionString,
+            postgresLogger,
+            planningDbPath,
+            applyMigrationsOnStartup,
+            migrationsDirectory,
+            builder.Configuration["PlanningBootstrapS3Bucket"],
+            builder.Configuration["PlanningBootstrapS3ObjectKey"],
+            builder.Configuration["PlanningBootstrapS3Region"],
+            builder.Configuration["PlanningBootstrapSeedKey"]);
+    }
+
     if (!storageMode.Equals("s3-sqlite", StringComparison.OrdinalIgnoreCase))
     {
         return new SqlitePlanningRepository(planningDbPath);

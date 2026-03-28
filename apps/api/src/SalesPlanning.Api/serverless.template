@@ -3,6 +3,10 @@
   "Transform": "AWS::Serverless-2016-10-31",
   "Description": "Sales Planning demo API for test and UAT in ap-southeast-5.",
   "Parameters": {
+    "PlanningStorageMode": {
+      "Type": "String",
+      "Default": "postgres"
+    },
     "PlanningStorageS3Bucket": {
       "Type": "String",
       "Default": "sales-planning-demo-files-427304877733-ap-southeast-5-an"
@@ -10,6 +14,46 @@
     "PlanningStorageS3ObjectKey": {
       "Type": "String",
       "Default": "planning/demo-planning.db"
+    },
+    "PlanningPostgresSecretArn": {
+      "Type": "String",
+      "Default": ""
+    },
+    "PlanningApplyMigrationsOnStartup": {
+      "Type": "String",
+      "Default": "true"
+    },
+    "PlanningBootstrapS3Bucket": {
+      "Type": "String",
+      "Default": "sales-planning-demo-files-427304877733-ap-southeast-5-an"
+    },
+    "PlanningBootstrapS3ObjectKey": {
+      "Type": "String",
+      "Default": "planning/demo-planning.db"
+    },
+    "PlanningBootstrapS3Region": {
+      "Type": "String",
+      "Default": "ap-southeast-5"
+    },
+    "PlanningBootstrapSeedKey": {
+      "Type": "String",
+      "Default": "live-s3-sqlite-cutover-20260328"
+    },
+    "PlanningDbPath": {
+      "Type": "String",
+      "Default": "/tmp/sales-planning-demo/planning.db"
+    },
+    "LambdaSubnetIds": {
+      "Type": "String",
+      "Default": "subnet-0829b0ba1df103016,subnet-0fa1876970692d5ce,subnet-0bccfffc49dfea45c"
+    },
+    "LambdaSecurityGroupIds": {
+      "Type": "String",
+      "Default": "sg-072a7438e07397e55"
+    },
+    "PlanningSecurityMode": {
+      "Type": "String",
+      "Default": "disabled"
     },
     "CorsAllowedOrigins": {
       "Type": "String",
@@ -41,9 +85,29 @@
         "Role": {
           "Fn::Sub": "arn:aws:iam::${AWS::AccountId}:role/sales-planning-demo-lambda-exec"
         },
+        "VpcConfig": {
+          "SubnetIds": {
+            "Fn::Split": [
+              ",",
+              {
+                "Ref": "LambdaSubnetIds"
+              }
+            ]
+          },
+          "SecurityGroupIds": {
+            "Fn::Split": [
+              ",",
+              {
+                "Ref": "LambdaSecurityGroupIds"
+              }
+            ]
+          }
+        },
         "Environment": {
           "Variables": {
-            "PlanningStorageMode": "s3-sqlite",
+            "PlanningStorageMode": {
+              "Ref": "PlanningStorageMode"
+            },
             "PlanningStorageS3Bucket": {
               "Ref": "PlanningStorageS3Bucket"
             },
@@ -53,10 +117,33 @@
             "PlanningStorageS3Region": {
               "Ref": "AWS::Region"
             },
+            "PlanningPostgresSecretArn": {
+              "Ref": "PlanningPostgresSecretArn"
+            },
+            "PlanningApplyMigrationsOnStartup": {
+              "Ref": "PlanningApplyMigrationsOnStartup"
+            },
+            "PlanningBootstrapS3Bucket": {
+              "Ref": "PlanningBootstrapS3Bucket"
+            },
+            "PlanningBootstrapS3ObjectKey": {
+              "Ref": "PlanningBootstrapS3ObjectKey"
+            },
+            "PlanningBootstrapS3Region": {
+              "Ref": "PlanningBootstrapS3Region"
+            },
+            "PlanningBootstrapSeedKey": {
+              "Ref": "PlanningBootstrapSeedKey"
+            },
+            "PlanningDbPath": {
+              "Ref": "PlanningDbPath"
+            },
             "CorsAllowedOrigins": {
               "Ref": "CorsAllowedOrigins"
             },
-            "PlanningSecurityMode": "entra",
+            "PlanningSecurityMode": {
+              "Ref": "PlanningSecurityMode"
+            },
             "EnableTestReset": "false",
             "EntraTenantId": {
               "Ref": "EntraTenantId"
@@ -96,9 +183,15 @@
       }
     },
     "PlanningStorageObject": {
-      "Description": "S3 object used for persisted SQLite demo storage.",
+      "Description": "Legacy S3 object used for the prior SQLite demo storage.",
       "Value": {
         "Fn::Sub": "s3://${PlanningStorageS3Bucket}/${PlanningStorageS3ObjectKey}"
+      }
+    },
+    "PlanningStorageMode": {
+      "Description": "Persistence mode used by the deployed API.",
+      "Value": {
+        "Ref": "PlanningStorageMode"
       }
     }
   }
