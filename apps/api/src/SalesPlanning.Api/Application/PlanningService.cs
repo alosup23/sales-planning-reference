@@ -64,34 +64,46 @@ public sealed partial class PlanningService : IPlanningService
         return _repository.ExecuteAtomicAsync(async ct =>
         {
             var metadata = await _repository.GetMetadataAsync(ct);
-            var originalCells = await _repository.GetScenarioCellsAsync(request.ScenarioVersionId, ct);
+            var editInstructions = request.Cells
+                .Select(edit => BuildEditInstruction(
+                    request.ScenarioVersionId,
+                    request.MeasureId,
+                    edit.StoreId,
+                    edit.ProductNodeId,
+                    edit.TimePeriodId,
+                    string.Equals(edit.EditMode, "input", StringComparison.OrdinalIgnoreCase),
+                    metadata))
+                .ToList();
+            var originalCells = await LoadWorkingSetCellsAsync(request.ScenarioVersionId, metadata, editInstructions, ct);
             var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
 
-            foreach (var edit in request.Cells)
+            for (var index = 0; index < request.Cells.Count; index += 1)
             {
+                var edit = request.Cells[index];
+                var instruction = editInstructions[index];
                 var coordinate = new PlanningCellCoordinate(request.ScenarioVersionId, request.MeasureId, edit.StoreId, edit.ProductNodeId, edit.TimePeriodId);
                 ValidateDirectEdit(coordinate, edit.RowVersion, workingCells, metadata);
 
-                if (string.Equals(edit.EditMode, "input", StringComparison.OrdinalIgnoreCase))
+                if (instruction.IsDirectLeafEdit)
                 {
                     ApplyLeafMeasureEdit(coordinate, edit.NewValue, workingCells, metadata);
                 }
                 else
                 {
                     ApplyAggregateAllocation(
-                        request.ScenarioVersionId,
+                        instruction.ScenarioVersionId,
                         request.MeasureId,
-                        edit.TimePeriodId,
-                        [new SplashScopeRootDto(edit.StoreId, edit.ProductNodeId)],
+                        instruction.SourceTimePeriodId,
+                        instruction.ScopeRoots,
                         edit.NewValue,
-                        "existing_plan",
+                        instruction.Method,
                         null,
                         workingCells,
                         metadata);
                 }
             }
 
-            RecalculateAll(workingCells, metadata, request.ScenarioVersionId);
+            RecalculateImpactedCells(workingCells, metadata, request.ScenarioVersionId, editInstructions);
             var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "manual-edit", ct);
             var actionId = await AppendAuditAsync("manual_edit", "manual", userId, request.Comment, deltas, ct);
             await AppendCommandBatchAsync(
@@ -116,11 +128,12 @@ public sealed partial class PlanningService : IPlanningService
         return _repository.ExecuteAtomicAsync(async ct =>
         {
             var metadata = await _repository.GetMetadataAsync(ct);
-            var originalCells = await _repository.GetScenarioCellsAsync(request.ScenarioVersionId, ct);
-            var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
             var scopeRoots = (request.ScopeRoots is { Count: > 0 } ? request.ScopeRoots : [new SplashScopeRootDto(request.SourceCell.StoreId, request.SourceCell.ProductNodeId)])
                 .Distinct()
                 .ToList();
+            var instruction = BuildSplashInstruction(request.ScenarioVersionId, request.MeasureId, request.SourceCell.TimePeriodId, scopeRoots, metadata, request.Method);
+            var originalCells = await LoadWorkingSetCellsAsync(request.ScenarioVersionId, metadata, [instruction], ct);
+            var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
 
             if (scopeRoots.Count == 1)
             {
@@ -147,7 +160,7 @@ public sealed partial class PlanningService : IPlanningService
                 workingCells,
                 metadata);
 
-            RecalculateAll(workingCells, metadata, request.ScenarioVersionId);
+            RecalculateImpactedCells(workingCells, metadata, request.ScenarioVersionId, [instruction]);
             var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "splash", ct);
             var actionId = await AppendAuditAsync("splash", request.Method, userId, request.Comment, deltas, ct);
             await AppendCommandBatchAsync(
@@ -431,22 +444,38 @@ public sealed partial class PlanningService : IPlanningService
         return _repository.ExecuteAtomicAsync(async ct =>
         {
             var metadata = await _repository.GetMetadataAsync(ct);
-            var originalCells = await _repository.GetScenarioCellsAsync(request.ScenarioVersionId, ct);
-            var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
             var scopeRoots = (request.ScopeRoots is { Count: > 0 } ? request.ScopeRoots : [new SplashScopeRootDto(request.SourceCell.StoreId, request.SourceCell.ProductNodeId)])
                 .Distinct()
                 .ToList();
-
-            var growthFactor = PlanningMath.NormalizeGrowthFactor(request.GrowthFactor);
-            var newValue = request.CurrentValue * growthFactor;
             var sourceCoordinate = new PlanningCellCoordinate(
                 request.ScenarioVersionId,
                 request.MeasureId,
                 request.SourceCell.StoreId,
                 request.SourceCell.ProductNodeId,
                 request.SourceCell.TimePeriodId);
-
             var isLeafWrite = IsLeafWriteCoordinate(sourceCoordinate, metadata);
+            var instruction = isLeafWrite
+                ? BuildEditInstruction(
+                    request.ScenarioVersionId,
+                    request.MeasureId,
+                    request.SourceCell.StoreId,
+                    request.SourceCell.ProductNodeId,
+                    request.SourceCell.TimePeriodId,
+                    true,
+                    metadata)
+                : BuildSplashInstruction(
+                    request.ScenarioVersionId,
+                    request.MeasureId,
+                    request.SourceCell.TimePeriodId,
+                    scopeRoots,
+                    metadata,
+                    request.SourceCell.TimePeriodId % 100 == 0 ? "seasonality_profile" : "existing_plan");
+            var originalCells = await LoadWorkingSetCellsAsync(request.ScenarioVersionId, metadata, [instruction], ct);
+            var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
+
+            var growthFactor = PlanningMath.NormalizeGrowthFactor(request.GrowthFactor);
+            var newValue = request.CurrentValue * growthFactor;
+
             if (isLeafWrite)
             {
                 ValidateDirectEdit(sourceCoordinate, null, workingCells, metadata);
@@ -461,14 +490,14 @@ public sealed partial class PlanningService : IPlanningService
                     scopeRoots,
                     newValue,
                     request.SourceCell.TimePeriodId % 100 == 0 ? "seasonality_profile" : "existing_plan",
-                    request.SourceCell.TimePeriodId % 100 == 0 ? BuildDefaultSeasonalityWeights(request.SourceCell.TimePeriodId, metadata) : null,
+                    null,
                     workingCells,
                     metadata);
             }
 
             ResetGrowthFactors(workingCells.Values, request.MeasureId);
 
-            RecalculateAll(workingCells, metadata, request.ScenarioVersionId);
+            RecalculateImpactedCells(workingCells, metadata, request.ScenarioVersionId, [instruction]);
             var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "growth-factor", ct);
             var actionId = await AppendAuditAsync("growth_factor", "growth-factor", userId, request.Comment, deltas, ct);
             await AppendCommandBatchAsync(
@@ -1282,6 +1311,11 @@ public sealed partial class PlanningService : IPlanningService
         {
             ApplyLeafMeasureEdit(allocation.Cell.Coordinate, allocation.NewValue, workingCells, metadata);
         }
+
+        if (measureId == PlanningMeasures.SalesRevenue)
+        {
+            ReconcileRevenueSplashResidual(totalValue, allocations, workingCells, metadata);
+        }
     }
 
     private Dictionary<string, decimal> BuildWeights(
@@ -1300,6 +1334,15 @@ public sealed partial class PlanningService : IPlanningService
 
         if (normalizedMethod is "seasonality_profile" or "manual_weights")
         {
+            if (normalizedMethod == "seasonality_profile" && (manualWeights is null || manualWeights.Count == 0))
+            {
+                var defaultTimeWeights = BuildDefaultSeasonalityWeights(sourceTimePeriodId, metadata);
+                var defaultProductWeights = BuildProductWeights(measureId, targetCells);
+                return targetCells.ToDictionary(
+                    cell => cell.Coordinate.Key,
+                    cell => defaultTimeWeights[cell.Coordinate.TimePeriodId] * defaultProductWeights[cell.Coordinate.ProductNodeId]);
+            }
+
             if (manualWeights is null || manualWeights.Count == 0)
             {
                 throw new InvalidOperationException("Manual or seasonality weights are required for this splash.");
@@ -1361,6 +1404,163 @@ public sealed partial class PlanningService : IPlanningService
         return monthPeriods
             .Select((period, index) => new { period.TimePeriodId, Weight = index < monthWeights.Length ? monthWeights[index] : 1m })
             .ToDictionary(item => item.TimePeriodId, item => item.Weight);
+    }
+
+    private static void ReconcileRevenueSplashResidual(
+        decimal requestedTotal,
+        IReadOnlyList<SplashAllocation> allocations,
+        IDictionary<string, PlanningCell> workingCells,
+        PlanningMetadataSnapshot metadata)
+    {
+        if (allocations.Count == 0)
+        {
+            return;
+        }
+
+        var desiredTotal = PlanningMath.NormalizeRevenue(requestedTotal);
+        var unlockedTargets = allocations
+            .Where(allocation => !allocation.Cell.IsLocked)
+            .OrderByDescending(allocation => allocation.Cell.Coordinate.TimePeriodId)
+            .ThenByDescending(allocation => allocation.Cell.Coordinate.ProductNodeId)
+            .ToList();
+
+        if (unlockedTargets.Count == 0)
+        {
+            return;
+        }
+
+        var residual = desiredTotal - SumRevenueTargets(allocations, workingCells);
+        if (residual == 0m)
+        {
+            return;
+        }
+
+        foreach (var allocation in unlockedTargets)
+        {
+            var revenueCoordinate = new PlanningCellCoordinate(
+                allocation.Cell.Coordinate.ScenarioVersionId,
+                PlanningMeasures.SalesRevenue,
+                allocation.Cell.Coordinate.StoreId,
+                allocation.Cell.Coordinate.ProductNodeId,
+                allocation.Cell.Coordinate.TimePeriodId);
+            var quantityCoordinate = new PlanningCellCoordinate(
+                allocation.Cell.Coordinate.ScenarioVersionId,
+                PlanningMeasures.SoldQuantity,
+                allocation.Cell.Coordinate.StoreId,
+                allocation.Cell.Coordinate.ProductNodeId,
+                allocation.Cell.Coordinate.TimePeriodId);
+            var aspCoordinate = new PlanningCellCoordinate(
+                allocation.Cell.Coordinate.ScenarioVersionId,
+                PlanningMeasures.AverageSellingPrice,
+                allocation.Cell.Coordinate.StoreId,
+                allocation.Cell.Coordinate.ProductNodeId,
+                allocation.Cell.Coordinate.TimePeriodId);
+
+            var currentRevenue = workingCells[revenueCoordinate.Key].EffectiveValue;
+            var currentQuantity = workingCells[quantityCoordinate.Key].EffectiveValue;
+            var currentAsp = workingCells[aspCoordinate.Key].EffectiveValue;
+            var desiredLeafRevenue = currentRevenue + residual;
+            if (desiredLeafRevenue < 0m)
+            {
+                continue;
+            }
+
+            if (!TryResolveRevenueLeafState(desiredLeafRevenue, currentQuantity, currentAsp, out var resolvedQuantity, out var resolvedAsp))
+            {
+                continue;
+            }
+
+            ApplyLeafMeasureEdit(quantityCoordinate, resolvedQuantity, workingCells, metadata);
+            ApplyLeafMeasureEdit(aspCoordinate, resolvedAsp, workingCells, metadata);
+
+            residual = desiredTotal - SumRevenueTargets(allocations, workingCells);
+            if (residual == 0m)
+            {
+                return;
+            }
+        }
+    }
+
+    private static decimal SumRevenueTargets(
+        IReadOnlyList<SplashAllocation> allocations,
+        IDictionary<string, PlanningCell> workingCells)
+    {
+        return allocations.Sum(allocation => workingCells[new PlanningCellCoordinate(
+            allocation.Cell.Coordinate.ScenarioVersionId,
+            PlanningMeasures.SalesRevenue,
+            allocation.Cell.Coordinate.StoreId,
+            allocation.Cell.Coordinate.ProductNodeId,
+            allocation.Cell.Coordinate.TimePeriodId).Key].EffectiveValue);
+    }
+
+    private static bool TryResolveRevenueLeafState(
+        decimal desiredRevenue,
+        decimal currentQuantity,
+        decimal currentAsp,
+        out decimal resolvedQuantity,
+        out decimal resolvedAsp)
+    {
+        var normalizedRevenue = PlanningMath.NormalizeRevenue(desiredRevenue);
+        if (normalizedRevenue <= 0m)
+        {
+            resolvedQuantity = 0m;
+            resolvedAsp = currentAsp;
+            return true;
+        }
+
+        foreach (var quantityCandidate in BuildRevenueQuantityCandidates(currentQuantity, normalizedRevenue))
+        {
+            var normalizedQuantity = PlanningMath.NormalizeQuantity(quantityCandidate);
+            if (normalizedQuantity <= 0m)
+            {
+                continue;
+            }
+
+            var aspCandidate = PlanningMath.NormalizeAsp(normalizedRevenue / normalizedQuantity);
+            if (PlanningMath.CalculateRevenue(normalizedQuantity, aspCandidate) == normalizedRevenue)
+            {
+                resolvedQuantity = normalizedQuantity;
+                resolvedAsp = aspCandidate;
+                return true;
+            }
+        }
+
+        resolvedQuantity = PlanningMath.NormalizeQuantity(currentQuantity);
+        resolvedAsp = PlanningMath.NormalizeAsp(currentAsp);
+        return false;
+    }
+
+    private static IEnumerable<decimal> BuildRevenueQuantityCandidates(decimal currentQuantity, decimal desiredRevenue)
+    {
+        var seen = new HashSet<decimal>();
+
+        IEnumerable<decimal> Enumerate()
+        {
+            yield return PlanningMath.NormalizeQuantity(currentQuantity);
+
+            for (var offset = 1; offset <= 48; offset += 1)
+            {
+                yield return PlanningMath.NormalizeQuantity(currentQuantity - offset);
+                yield return PlanningMath.NormalizeQuantity(currentQuantity + offset);
+            }
+
+            for (var quantity = 1m; quantity <= Math.Min(desiredRevenue, 24m); quantity += 1m)
+            {
+                yield return quantity;
+            }
+
+            yield return Math.Min(desiredRevenue, Math.Max(1m, PlanningMath.NormalizeQuantity(desiredRevenue)));
+        }
+
+        foreach (var candidate in Enumerate())
+        {
+            if (candidate <= 0m || !seen.Add(candidate))
+            {
+                continue;
+            }
+
+            yield return candidate;
+        }
     }
 
     private static void RecalculateAll(

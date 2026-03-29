@@ -434,7 +434,7 @@ export default function App() {
     onSuccess: async (result) => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      await applyPlanningCommandResult(result);
+      await applyPlanningCommandResult(result, { forceGridRefresh: true });
     },
     onError: (error: Error) => setLastError(error.message),
   });
@@ -504,7 +504,7 @@ export default function App() {
     onSuccess: async (result) => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      await applyPlanningCommandResult(result);
+      await applyPlanningCommandResult(result, { forceGridRefresh: true });
     },
     onError: (error: Error) => setLastError(error.message),
   });
@@ -1172,7 +1172,6 @@ export default function App() {
       method: period?.grain === "year" ? "seasonality_profile" : "existing_plan",
       roundingScale: measureLookup.get(measureId)?.decimalPlaces ?? 0,
       comment: "Grid top-down edit",
-      manualWeights: period?.grain === "year" ? buildSeasonalityWeights(planningData, timePeriodId) : undefined,
       scopeRoots,
     });
   };
@@ -1225,7 +1224,6 @@ export default function App() {
       method: "seasonality_profile",
       roundingScale: measureLookup.get(measureId)?.decimalPlaces ?? 0,
       comment: "Spread annual value across months",
-      manualWeights: buildSeasonalityWeights(planningData, yearTimePeriodId),
       scopeRoots,
     });
   };
@@ -2433,15 +2431,6 @@ function toSplashRoot(row: GridRow): { storeId: number; productNodeId: number } 
     storeId: row.bindingStoreId ?? row.storeId,
     productNodeId: row.bindingProductNodeId ?? row.productNodeId,
   };
-}
-
-function buildSeasonalityWeights(data: GridSliceResponse, yearTimePeriodId: number): Record<number, number> {
-  const monthWeights = [8, 12, 7, 7, 8, 8, 9, 9, 8, 7, 8, 9];
-  const monthPeriods = data.periods
-    .filter((period) => period.parentTimePeriodId === yearTimePeriodId)
-    .sort((left, right) => left.sortOrder - right.sortOrder);
-
-  return Object.fromEntries(monthPeriods.map((period, index) => [period.timePeriodId, monthWeights[index] ?? 1]));
 }
 
 function roundToDecimals(value: number, decimals: number): number {

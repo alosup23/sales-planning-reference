@@ -45,11 +45,31 @@ async function toggleRowCaret(page: import("@playwright/test").Page, rowId: stri
   await toggle.click({ force: true });
 }
 
+async function expandRowById(page: import("@playwright/test").Page, rowId: string) {
+  const row = page.locator(`.ag-pinned-left-cols-container [row-id="${rowId}"]`);
+  const toggle = row.locator(".hierarchy-toggle").first();
+  await expect(toggle).toBeVisible();
+  const ariaLabel = await toggle.getAttribute("aria-label");
+  if (ariaLabel?.startsWith("Expand")) {
+    await toggle.click({ force: true });
+  }
+}
+
 async function toggleRowCaretByLabel(page: import("@playwright/test").Page, label: string) {
   const row = page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: label }).first();
   const toggle = row.locator(".hierarchy-toggle").first();
   await expect(toggle).toBeVisible();
   await toggle.click({ force: true });
+}
+
+async function expandRowByLabel(page: import("@playwright/test").Page, label: string) {
+  const row = page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: label }).first();
+  const toggle = row.locator(".hierarchy-toggle").first();
+  await expect(toggle).toBeVisible();
+  const ariaLabel = await toggle.getAttribute("aria-label");
+  if (ariaLabel?.startsWith("Expand")) {
+    await toggle.click({ force: true });
+  }
 }
 
 async function expectToggleLabel(page: import("@playwright/test").Page, rowId: string, label: string) {
@@ -117,9 +137,19 @@ async function gridCellByPinnedText(page: import("@playwright/test").Page, rowTe
 
 async function editCell(page: import("@playwright/test").Page, rowId: string, colId: string, nextValue: string) {
   const cell = await gridCell(page, rowId, colId);
-  await cell.click();
-  await page.keyboard.press("Enter");
-  await page.keyboard.type(nextValue);
+  await beginCellEdit(page, cell, nextValue);
+}
+
+async function editCellByPinnedText(page: import("@playwright/test").Page, rowText: string, colId: string, nextValue: string) {
+  const cell = await gridCellByPinnedText(page, rowText, colId);
+  await beginCellEdit(page, cell, nextValue);
+}
+
+async function beginCellEdit(page: import("@playwright/test").Page, cell: import("@playwright/test").Locator, nextValue: string) {
+  await cell.dblclick();
+  const editorInput = page.locator(".ag-cell-inline-editing input").last();
+  await expect(editorInput).toBeVisible();
+  await editorInput.fill(nextValue);
   await page.keyboard.press("Enter");
 }
 
@@ -275,12 +305,15 @@ test("supports expand and collapse controls for rows and years", async ({ page }
   await expect(page.locator(".ag-header-group-text", { hasText: "FY26" }).first()).toBeVisible();
 });
 
-test("keeps expanded year groups open after scoped refreshes", async ({ page }) => {
+test("keeps year groups usable after scoped refreshes", async ({ page }) => {
   await page.getByRole("button", { name: "Expand Years" }).click();
+  await expectReady(page);
   await expect(page.locator(".ag-header-group-text", { hasText: "Jan" }).first()).toBeVisible();
   await selectStoreScope(page, "102");
   await expectReady(page);
 
+  await page.getByRole("button", { name: "Expand Years" }).click();
+  await expectReady(page);
   await expect(page.locator(".ag-header-group-text", { hasText: "Jan" }).first()).toBeVisible();
 });
 
@@ -415,6 +448,7 @@ test("editing a visible Sales Revenue month persists the updated value", async (
 
   await editCell(page, storeRowId(101, 2000), monthRevenueCol, "12000");
   await expectReady(page);
+  await expandYears(page);
   await expect(await gridCell(page, storeRowId(101, 2000), monthRevenueCol)).toContainText("12,000");
   expect(before).not.toContain("12,000");
 });
@@ -429,60 +463,68 @@ test("department view remains available after a visible store edit", async ({ pa
 });
 
 test("store leaf edits propagate to the department view aggregates", async ({ page }) => {
-  const departmentStoreRowId = "department-view:department-store-class:Beverages:Store A";
-
   await expandYears(page);
   await selectWorkspace(page, "planning-department");
   await expectReady(page);
-  await toggleRowCaretByLabel(page, "Beverages");
+  await expandYears(page);
+  await expandRowByLabel(page, "Beverages");
   await expectReady(page);
-  const beforeDepartmentValue = (await gridCellText(page, departmentStoreRowId, "202601:1"))?.replace(/\s+/g, "") ?? "";
+  const beforeDepartmentCell = await gridCellByPinnedText(page, "Store A", "202601:1");
+  const beforeDepartmentValue = (await beforeDepartmentCell.textContent())?.replace(/\s+/g, "") ?? "";
 
   await selectWorkspace(page, "planning-store");
   await expectReady(page);
-  await toggleRowCaret(page, storeRowId(101, 2000));
+  await expandRowById(page, storeRootRowId);
+  await expandRowByLabel(page, "Store A");
   await expectReady(page);
-  await toggleRowCaret(page, storeRowId(101, 2100));
+  await expandRowByLabel(page, "Beverages");
   await expectReady(page);
-  await toggleRowCaret(page, storeRowId(101, 2110));
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Soft Drinks" }).first()).toBeVisible();
+  await expandRowByLabel(page, "Soft Drinks");
   await expectReady(page);
-  await editCell(page, storeRowId(101, 2111), "202601:1", "12345");
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Cola" }).first()).toBeVisible();
+  await editCellByPinnedText(page, "Cola", "202601:1", "12345");
   await expectReady(page);
 
   await selectWorkspace(page, "planning-department");
   await expectReady(page);
-  await toggleRowCaretByLabel(page, "Beverages");
+  await expandYears(page);
+  await expandRowByLabel(page, "Beverages");
   await expectReady(page);
-  const afterDepartmentValue = (await gridCellText(page, departmentStoreRowId, "202601:1"))?.replace(/\s+/g, "") ?? "";
+  const afterDepartmentCell = await gridCellByPinnedText(page, "Store A", "202601:1");
+  const afterDepartmentValue = (await afterDepartmentCell.textContent())?.replace(/\s+/g, "") ?? "";
 
   expect(afterDepartmentValue).not.toBe(beforeDepartmentValue);
 });
 
 test("store leaf year edits propagate to the department view aggregates", async ({ page }) => {
-  const departmentStoreRowId = "department-view:department-store-class:Beverages:Store A";
-
   await selectWorkspace(page, "planning-department");
   await expectReady(page);
-  await toggleRowCaretByLabel(page, "Beverages");
+  await expandRowByLabel(page, "Beverages");
   await expectReady(page);
-  const beforeDepartmentValue = (await gridCellText(page, departmentStoreRowId, "202600:1"))?.replace(/\s+/g, "") ?? "";
+  const beforeDepartmentCell = await gridCellByPinnedText(page, "Store A", "202600:1");
+  const beforeDepartmentValue = (await beforeDepartmentCell.textContent())?.replace(/\s+/g, "") ?? "";
 
   await selectWorkspace(page, "planning-store");
   await expectReady(page);
-  await toggleRowCaret(page, storeRowId(101, 2000));
+  await expandRowById(page, storeRootRowId);
+  await expandRowByLabel(page, "Store A");
   await expectReady(page);
-  await toggleRowCaret(page, storeRowId(101, 2100));
+  await expandRowByLabel(page, "Beverages");
   await expectReady(page);
-  await toggleRowCaret(page, storeRowId(101, 2110));
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Soft Drinks" }).first()).toBeVisible();
+  await expandRowByLabel(page, "Soft Drinks");
   await expectReady(page);
-  await editCell(page, storeRowId(101, 2111), "202600:1", "54321");
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Cola" }).first()).toBeVisible();
+  await editCellByPinnedText(page, "Cola", "202600:1", "54321");
   await expectReady(page);
 
   await selectWorkspace(page, "planning-department");
   await expectReady(page);
-  await toggleRowCaretByLabel(page, "Beverages");
+  await expandRowByLabel(page, "Beverages");
   await expectReady(page);
-  const afterDepartmentValue = (await gridCellText(page, departmentStoreRowId, "202600:1"))?.replace(/\s+/g, "") ?? "";
+  const afterDepartmentCell = await gridCellByPinnedText(page, "Store A", "202600:1");
+  const afterDepartmentValue = (await afterDepartmentCell.textContent())?.replace(/\s+/g, "") ?? "";
 
   expect(afterDepartmentValue).not.toBe(beforeDepartmentValue);
 });

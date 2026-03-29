@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Npgsql;
+using NpgsqlTypes;
 using SalesPlanning.Api.Contracts;
 using SalesPlanning.Api.Domain;
 
@@ -57,22 +58,71 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
 
     private async Task<IReadOnlyList<PlanningCell>> GetCellsDirectAsync(IEnumerable<PlanningCellCoordinate> coordinates, CancellationToken cancellationToken)
     {
-        var coordinateList = coordinates.ToList();
+        var coordinateList = coordinates
+            .DistinctBy(coordinate => coordinate.Key)
+            .ToList();
         if (coordinateList.Count == 0)
         {
             return [];
         }
 
-        var coordinateSet = coordinateList.Select(coordinate => coordinate.Key).ToHashSet(StringComparer.Ordinal);
-        var scenarioVersionIds = coordinateList.Select(coordinate => coordinate.ScenarioVersionId).Distinct().ToArray();
-
         return await ExecuteDirectReadAsync(async (connection, transaction, ct) =>
         {
             var cells = new List<PlanningCell>();
-            foreach (var scenarioVersionId in scenarioVersionIds)
+            const string sql = """
+                select p.scenario_version_id,
+                       p.measure_id,
+                       p.store_id,
+                       p.product_node_id,
+                       p.time_period_id,
+                       p.input_value,
+                       p.override_value,
+                       p.is_system_generated_override,
+                       p.derived_value,
+                       p.effective_value,
+                       p.growth_factor,
+                       p.is_locked,
+                       p.lock_reason,
+                       p.locked_by,
+                       p.row_version,
+                       p.cell_kind
+                from planning_cells p
+                inner join unnest(
+                    @scenarioVersionIds,
+                    @measureIds,
+                    @storeIds,
+                    @productNodeIds,
+                    @timePeriodIds)
+                    as requested(
+                        scenario_version_id,
+                        measure_id,
+                        store_id,
+                        product_node_id,
+                        time_period_id)
+                    on requested.scenario_version_id = p.scenario_version_id
+                   and requested.measure_id = p.measure_id
+                   and requested.store_id = p.store_id
+                   and requested.product_node_id = p.product_node_id
+                   and requested.time_period_id = p.time_period_id;
+                """;
+
+            foreach (var coordinateChunk in coordinateList.Chunk(BulkWriteChunkSize))
             {
-                var scenarioCells = await LoadScenarioCellsDirectAsync(connection, transaction, scenarioVersionId, ct);
-                cells.AddRange(scenarioCells.Where(cell => coordinateSet.Contains(cell.Coordinate.Key)));
+                await using var command = new NpgsqlCommand(sql, connection, transaction)
+                {
+                    CommandTimeout = 300
+                };
+                command.Parameters.Add(CreateArrayParameter("@scenarioVersionIds", NpgsqlDbType.Bigint, coordinateChunk.Select(coordinate => coordinate.ScenarioVersionId).ToArray()));
+                command.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, coordinateChunk.Select(coordinate => coordinate.MeasureId).ToArray()));
+                command.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, coordinateChunk.Select(coordinate => coordinate.StoreId).ToArray()));
+                command.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, coordinateChunk.Select(coordinate => coordinate.ProductNodeId).ToArray()));
+                command.Parameters.Add(CreateArrayParameter("@timePeriodIds", NpgsqlDbType.Bigint, coordinateChunk.Select(coordinate => coordinate.TimePeriodId).ToArray()));
+
+                await using var reader = await command.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    cells.Add(ReadPlanningCellDirect(reader));
+                }
             }
 
             return cells.Select(cell => cell.Clone()).ToList();

@@ -325,8 +325,14 @@ export function PlanningGrid({
 
     applyColumnPresentationState();
     const animationFrameId = window.requestAnimationFrame(() => applyColumnPresentationState());
+    const restoreTimeoutId = window.setTimeout(() => applyColumnPresentationState(), 0);
+    const delayedRestoreTimeoutId = window.setTimeout(() => applyColumnPresentationState(), 75);
 
-    return () => window.cancelAnimationFrame(animationFrameId);
+    return () => {
+      window.cancelAnimationFrame(animationFrameId);
+      window.clearTimeout(restoreTimeoutId);
+      window.clearTimeout(delayedRestoreTimeoutId);
+    };
   }, [columnDefs, rowData, yearPeriods]);
 
   useEffect(() => {

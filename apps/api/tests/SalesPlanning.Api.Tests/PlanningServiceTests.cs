@@ -375,6 +375,27 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
+    public async Task ApplyEditsAsync_OnStoreMonthRevenue_PersistsRequestedAggregateValue()
+    {
+        await _service.ApplyEditsAsync(
+            new EditCellsRequest(
+                1,
+                PlanningMeasures.SalesRevenue,
+                "Store A month plan",
+                new[]
+                {
+                    new EditCellRequest(101, 2000, 202601, 12000m, "override", null)
+                }),
+            "planner.one",
+            CancellationToken.None);
+
+        var storeMonthRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2000, 202601), CancellationToken.None);
+
+        Assert.NotNull(storeMonthRevenue);
+        Assert.Equal(12000m, storeMonthRevenue!.EffectiveValue);
+    }
+
+    [Fact]
     public async Task ApplyEditsAsync_OnClassYearRevenue_KeepsDepartmentYearTotalAlignedToChildClasses()
     {
         var softDrinksBefore = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202600), CancellationToken.None);
@@ -435,6 +456,42 @@ public sealed class PlanningServiceTests
         Assert.NotEqual(colaBefore!.EffectiveValue, colaRevenue!.EffectiveValue);
         Assert.Equal(colaRevenue.EffectiveValue + sparklingFruitRevenue!.EffectiveValue, softDrinksRevenue!.EffectiveValue);
         Assert.Equal(softDrinksRevenue.EffectiveValue + teaRevenue!.EffectiveValue, departmentRevenue!.EffectiveValue);
+    }
+
+    [Fact]
+    public async Task ApplySplashAsync_OnLeafYearRevenue_AcceptsServerSeasonalityProfileAndKeepsDepartmentYearTotalsAligned()
+    {
+        var colaYearBefore = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202600), CancellationToken.None);
+
+        await _service.ApplySplashAsync(
+            new SplashRequest(
+                1,
+                PlanningMeasures.SalesRevenue,
+                new SplashCoordinateDto(101, 2111, 202600),
+                3900m,
+                "seasonality_profile",
+                0,
+                "Leaf year revenue update",
+                null,
+                [new SplashScopeRootDto(101, 2111)]),
+            "planner.one",
+            CancellationToken.None);
+
+        var colaYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202600), CancellationToken.None);
+        var sparklingFruitYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2112, 202600), CancellationToken.None);
+        var softDrinksYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202600), CancellationToken.None);
+        var teaYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2120, 202600), CancellationToken.None);
+        var departmentYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2100, 202600), CancellationToken.None);
+
+        Assert.NotNull(colaYearRevenue);
+        Assert.NotNull(sparklingFruitYearRevenue);
+        Assert.NotNull(softDrinksYearRevenue);
+        Assert.NotNull(teaYearRevenue);
+        Assert.NotNull(departmentYearRevenue);
+        Assert.NotNull(colaYearBefore);
+        Assert.NotEqual(colaYearBefore!.EffectiveValue, colaYearRevenue!.EffectiveValue);
+        Assert.Equal(colaYearRevenue.EffectiveValue + sparklingFruitYearRevenue!.EffectiveValue, softDrinksYearRevenue!.EffectiveValue);
+        Assert.Equal(softDrinksYearRevenue.EffectiveValue + teaYearRevenue!.EffectiveValue, departmentYearRevenue!.EffectiveValue);
     }
 
     [Fact]
