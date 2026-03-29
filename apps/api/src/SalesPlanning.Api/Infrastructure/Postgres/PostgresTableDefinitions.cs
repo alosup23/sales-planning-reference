@@ -173,7 +173,7 @@ internal static class PostgresTableDefinitions
             primary key (scenario_version_id, measure_id, store_id, product_node_id, time_period_id)
         );
         create table if not exists audits (
-            action_id integer primary key,
+            action_id bigserial primary key,
             action_type text not null,
             method text not null,
             user_id text not null,
@@ -181,7 +181,7 @@ internal static class PostgresTableDefinitions
             created_at text not null
         );
         create table if not exists audit_deltas (
-            audit_delta_id integer primary key,
+            audit_delta_id bigserial primary key,
             action_id integer not null,
             scenario_version_id integer not null,
             measure_id integer not null,

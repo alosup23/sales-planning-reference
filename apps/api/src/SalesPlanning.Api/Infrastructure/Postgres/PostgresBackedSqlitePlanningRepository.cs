@@ -12,6 +12,7 @@ namespace SalesPlanning.Api.Infrastructure.Postgres;
 
 public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRepository
 {
+    private const int BulkWriteChunkSize = 500;
     private static readonly string[] StoreMutationTables = ["store_metadata", "store_profile_options", "product_nodes", "planning_cells"];
     private static readonly string[] HierarchyTables =
     [
@@ -1085,6 +1086,12 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         };
     }
 
+    private static NpgsqlParameter CreateArrayParameter(string parameterName, NpgsqlDbType elementType, Array values) =>
+        new(parameterName, NpgsqlDbType.Array | elementType)
+        {
+            Value = values
+        };
+
     private static async Task UpsertPlanningCellsAsync(NpgsqlConnection postgres, NpgsqlTransaction transaction, IEnumerable<PlanningCell> cells, CancellationToken cancellationToken)
     {
         var cellList = cells as IReadOnlyList<PlanningCell> ?? cells.ToList();
@@ -1111,23 +1118,57 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
                 locked_by,
                 row_version,
                 cell_kind)
-            values (
-                @scenarioVersionId,
-                @measureId,
-                @storeId,
-                @productNodeId,
-                @timePeriodId,
-                @inputValue,
-                @overrideValue,
-                @isSystemGeneratedOverride,
-                @derivedValue,
-                @effectiveValue,
-                @growthFactor,
-                @isLocked,
-                @lockReason,
-                @lockedBy,
-                @rowVersion,
-                @cellKind)
+            select
+                input_rows.scenario_version_id,
+                input_rows.measure_id,
+                input_rows.store_id,
+                input_rows.product_node_id,
+                input_rows.time_period_id,
+                input_rows.input_value,
+                input_rows.override_value,
+                input_rows.is_system_generated_override,
+                input_rows.derived_value,
+                input_rows.effective_value,
+                input_rows.growth_factor,
+                input_rows.is_locked,
+                input_rows.lock_reason,
+                input_rows.locked_by,
+                input_rows.row_version,
+                input_rows.cell_kind
+            from unnest(
+                @scenarioVersionIds,
+                @measureIds,
+                @storeIds,
+                @productNodeIds,
+                @timePeriodIds,
+                @inputValues,
+                @overrideValues,
+                @isSystemGeneratedOverrides,
+                @derivedValues,
+                @effectiveValues,
+                @growthFactors,
+                @isLockedValues,
+                @lockReasons,
+                @lockedByValues,
+                @rowVersions,
+                @cellKinds)
+                as input_rows(
+                    scenario_version_id,
+                    measure_id,
+                    store_id,
+                    product_node_id,
+                    time_period_id,
+                    input_value,
+                    override_value,
+                    is_system_generated_override,
+                    derived_value,
+                    effective_value,
+                    growth_factor,
+                    is_locked,
+                    lock_reason,
+                    locked_by,
+                    row_version,
+                    cell_kind)
             on conflict (scenario_version_id, measure_id, store_id, product_node_id, time_period_id)
             do update set
                 input_value = excluded.input_value,
@@ -1143,47 +1184,28 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
                 cell_kind = excluded.cell_kind;
             """;
 
-        await using var command = new NpgsqlCommand(sql, postgres, transaction)
+        foreach (var cellChunk in cellList.Chunk(BulkWriteChunkSize))
         {
-            CommandTimeout = 300
-        };
-        var scenarioVersionIdParameter = command.Parameters.Add("@scenarioVersionId", NpgsqlDbType.Bigint);
-        var measureIdParameter = command.Parameters.Add("@measureId", NpgsqlDbType.Bigint);
-        var storeIdParameter = command.Parameters.Add("@storeId", NpgsqlDbType.Bigint);
-        var productNodeIdParameter = command.Parameters.Add("@productNodeId", NpgsqlDbType.Bigint);
-        var timePeriodIdParameter = command.Parameters.Add("@timePeriodId", NpgsqlDbType.Bigint);
-        var inputValueParameter = command.Parameters.Add("@inputValue", NpgsqlDbType.Numeric);
-        var overrideValueParameter = command.Parameters.Add("@overrideValue", NpgsqlDbType.Numeric);
-        var isSystemGeneratedOverrideParameter = command.Parameters.Add("@isSystemGeneratedOverride", NpgsqlDbType.Integer);
-        var derivedValueParameter = command.Parameters.Add("@derivedValue", NpgsqlDbType.Numeric);
-        var effectiveValueParameter = command.Parameters.Add("@effectiveValue", NpgsqlDbType.Numeric);
-        var growthFactorParameter = command.Parameters.Add("@growthFactor", NpgsqlDbType.Numeric);
-        var isLockedParameter = command.Parameters.Add("@isLocked", NpgsqlDbType.Integer);
-        var lockReasonParameter = command.Parameters.Add("@lockReason", NpgsqlDbType.Text);
-        var lockedByParameter = command.Parameters.Add("@lockedBy", NpgsqlDbType.Text);
-        var rowVersionParameter = command.Parameters.Add("@rowVersion", NpgsqlDbType.Bigint);
-        var cellKindParameter = command.Parameters.Add("@cellKind", NpgsqlDbType.Text);
-
-        await command.PrepareAsync(cancellationToken);
-
-        foreach (var cell in cellList)
-        {
-            scenarioVersionIdParameter.Value = cell.Coordinate.ScenarioVersionId;
-            measureIdParameter.Value = cell.Coordinate.MeasureId;
-            storeIdParameter.Value = cell.Coordinate.StoreId;
-            productNodeIdParameter.Value = cell.Coordinate.ProductNodeId;
-            timePeriodIdParameter.Value = cell.Coordinate.TimePeriodId;
-            inputValueParameter.Value = (object?)cell.InputValue ?? DBNull.Value;
-            overrideValueParameter.Value = (object?)cell.OverrideValue ?? DBNull.Value;
-            isSystemGeneratedOverrideParameter.Value = cell.IsSystemGeneratedOverride ? 1 : 0;
-            derivedValueParameter.Value = cell.DerivedValue;
-            effectiveValueParameter.Value = cell.EffectiveValue;
-            growthFactorParameter.Value = cell.GrowthFactor;
-            isLockedParameter.Value = cell.IsLocked ? 1 : 0;
-            lockReasonParameter.Value = (object?)cell.LockReason ?? DBNull.Value;
-            lockedByParameter.Value = (object?)cell.LockedBy ?? DBNull.Value;
-            rowVersionParameter.Value = cell.RowVersion;
-            cellKindParameter.Value = cell.CellKind;
+            await using var command = new NpgsqlCommand(sql, postgres, transaction)
+            {
+                CommandTimeout = 300
+            };
+            command.Parameters.Add(CreateArrayParameter("@scenarioVersionIds", NpgsqlDbType.Bigint, cellChunk.Select(cell => cell.Coordinate.ScenarioVersionId).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, cellChunk.Select(cell => cell.Coordinate.MeasureId).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, cellChunk.Select(cell => cell.Coordinate.StoreId).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, cellChunk.Select(cell => cell.Coordinate.ProductNodeId).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@timePeriodIds", NpgsqlDbType.Bigint, cellChunk.Select(cell => cell.Coordinate.TimePeriodId).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@inputValues", NpgsqlDbType.Numeric, cellChunk.Select(cell => cell.InputValue).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@overrideValues", NpgsqlDbType.Numeric, cellChunk.Select(cell => cell.OverrideValue).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@isSystemGeneratedOverrides", NpgsqlDbType.Integer, cellChunk.Select(cell => cell.IsSystemGeneratedOverride ? 1 : 0).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@derivedValues", NpgsqlDbType.Numeric, cellChunk.Select(cell => cell.DerivedValue).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@effectiveValues", NpgsqlDbType.Numeric, cellChunk.Select(cell => cell.EffectiveValue).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@growthFactors", NpgsqlDbType.Numeric, cellChunk.Select(cell => cell.GrowthFactor).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@isLockedValues", NpgsqlDbType.Integer, cellChunk.Select(cell => cell.IsLocked ? 1 : 0).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@lockReasons", NpgsqlDbType.Text, cellChunk.Select(cell => cell.LockReason).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@lockedByValues", NpgsqlDbType.Text, cellChunk.Select(cell => cell.LockedBy).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@rowVersions", NpgsqlDbType.Bigint, cellChunk.Select(cell => cell.RowVersion).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@cellKinds", NpgsqlDbType.Text, cellChunk.Select(cell => cell.CellKind).ToArray()));
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
     }

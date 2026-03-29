@@ -1,4 +1,5 @@
 using Npgsql;
+using NpgsqlTypes;
 using SalesPlanning.Api.Domain;
 
 namespace SalesPlanning.Api.Infrastructure.Postgres;
@@ -9,7 +10,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
         ExecuteDirectReadAsync(
             async (connection, transaction, ct) =>
             {
-                await using var command = new NpgsqlCommand("select coalesce(max(action_id), 1000) + 1 from audits;", connection, transaction);
+                await using var command = new NpgsqlCommand("select nextval('audits_action_id_seq');", connection, transaction);
                 var value = await command.ExecuteScalarAsync(ct);
                 return Convert.ToInt64(value);
             },
@@ -38,14 +39,46 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        var nextAuditDeltaId = await GetNextAuditDeltaIdDirectAsync(connection, transaction, cancellationToken);
-        foreach (var delta in audit.Deltas)
+        var deltas = audit.Deltas as IReadOnlyList<PlanningCellDeltaAudit> ?? audit.Deltas.ToList();
+        if (deltas.Count == 0)
         {
-            await using var command = new NpgsqlCommand(
-                """
-                insert into audit_deltas (
-                    audit_delta_id,
-                    action_id,
+            return;
+        }
+
+        const string sql = """
+            insert into audit_deltas (
+                action_id,
+                scenario_version_id,
+                measure_id,
+                store_id,
+                product_node_id,
+                time_period_id,
+                old_value,
+                new_value,
+                was_locked,
+                change_kind)
+            select
+                @actionId,
+                input_rows.scenario_version_id,
+                input_rows.measure_id,
+                input_rows.store_id,
+                input_rows.product_node_id,
+                input_rows.time_period_id,
+                input_rows.old_value,
+                input_rows.new_value,
+                input_rows.was_locked,
+                input_rows.change_kind
+            from unnest(
+                @scenarioVersionIds,
+                @measureIds,
+                @storeIds,
+                @productNodeIds,
+                @timePeriodIds,
+                @oldValues,
+                @newValues,
+                @wasLockedValues,
+                @changeKinds)
+                as input_rows(
                     scenario_version_id,
                     measure_id,
                     store_id,
@@ -54,35 +87,26 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
                     old_value,
                     new_value,
                     was_locked,
-                    change_kind)
-                values (
-                    @auditDeltaId,
-                    @actionId,
-                    @scenarioVersionId,
-                    @measureId,
-                    @storeId,
-                    @productNodeId,
-                    @timePeriodId,
-                    @oldValue,
-                    @newValue,
-                    @wasLocked,
-                    @changeKind);
-                """,
-                connection,
-                transaction);
-            command.Parameters.AddWithValue("@auditDeltaId", nextAuditDeltaId);
+                    change_kind);
+            """;
+
+        foreach (var deltaChunk in deltas.Chunk(BulkWriteChunkSize))
+        {
+            await using var command = new NpgsqlCommand(sql, connection, transaction)
+            {
+                CommandTimeout = 300
+            };
             command.Parameters.AddWithValue("@actionId", audit.ActionId);
-            command.Parameters.AddWithValue("@scenarioVersionId", delta.Coordinate.ScenarioVersionId);
-            command.Parameters.AddWithValue("@measureId", delta.Coordinate.MeasureId);
-            command.Parameters.AddWithValue("@storeId", delta.Coordinate.StoreId);
-            command.Parameters.AddWithValue("@productNodeId", delta.Coordinate.ProductNodeId);
-            command.Parameters.AddWithValue("@timePeriodId", delta.Coordinate.TimePeriodId);
-            command.Parameters.AddWithValue("@oldValue", delta.OldValue);
-            command.Parameters.AddWithValue("@newValue", delta.NewValue);
-            command.Parameters.AddWithValue("@wasLocked", delta.WasLocked ? 1 : 0);
-            command.Parameters.AddWithValue("@changeKind", delta.ChangeKind);
+            command.Parameters.Add(CreateArrayParameter("@scenarioVersionIds", NpgsqlDbType.Bigint, deltaChunk.Select(delta => delta.Coordinate.ScenarioVersionId).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, deltaChunk.Select(delta => delta.Coordinate.MeasureId).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, deltaChunk.Select(delta => delta.Coordinate.StoreId).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, deltaChunk.Select(delta => delta.Coordinate.ProductNodeId).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@timePeriodIds", NpgsqlDbType.Bigint, deltaChunk.Select(delta => delta.Coordinate.TimePeriodId).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@oldValues", NpgsqlDbType.Numeric, deltaChunk.Select(delta => delta.OldValue).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@newValues", NpgsqlDbType.Numeric, deltaChunk.Select(delta => delta.NewValue).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@wasLockedValues", NpgsqlDbType.Integer, deltaChunk.Select(delta => delta.WasLocked ? 1 : 0).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@changeKinds", NpgsqlDbType.Text, deltaChunk.Select(delta => delta.ChangeKind).ToArray()));
             await command.ExecuteNonQueryAsync(cancellationToken);
-            nextAuditDeltaId += 1;
         }
     }
 
@@ -189,7 +213,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
         ExecuteDirectReadAsync(
             async (connection, transaction, ct) =>
             {
-                await using var command = new NpgsqlCommand("select coalesce(max(command_batch_id), 0) + 1 from planning_command_batches;", connection, transaction);
+                await using var command = new NpgsqlCommand("select nextval(pg_get_serial_sequence('planning_command_batches', 'command_batch_id'));", connection, transaction);
                 var value = await command.ExecuteScalarAsync(ct);
                 return Convert.ToInt64(value);
             },
@@ -241,32 +265,170 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             await headerCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        var nextCommandDeltaId = await GetNextCommandDeltaIdDirectAsync(connection, transaction, cancellationToken);
-        foreach (var delta in batch.Deltas)
+        var deltas = batch.Deltas as IReadOnlyList<PlanningCommandCellDelta> ?? batch.Deltas.ToList();
+        if (deltas.Count == 0)
         {
-            await InsertCommandDeltaDirectAsync(connection, transaction, nextCommandDeltaId, batch.CommandBatchId, delta, cancellationToken);
-            nextCommandDeltaId += 1;
+            return;
         }
-    }
 
-    private static async Task<long> GetNextAuditDeltaIdDirectAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        CancellationToken cancellationToken)
-    {
-        await using var command = new NpgsqlCommand("select coalesce(max(audit_delta_id), 0) + 1 from audit_deltas;", connection, transaction);
-        var value = await command.ExecuteScalarAsync(cancellationToken);
-        return Convert.ToInt64(value);
-    }
+        const string sql = """
+            insert into planning_command_cell_deltas (
+                command_batch_id,
+                scenario_version_id,
+                measure_id,
+                store_id,
+                product_node_id,
+                time_period_id,
+                old_input_value,
+                new_input_value,
+                old_override_value,
+                new_override_value,
+                old_is_system_generated_override,
+                new_is_system_generated_override,
+                old_derived_value,
+                new_derived_value,
+                old_effective_value,
+                new_effective_value,
+                old_growth_factor,
+                new_growth_factor,
+                old_is_locked,
+                new_is_locked,
+                old_lock_reason,
+                new_lock_reason,
+                old_locked_by,
+                new_locked_by,
+                old_row_version,
+                new_row_version,
+                old_cell_kind,
+                new_cell_kind,
+                change_kind)
+            select
+                @commandBatchId,
+                input_rows.scenario_version_id,
+                input_rows.measure_id,
+                input_rows.store_id,
+                input_rows.product_node_id,
+                input_rows.time_period_id,
+                input_rows.old_input_value,
+                input_rows.new_input_value,
+                input_rows.old_override_value,
+                input_rows.new_override_value,
+                input_rows.old_is_system_generated_override,
+                input_rows.new_is_system_generated_override,
+                input_rows.old_derived_value,
+                input_rows.new_derived_value,
+                input_rows.old_effective_value,
+                input_rows.new_effective_value,
+                input_rows.old_growth_factor,
+                input_rows.new_growth_factor,
+                input_rows.old_is_locked,
+                input_rows.new_is_locked,
+                input_rows.old_lock_reason,
+                input_rows.new_lock_reason,
+                input_rows.old_locked_by,
+                input_rows.new_locked_by,
+                input_rows.old_row_version,
+                input_rows.new_row_version,
+                input_rows.old_cell_kind,
+                input_rows.new_cell_kind,
+                input_rows.change_kind
+            from unnest(
+                @scenarioVersionIds,
+                @measureIds,
+                @storeIds,
+                @productNodeIds,
+                @timePeriodIds,
+                @oldInputValues,
+                @newInputValues,
+                @oldOverrideValues,
+                @newOverrideValues,
+                @oldIsSystemGeneratedOverrideValues,
+                @newIsSystemGeneratedOverrideValues,
+                @oldDerivedValues,
+                @newDerivedValues,
+                @oldEffectiveValues,
+                @newEffectiveValues,
+                @oldGrowthFactors,
+                @newGrowthFactors,
+                @oldIsLockedValues,
+                @newIsLockedValues,
+                @oldLockReasons,
+                @newLockReasons,
+                @oldLockedByValues,
+                @newLockedByValues,
+                @oldRowVersions,
+                @newRowVersions,
+                @oldCellKinds,
+                @newCellKinds,
+                @changeKinds)
+                as input_rows(
+                    scenario_version_id,
+                    measure_id,
+                    store_id,
+                    product_node_id,
+                    time_period_id,
+                    old_input_value,
+                    new_input_value,
+                    old_override_value,
+                    new_override_value,
+                    old_is_system_generated_override,
+                    new_is_system_generated_override,
+                    old_derived_value,
+                    new_derived_value,
+                    old_effective_value,
+                    new_effective_value,
+                    old_growth_factor,
+                    new_growth_factor,
+                    old_is_locked,
+                    new_is_locked,
+                    old_lock_reason,
+                    new_lock_reason,
+                    old_locked_by,
+                    new_locked_by,
+                    old_row_version,
+                    new_row_version,
+                    old_cell_kind,
+                    new_cell_kind,
+                    change_kind);
+            """;
 
-    private static async Task<long> GetNextCommandDeltaIdDirectAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        CancellationToken cancellationToken)
-    {
-        await using var command = new NpgsqlCommand("select coalesce(max(command_delta_id), 0) + 1 from planning_command_cell_deltas;", connection, transaction);
-        var value = await command.ExecuteScalarAsync(cancellationToken);
-        return Convert.ToInt64(value);
+        foreach (var deltaChunk in deltas.Chunk(BulkWriteChunkSize))
+        {
+            await using var command = new NpgsqlCommand(sql, connection, transaction)
+            {
+                CommandTimeout = 300
+            };
+            command.Parameters.AddWithValue("@commandBatchId", batch.CommandBatchId);
+            command.Parameters.Add(CreateArrayParameter("@scenarioVersionIds", NpgsqlDbType.Bigint, deltaChunk.Select(delta => delta.Coordinate.ScenarioVersionId).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, deltaChunk.Select(delta => delta.Coordinate.MeasureId).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, deltaChunk.Select(delta => delta.Coordinate.StoreId).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, deltaChunk.Select(delta => delta.Coordinate.ProductNodeId).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@timePeriodIds", NpgsqlDbType.Bigint, deltaChunk.Select(delta => delta.Coordinate.TimePeriodId).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@oldInputValues", NpgsqlDbType.Numeric, deltaChunk.Select(delta => delta.OldState.InputValue).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@newInputValues", NpgsqlDbType.Numeric, deltaChunk.Select(delta => delta.NewState.InputValue).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@oldOverrideValues", NpgsqlDbType.Numeric, deltaChunk.Select(delta => delta.OldState.OverrideValue).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@newOverrideValues", NpgsqlDbType.Numeric, deltaChunk.Select(delta => delta.NewState.OverrideValue).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@oldIsSystemGeneratedOverrideValues", NpgsqlDbType.Integer, deltaChunk.Select(delta => delta.OldState.IsSystemGeneratedOverride ? 1 : 0).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@newIsSystemGeneratedOverrideValues", NpgsqlDbType.Integer, deltaChunk.Select(delta => delta.NewState.IsSystemGeneratedOverride ? 1 : 0).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@oldDerivedValues", NpgsqlDbType.Numeric, deltaChunk.Select(delta => delta.OldState.DerivedValue).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@newDerivedValues", NpgsqlDbType.Numeric, deltaChunk.Select(delta => delta.NewState.DerivedValue).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@oldEffectiveValues", NpgsqlDbType.Numeric, deltaChunk.Select(delta => delta.OldState.EffectiveValue).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@newEffectiveValues", NpgsqlDbType.Numeric, deltaChunk.Select(delta => delta.NewState.EffectiveValue).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@oldGrowthFactors", NpgsqlDbType.Numeric, deltaChunk.Select(delta => delta.OldState.GrowthFactor).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@newGrowthFactors", NpgsqlDbType.Numeric, deltaChunk.Select(delta => delta.NewState.GrowthFactor).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@oldIsLockedValues", NpgsqlDbType.Integer, deltaChunk.Select(delta => delta.OldState.IsLocked ? 1 : 0).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@newIsLockedValues", NpgsqlDbType.Integer, deltaChunk.Select(delta => delta.NewState.IsLocked ? 1 : 0).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@oldLockReasons", NpgsqlDbType.Text, deltaChunk.Select(delta => delta.OldState.LockReason).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@newLockReasons", NpgsqlDbType.Text, deltaChunk.Select(delta => delta.NewState.LockReason).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@oldLockedByValues", NpgsqlDbType.Text, deltaChunk.Select(delta => delta.OldState.LockedBy).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@newLockedByValues", NpgsqlDbType.Text, deltaChunk.Select(delta => delta.NewState.LockedBy).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@oldRowVersions", NpgsqlDbType.Bigint, deltaChunk.Select(delta => delta.OldState.RowVersion).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@newRowVersions", NpgsqlDbType.Bigint, deltaChunk.Select(delta => delta.NewState.RowVersion).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@oldCellKinds", NpgsqlDbType.Text, deltaChunk.Select(delta => delta.OldState.CellKind).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@newCellKinds", NpgsqlDbType.Text, deltaChunk.Select(delta => delta.NewState.CellKind).ToArray()));
+            command.Parameters.Add(CreateArrayParameter("@changeKinds", NpgsqlDbType.Text, deltaChunk.Select(delta => delta.ChangeKind).ToArray()));
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
     }
 
     private Task<PlanningCommandBatch?> UndoLatestCommandDirectAsync(
@@ -340,114 +502,6 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
         return applyOldState
             ? batch with { IsUndone = true, UndoneAt = DateTimeOffset.UtcNow }
             : batch with { IsUndone = false, UndoneAt = null };
-    }
-
-    private static async Task InsertCommandDeltaDirectAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        long commandDeltaId,
-        long commandBatchId,
-        PlanningCommandCellDelta delta,
-        CancellationToken cancellationToken)
-    {
-        await using var command = new NpgsqlCommand(
-            """
-            insert into planning_command_cell_deltas (
-                command_delta_id,
-                command_batch_id,
-                scenario_version_id,
-                measure_id,
-                store_id,
-                product_node_id,
-                time_period_id,
-                old_input_value,
-                new_input_value,
-                old_override_value,
-                new_override_value,
-                old_is_system_generated_override,
-                new_is_system_generated_override,
-                old_derived_value,
-                new_derived_value,
-                old_effective_value,
-                new_effective_value,
-                old_growth_factor,
-                new_growth_factor,
-                old_is_locked,
-                new_is_locked,
-                old_lock_reason,
-                new_lock_reason,
-                old_locked_by,
-                new_locked_by,
-                old_row_version,
-                new_row_version,
-                old_cell_kind,
-                new_cell_kind,
-                change_kind)
-            values (
-                @commandDeltaId,
-                @commandBatchId,
-                @scenarioVersionId,
-                @measureId,
-                @storeId,
-                @productNodeId,
-                @timePeriodId,
-                @oldInputValue,
-                @newInputValue,
-                @oldOverrideValue,
-                @newOverrideValue,
-                @oldIsSystemGeneratedOverride,
-                @newIsSystemGeneratedOverride,
-                @oldDerivedValue,
-                @newDerivedValue,
-                @oldEffectiveValue,
-                @newEffectiveValue,
-                @oldGrowthFactor,
-                @newGrowthFactor,
-                @oldIsLocked,
-                @newIsLocked,
-                @oldLockReason,
-                @newLockReason,
-                @oldLockedBy,
-                @newLockedBy,
-                @oldRowVersion,
-                @newRowVersion,
-                @oldCellKind,
-                @newCellKind,
-                @changeKind);
-            """,
-            connection,
-            transaction);
-        command.Parameters.AddWithValue("@commandDeltaId", commandDeltaId);
-        command.Parameters.AddWithValue("@commandBatchId", commandBatchId);
-        command.Parameters.AddWithValue("@scenarioVersionId", delta.Coordinate.ScenarioVersionId);
-        command.Parameters.AddWithValue("@measureId", delta.Coordinate.MeasureId);
-        command.Parameters.AddWithValue("@storeId", delta.Coordinate.StoreId);
-        command.Parameters.AddWithValue("@productNodeId", delta.Coordinate.ProductNodeId);
-        command.Parameters.AddWithValue("@timePeriodId", delta.Coordinate.TimePeriodId);
-        command.Parameters.AddWithValue("@oldInputValue", (object?)delta.OldState.InputValue ?? DBNull.Value);
-        command.Parameters.AddWithValue("@newInputValue", (object?)delta.NewState.InputValue ?? DBNull.Value);
-        command.Parameters.AddWithValue("@oldOverrideValue", (object?)delta.OldState.OverrideValue ?? DBNull.Value);
-        command.Parameters.AddWithValue("@newOverrideValue", (object?)delta.NewState.OverrideValue ?? DBNull.Value);
-        command.Parameters.AddWithValue("@oldIsSystemGeneratedOverride", delta.OldState.IsSystemGeneratedOverride ? 1 : 0);
-        command.Parameters.AddWithValue("@newIsSystemGeneratedOverride", delta.NewState.IsSystemGeneratedOverride ? 1 : 0);
-        command.Parameters.AddWithValue("@oldDerivedValue", delta.OldState.DerivedValue);
-        command.Parameters.AddWithValue("@newDerivedValue", delta.NewState.DerivedValue);
-        command.Parameters.AddWithValue("@oldEffectiveValue", delta.OldState.EffectiveValue);
-        command.Parameters.AddWithValue("@newEffectiveValue", delta.NewState.EffectiveValue);
-        command.Parameters.AddWithValue("@oldGrowthFactor", delta.OldState.GrowthFactor);
-        command.Parameters.AddWithValue("@newGrowthFactor", delta.NewState.GrowthFactor);
-        command.Parameters.AddWithValue("@oldIsLocked", delta.OldState.IsLocked ? 1 : 0);
-        command.Parameters.AddWithValue("@newIsLocked", delta.NewState.IsLocked ? 1 : 0);
-        command.Parameters.AddWithValue("@oldLockReason", (object?)delta.OldState.LockReason ?? DBNull.Value);
-        command.Parameters.AddWithValue("@newLockReason", (object?)delta.NewState.LockReason ?? DBNull.Value);
-        command.Parameters.AddWithValue("@oldLockedBy", (object?)delta.OldState.LockedBy ?? DBNull.Value);
-        command.Parameters.AddWithValue("@newLockedBy", (object?)delta.NewState.LockedBy ?? DBNull.Value);
-        command.Parameters.AddWithValue("@oldRowVersion", delta.OldState.RowVersion);
-        command.Parameters.AddWithValue("@newRowVersion", delta.NewState.RowVersion);
-        command.Parameters.AddWithValue("@oldCellKind", delta.OldState.CellKind);
-        command.Parameters.AddWithValue("@newCellKind", delta.NewState.CellKind);
-        command.Parameters.AddWithValue("@changeKind", delta.ChangeKind);
-        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task InvalidateRedoStackDirectAsync(
