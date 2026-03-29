@@ -206,38 +206,6 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             },
             cancellationToken);
 
-    private async Task<NpgsqlConnection> OpenPostgresConnectionAsync(CancellationToken cancellationToken)
-    {
-        var connection = new NpgsqlConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken);
-        return connection;
-    }
-
-    private async Task ExecuteDirectMutationAsync(Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task> action, CancellationToken cancellationToken)
-    {
-        await EnsureDatabaseReadyAsync(cancellationToken);
-        await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await action(connection, transaction, cancellationToken);
-        await UpdateDataVersionAsync(connection, transaction, cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-        _hydrated = false;
-        _localDataVersion = null;
-    }
-
-    private async Task<T> ExecuteDirectMutationAsync<T>(Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task<T>> action, CancellationToken cancellationToken)
-    {
-        await EnsureDatabaseReadyAsync(cancellationToken);
-        await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        var result = await action(connection, transaction, cancellationToken);
-        await UpdateDataVersionAsync(connection, transaction, cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-        _hydrated = false;
-        _localDataVersion = null;
-        return result;
-    }
-
     private static async Task<(IReadOnlyList<InventoryProfileRecord> Profiles, int TotalCount)> LoadInventoryProfilesDirectAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,

@@ -10,21 +10,23 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
 {
     private async Task<PlanningMetadataSnapshot> GetMetadataDirectAsync(CancellationToken cancellationToken)
     {
-        await EnsureDatabaseReadyAsync(cancellationToken);
-        await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
-        var productNodes = await LoadProductNodesDirectAsync(connection, null, cancellationToken);
-        var timePeriods = await LoadTimePeriodsDirectAsync(connection, null, cancellationToken);
-        var stores = await LoadStoreMetadataDirectAsync(connection, null, cancellationToken);
-        return new PlanningMetadataSnapshot(productNodes, timePeriods, stores);
+        return await ExecuteDirectReadAsync(async (connection, transaction, ct) =>
+        {
+            var productNodes = await LoadProductNodesDirectAsync(connection, transaction, ct);
+            var timePeriods = await LoadTimePeriodsDirectAsync(connection, transaction, ct);
+            var stores = await LoadStoreMetadataDirectAsync(connection, transaction, ct);
+            return new PlanningMetadataSnapshot(productNodes, timePeriods, stores);
+        }, cancellationToken);
     }
 
     private async Task<IReadOnlyList<StoreNodeMetadata>> GetStoresDirectAsync(CancellationToken cancellationToken)
     {
-        await EnsureDatabaseReadyAsync(cancellationToken);
-        await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
-        return (await LoadStoreMetadataDirectAsync(connection, null, cancellationToken)).Values
-            .OrderBy(store => store.StoreLabel, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        return await ExecuteDirectReadAsync(async (connection, transaction, ct) =>
+        {
+            return (await LoadStoreMetadataDirectAsync(connection, transaction, ct)).Values
+                .OrderBy(store => store.StoreLabel, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }, cancellationToken);
     }
 
     private async Task<IReadOnlyList<PlanningCell>> GetCellsDirectAsync(IEnumerable<PlanningCellCoordinate> coordinates, CancellationToken cancellationToken)
@@ -38,23 +40,24 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
         var coordinateSet = coordinateList.Select(coordinate => coordinate.Key).ToHashSet(StringComparer.Ordinal);
         var scenarioVersionIds = coordinateList.Select(coordinate => coordinate.ScenarioVersionId).Distinct().ToArray();
 
-        await EnsureDatabaseReadyAsync(cancellationToken);
-        await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
-        var cells = new List<PlanningCell>();
-        foreach (var scenarioVersionId in scenarioVersionIds)
+        return await ExecuteDirectReadAsync(async (connection, transaction, ct) =>
         {
-            var scenarioCells = await LoadScenarioCellsDirectAsync(connection, null, scenarioVersionId, cancellationToken);
-            cells.AddRange(scenarioCells.Where(cell => coordinateSet.Contains(cell.Coordinate.Key)));
-        }
+            var cells = new List<PlanningCell>();
+            foreach (var scenarioVersionId in scenarioVersionIds)
+            {
+                var scenarioCells = await LoadScenarioCellsDirectAsync(connection, transaction, scenarioVersionId, ct);
+                cells.AddRange(scenarioCells.Where(cell => coordinateSet.Contains(cell.Coordinate.Key)));
+            }
 
-        return cells.Select(cell => cell.Clone()).ToList();
+            return cells.Select(cell => cell.Clone()).ToList();
+        }, cancellationToken);
     }
 
     private async Task<PlanningCell?> GetCellDirectAsync(PlanningCellCoordinate coordinate, CancellationToken cancellationToken)
     {
-        await EnsureDatabaseReadyAsync(cancellationToken);
-        await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
-        await using var command = new NpgsqlCommand(
+        return await ExecuteDirectReadAsync(async (connection, transaction, ct) =>
+        {
+            await using var command = new NpgsqlCommand(
             """
             select scenario_version_id,
                    measure_id,
@@ -80,32 +83,34 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
               and time_period_id = @timePeriodId;
             """,
             connection);
-        command.Parameters.AddWithValue("@scenarioVersionId", coordinate.ScenarioVersionId);
-        command.Parameters.AddWithValue("@measureId", coordinate.MeasureId);
-        command.Parameters.AddWithValue("@storeId", coordinate.StoreId);
-        command.Parameters.AddWithValue("@productNodeId", coordinate.ProductNodeId);
-        command.Parameters.AddWithValue("@timePeriodId", coordinate.TimePeriodId);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
-        {
-            return null;
-        }
+            command.Transaction = transaction;
+            command.Parameters.AddWithValue("@scenarioVersionId", coordinate.ScenarioVersionId);
+            command.Parameters.AddWithValue("@measureId", coordinate.MeasureId);
+            command.Parameters.AddWithValue("@storeId", coordinate.StoreId);
+            command.Parameters.AddWithValue("@productNodeId", coordinate.ProductNodeId);
+            command.Parameters.AddWithValue("@timePeriodId", coordinate.TimePeriodId);
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+            {
+                return null;
+            }
 
-        return ReadPlanningCellDirect(reader);
+            return ReadPlanningCellDirect(reader);
+        }, cancellationToken);
     }
 
     private async Task<IReadOnlyList<PlanningCell>> GetScenarioCellsDirectAsync(long scenarioVersionId, CancellationToken cancellationToken)
     {
-        await EnsureDatabaseReadyAsync(cancellationToken);
-        await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
-        return await LoadScenarioCellsDirectAsync(connection, null, scenarioVersionId, cancellationToken);
+        return await ExecuteDirectReadAsync(
+            (connection, transaction, ct) => LoadScenarioCellsDirectAsync(connection, transaction, scenarioVersionId, ct),
+            cancellationToken);
     }
 
     private async Task<PlanningUndoRedoAvailability> GetUndoRedoAvailabilityDirectAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken)
     {
-        await EnsureDatabaseReadyAsync(cancellationToken);
-        await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
-        await using var command = new NpgsqlCommand(
+        return await ExecuteDirectReadAsync(async (connection, transaction, ct) =>
+        {
+            await using var command = new NpgsqlCommand(
             """
             with retained_history as (
                 select is_undone
@@ -122,18 +127,20 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             from retained_history;
             """,
             connection);
-        command.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
-        command.Parameters.AddWithValue("@userId", userId);
-        command.Parameters.AddWithValue("@limit", limit);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
-        {
-            return new PlanningUndoRedoAvailability(false, false, 0, 0, limit);
-        }
+            command.Transaction = transaction;
+            command.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+            command.Parameters.AddWithValue("@userId", userId);
+            command.Parameters.AddWithValue("@limit", limit);
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+            {
+                return new PlanningUndoRedoAvailability(false, false, 0, 0, limit);
+            }
 
-        var undoDepth = reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
-        var redoDepth = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
-        return new PlanningUndoRedoAvailability(undoDepth > 0, redoDepth > 0, undoDepth, redoDepth, limit);
+            var undoDepth = reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
+            var redoDepth = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
+            return new PlanningUndoRedoAvailability(undoDepth > 0, redoDepth > 0, undoDepth, redoDepth, limit);
+        }, cancellationToken);
     }
 
     private async Task<GridSliceResponse> GetGridSliceDirectAsync(
@@ -144,95 +151,98 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
         bool expandAllBranches,
         CancellationToken cancellationToken)
     {
-        await EnsureDatabaseReadyAsync(cancellationToken);
-        await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
-        var productNodes = await LoadProductNodesDirectAsync(connection, null, cancellationToken);
-        var timePeriods = await LoadTimePeriodsDirectAsync(connection, null, cancellationToken);
-        var stores = await LoadStoreMetadataDirectAsync(connection, null, cancellationToken);
-        var hierarchyMappings = await LoadHierarchyMappingsDirectAsync(connection, null, cancellationToken);
+        return await ExecuteDirectReadAsync(async (connection, transaction, ct) =>
+        {
+            var productNodes = await LoadProductNodesDirectAsync(connection, transaction, ct);
+            var timePeriods = await LoadTimePeriodsDirectAsync(connection, transaction, ct);
+            var stores = await LoadStoreMetadataDirectAsync(connection, transaction, ct);
+            var hierarchyMappings = await LoadHierarchyMappingsDirectAsync(connection, transaction, ct);
 
-        var expandedNodeSet = expandedProductNodeIds?.ToHashSet() ?? [];
-        var visibleNodes = productNodes.Values
-            .Where(node => ShouldIncludeGridNodeDirect(node, selectedStoreId, selectedDepartmentLabel, expandedNodeSet, productNodes, expandAllBranches))
-            .ToList();
+            var expandedNodeSet = expandedProductNodeIds?.ToHashSet() ?? [];
+            var visibleNodes = productNodes.Values
+                .Where(node => ShouldIncludeGridNodeDirect(node, selectedStoreId, selectedDepartmentLabel, expandedNodeSet, productNodes, expandAllBranches))
+                .ToList();
 
-        var scenarioCells = await LoadScenarioCellsForNodesDirectAsync(
-            connection,
-            null,
-            scenarioVersionId,
-            visibleNodes.Select(node => node.ProductNodeId).ToArray(),
-            cancellationToken);
+            var scenarioCells = await LoadScenarioCellsForNodesDirectAsync(
+                connection,
+                transaction,
+                scenarioVersionId,
+                visibleNodes.Select(node => node.ProductNodeId).ToArray(),
+                ct);
 
-        var rows = BuildGridRowsDirect(visibleNodes, scenarioCells, productNodes, timePeriods, stores, hierarchyMappings);
-        var periods = timePeriods.Values
-            .OrderBy(node => node.SortOrder)
-            .Select(node => new GridPeriodDto(node.TimePeriodId, node.Label, node.Grain, node.ParentTimePeriodId, node.SortOrder))
-            .ToList();
+            var rows = BuildGridRowsDirect(visibleNodes, scenarioCells, productNodes, timePeriods, stores, hierarchyMappings);
+            var periods = timePeriods.Values
+                .OrderBy(node => node.SortOrder)
+                .Select(node => new GridPeriodDto(node.TimePeriodId, node.Label, node.Grain, node.ParentTimePeriodId, node.SortOrder))
+                .ToList();
 
-        var measures = PlanningMeasures.Definitions
-            .Select(definition => new GridMeasureDto(
-                definition.MeasureId,
-                definition.Label,
-                definition.DecimalPlaces,
-                definition.DerivedAtAggregateLevels,
-                definition.DisplayAsPercent,
-                definition.EditableAtLeaf,
-                definition.EditableAtAggregate))
-            .ToList();
+            var measures = PlanningMeasures.Definitions
+                .Select(definition => new GridMeasureDto(
+                    definition.MeasureId,
+                    definition.Label,
+                    definition.DecimalPlaces,
+                    definition.DerivedAtAggregateLevels,
+                    definition.DisplayAsPercent,
+                    definition.EditableAtLeaf,
+                    definition.EditableAtAggregate))
+                .ToList();
 
-        return new GridSliceResponse(scenarioVersionId, measures, periods, rows);
+            return new GridSliceResponse(scenarioVersionId, measures, periods, rows);
+        }, cancellationToken);
     }
 
     private async Task<GridBranchResponse> GetGridBranchRowsDirectAsync(long scenarioVersionId, long parentProductNodeId, CancellationToken cancellationToken)
     {
-        await EnsureDatabaseReadyAsync(cancellationToken);
-        await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
-        var productNodes = await LoadProductNodesDirectAsync(connection, null, cancellationToken);
-        if (!productNodes.TryGetValue(parentProductNodeId, out var parentNode))
+        return await ExecuteDirectReadAsync(async (connection, transaction, ct) =>
         {
-            throw new InvalidOperationException($"Branch {parentProductNodeId} was not found.");
-        }
+            var productNodes = await LoadProductNodesDirectAsync(connection, transaction, ct);
+            if (!productNodes.TryGetValue(parentProductNodeId, out var parentNode))
+            {
+                throw new InvalidOperationException($"Branch {parentProductNodeId} was not found.");
+            }
 
-        var children = productNodes.Values
-            .Where(node => node.ParentProductNodeId == parentProductNodeId)
-            .OrderBy(node => node.Path.Length)
-            .ThenBy(node => string.Join(">", node.Path), StringComparer.OrdinalIgnoreCase)
-            .ToList();
+            var children = productNodes.Values
+                .Where(node => node.ParentProductNodeId == parentProductNodeId)
+                .OrderBy(node => node.Path.Length)
+                .ThenBy(node => string.Join(">", node.Path), StringComparer.OrdinalIgnoreCase)
+                .ToList();
 
-        if (children.Count == 0)
-        {
-            return new GridBranchResponse(scenarioVersionId, parentProductNodeId, []);
-        }
+            if (children.Count == 0)
+            {
+                return new GridBranchResponse(scenarioVersionId, parentProductNodeId, []);
+            }
 
-        var timePeriods = await LoadTimePeriodsDirectAsync(connection, null, cancellationToken);
-        var stores = await LoadStoreMetadataDirectAsync(connection, null, cancellationToken);
-        var hierarchyMappings = await LoadHierarchyMappingsDirectAsync(connection, null, cancellationToken);
+            var timePeriods = await LoadTimePeriodsDirectAsync(connection, transaction, ct);
+            var stores = await LoadStoreMetadataDirectAsync(connection, transaction, ct);
+            var hierarchyMappings = await LoadHierarchyMappingsDirectAsync(connection, transaction, ct);
 
-        var relevantNodeIds = children
-            .Select(node => node.ProductNodeId)
-            .Concat(GetAncestorProductNodeIdsDirect(parentNode, productNodes))
-            .Distinct()
-            .ToArray();
+            var relevantNodeIds = children
+                .Select(node => node.ProductNodeId)
+                .Concat(GetAncestorProductNodeIdsDirect(parentNode, productNodes))
+                .Distinct()
+                .ToArray();
 
-        var scenarioCells = await LoadScenarioCellsForNodesDirectAsync(
-            connection,
-            null,
-            scenarioVersionId,
-            relevantNodeIds,
-            cancellationToken);
+            var scenarioCells = await LoadScenarioCellsForNodesDirectAsync(
+                connection,
+                transaction,
+                scenarioVersionId,
+                relevantNodeIds,
+                ct);
 
-        var rows = BuildGridRowsDirect(children, scenarioCells, productNodes, timePeriods, stores, hierarchyMappings);
-        return new GridBranchResponse(scenarioVersionId, parentProductNodeId, rows);
+            var rows = BuildGridRowsDirect(children, scenarioCells, productNodes, timePeriods, stores, hierarchyMappings);
+            return new GridBranchResponse(scenarioVersionId, parentProductNodeId, rows);
+        }, cancellationToken);
     }
 
     private async Task<ProductNode?> FindProductNodeByPathDirectAsync(string[] path, CancellationToken cancellationToken)
     {
-        await EnsureDatabaseReadyAsync(cancellationToken);
-        await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
-        var productNodes = await LoadProductNodesDirectAsync(connection, null, cancellationToken);
-        return productNodes.Values.FirstOrDefault(candidate =>
-            candidate.Path.Length == path.Length &&
-            candidate.Path.Zip(path, (left, right) => string.Equals(left, right, StringComparison.OrdinalIgnoreCase)).All(match => match));
+        return await ExecuteDirectReadAsync(async (connection, transaction, ct) =>
+        {
+            var productNodes = await LoadProductNodesDirectAsync(connection, transaction, ct);
+            return productNodes.Values.FirstOrDefault(candidate =>
+                candidate.Path.Length == path.Length &&
+                candidate.Path.Zip(path, (left, right) => string.Equals(left, right, StringComparison.OrdinalIgnoreCase)).All(match => match));
+        }, cancellationToken);
     }
 
     private static async Task<Dictionary<long, ProductNode>> LoadProductNodesDirectAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction, CancellationToken cancellationToken)

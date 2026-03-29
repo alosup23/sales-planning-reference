@@ -55,6 +55,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
     private readonly SemaphoreSlim _syncGate = new(1, 1);
     private readonly AsyncLocal<int> _atomicDepth = new();
     private readonly AsyncLocal<PostgresSyncPlan?> _pendingSyncPlan = new();
+    private readonly AsyncLocal<PostgresDirectAtomicContext?> _directAtomicContext = new();
     private bool _hydrated;
     private bool _databaseReady;
     private long? _localDataVersion;
@@ -112,52 +113,45 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
     public async Task UpsertCellsAsync(IEnumerable<PlanningCell> cells, CancellationToken cancellationToken)
     {
         var materialized = cells.Select(cell => cell.Clone()).ToList();
-        await WithMutationAsync(
-            ct => _innerRepository.UpsertCellsAsync(materialized, ct),
-            plan => plan.QueueCellUpserts(materialized),
+        await ExecuteDirectMutationAsync(
+            (connection, transaction, ct) => UpsertPlanningCellsAsync(connection, transaction, materialized, ct),
             cancellationToken);
     }
 
     public async Task AppendAuditAsync(PlanningActionAudit audit, CancellationToken cancellationToken)
     {
-        await WithMutationAsync(
-            ct => _innerRepository.AppendAuditAsync(audit, ct),
-            plan => plan.QueueTableReplace("audits", "audit_deltas"),
+        await ExecuteDirectMutationAsync(
+            (connection, transaction, ct) => AppendAuditDirectAsync(connection, transaction, audit, ct),
             cancellationToken);
     }
 
     public Task<long> GetNextActionIdAsync(CancellationToken cancellationToken) =>
-        WithReadAsync(_innerRepository.GetNextActionIdAsync, cancellationToken);
+        GetNextActionIdDirectAsync(cancellationToken);
 
     public Task<IReadOnlyList<PlanningActionAudit>> GetAuditAsync(long scenarioVersionId, long measureId, long storeId, long productNodeId, CancellationToken cancellationToken) =>
-        WithReadAsync(ct => _innerRepository.GetAuditAsync(scenarioVersionId, measureId, storeId, productNodeId, ct), cancellationToken);
+        GetAuditDirectAsync(scenarioVersionId, measureId, storeId, productNodeId, cancellationToken);
 
     public Task<long> GetNextCommandBatchIdAsync(CancellationToken cancellationToken) =>
-        WithReadAsync(_innerRepository.GetNextCommandBatchIdAsync, cancellationToken);
+        GetNextCommandBatchIdDirectAsync(cancellationToken);
 
     public async Task AppendCommandBatchAsync(PlanningCommandBatch batch, CancellationToken cancellationToken)
     {
-        await WithMutationAsync(
-            ct => _innerRepository.AppendCommandBatchAsync(batch, ct),
-            plan => plan.QueueTableReplace("planning_command_batches", "planning_command_cell_deltas"),
+        await ExecuteDirectMutationAsync(
+            (connection, transaction, ct) => AppendCommandBatchDirectAsync(connection, transaction, batch, ct),
             cancellationToken);
     }
 
     public Task<PlanningUndoRedoAvailability> GetUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
-        ShouldUseHydratedCacheRead()
-            ? WithReadAsync(ct => _innerRepository.GetUndoRedoAvailabilityAsync(scenarioVersionId, userId, limit, ct), cancellationToken)
-            : GetUndoRedoAvailabilityDirectAsync(scenarioVersionId, userId, limit, cancellationToken);
+        GetUndoRedoAvailabilityDirectAsync(scenarioVersionId, userId, limit, cancellationToken);
 
     public Task<PlanningCommandBatch?> UndoLatestCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
-        WithMutationAsync(
-            ct => _innerRepository.UndoLatestCommandAsync(scenarioVersionId, userId, limit, ct),
-            plan => plan.QueueTableReplace("planning_cells", "planning_command_batches", "planning_command_cell_deltas"),
+        ExecuteDirectMutationAsync(
+            (connection, transaction, ct) => UndoLatestCommandDirectAsync(connection, transaction, scenarioVersionId, userId, limit, ct),
             cancellationToken);
 
     public Task<PlanningCommandBatch?> RedoLatestCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
-        WithMutationAsync(
-            ct => _innerRepository.RedoLatestCommandAsync(scenarioVersionId, userId, limit, ct),
-            plan => plan.QueueTableReplace("planning_cells", "planning_command_batches", "planning_command_cell_deltas"),
+        ExecuteDirectMutationAsync(
+            (connection, transaction, ct) => RedoLatestCommandDirectAsync(connection, transaction, scenarioVersionId, userId, limit, ct),
             cancellationToken);
 
     public Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, string? selectedDepartmentLabel, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, CancellationToken cancellationToken) =>
@@ -475,6 +469,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         if (isOutermost)
         {
             _pendingSyncPlan.Value = new PostgresSyncPlan();
+            _directAtomicContext.Value = null;
         }
 
         _atomicDepth.Value += 1;
@@ -492,17 +487,52 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             if (isOutermost)
             {
                 var plan = _pendingSyncPlan.Value;
+                var directContext = _directAtomicContext.Value;
                 _pendingSyncPlan.Value = null;
-                if (succeeded && plan is { HasMutations: true })
+                _directAtomicContext.Value = null;
+                try
                 {
-                    await _syncGate.WaitAsync(cancellationToken);
-                    try
+                    if (directContext is not null)
                     {
-                        await ExecuteSyncPlanAsync(plan, cancellationToken);
+                        if (succeeded)
+                        {
+                            if (directContext.HasMutations)
+                            {
+                                await UpdateDataVersionAsync(directContext.Connection, directContext.Transaction, cancellationToken);
+                            }
+
+                            await directContext.Transaction.CommitAsync(cancellationToken);
+
+                            if (directContext.HasMutations)
+                            {
+                                _hydrated = false;
+                                _localDataVersion = null;
+                            }
+                        }
+                        else
+                        {
+                            await directContext.Transaction.RollbackAsync(cancellationToken);
+                        }
                     }
-                    finally
+
+                    if (succeeded && plan is { HasMutations: true })
                     {
-                        _syncGate.Release();
+                        await _syncGate.WaitAsync(cancellationToken);
+                        try
+                        {
+                            await ExecuteSyncPlanAsync(plan, cancellationToken);
+                        }
+                        finally
+                        {
+                            _syncGate.Release();
+                        }
+                    }
+                }
+                finally
+                {
+                    if (directContext is not null)
+                    {
+                        await directContext.DisposeAsync();
                     }
                 }
             }
@@ -520,6 +550,42 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         return _atomicDepth.Value > 0 && (_pendingSyncPlan.Value?.HasMutations ?? false);
     }
 
+    private async Task<NpgsqlConnection> OpenPostgresConnectionAsync(CancellationToken cancellationToken)
+    {
+        var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        return connection;
+    }
+
+    private async Task<PostgresDirectAtomicContext> GetOrCreateDirectAtomicContextAsync(CancellationToken cancellationToken)
+    {
+        var current = _directAtomicContext.Value;
+        if (current is not null)
+        {
+            return current;
+        }
+
+        await EnsureDatabaseReadyAsync(cancellationToken);
+        var connection = await OpenPostgresConnectionAsync(cancellationToken);
+        var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        current = new PostgresDirectAtomicContext(connection, transaction);
+        _directAtomicContext.Value = current;
+        return current;
+    }
+
+    private async Task<T> ExecuteDirectReadAsync<T>(Func<NpgsqlConnection, NpgsqlTransaction?, CancellationToken, Task<T>> action, CancellationToken cancellationToken)
+    {
+        await EnsureDatabaseReadyAsync(cancellationToken);
+        var current = _directAtomicContext.Value;
+        if (current is not null)
+        {
+            return await action(current.Connection, current.Transaction, cancellationToken);
+        }
+
+        await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
+        return await action(connection, null, cancellationToken);
+    }
+
     private async Task WithMutationAsync(Func<CancellationToken, Task> action, Action<PostgresSyncPlan> queueSync, CancellationToken cancellationToken)
     {
         await EnsureHydratedAsync(cancellationToken);
@@ -533,6 +599,47 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         var result = await action(cancellationToken);
         await QueueOrExecuteSyncAsync(queueSync, cancellationToken);
         return result;
+    }
+
+    private async Task ExecuteDirectMutationAsync(Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task> action, CancellationToken cancellationToken)
+    {
+        if (_atomicDepth.Value > 0)
+        {
+            var current = await GetOrCreateDirectAtomicContextAsync(cancellationToken);
+            await action(current.Connection, current.Transaction, cancellationToken);
+            current.HasMutations = true;
+            return;
+        }
+
+        await EnsureDatabaseReadyAsync(cancellationToken);
+        await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await action(connection, transaction, cancellationToken);
+        await UpdateDataVersionAsync(connection, transaction, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        _hydrated = false;
+        _localDataVersion = null;
+    }
+
+    private async Task<T> ExecuteDirectMutationAsync<T>(Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task<T>> action, CancellationToken cancellationToken)
+    {
+        if (_atomicDepth.Value > 0)
+        {
+            var current = await GetOrCreateDirectAtomicContextAsync(cancellationToken);
+            var result = await action(current.Connection, current.Transaction, cancellationToken);
+            current.HasMutations = true;
+            return result;
+        }
+
+        await EnsureDatabaseReadyAsync(cancellationToken);
+        await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var directResult = await action(connection, transaction, cancellationToken);
+        await UpdateDataVersionAsync(connection, transaction, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        _hydrated = false;
+        _localDataVersion = null;
+        return directResult;
     }
 
     private async Task QueueOrExecuteSyncAsync(Action<PostgresSyncPlan> queueSync, CancellationToken cancellationToken)
@@ -1127,6 +1234,19 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             {
                 CellUpserts[cell.Coordinate.Key] = cell.Clone();
             }
+        }
+    }
+
+    private sealed class PostgresDirectAtomicContext(NpgsqlConnection connection, NpgsqlTransaction transaction) : IAsyncDisposable
+    {
+        public NpgsqlConnection Connection { get; } = connection;
+        public NpgsqlTransaction Transaction { get; } = transaction;
+        public bool HasMutations { get; set; }
+
+        public async ValueTask DisposeAsync()
+        {
+            await Transaction.DisposeAsync();
+            await Connection.DisposeAsync();
         }
     }
 }
