@@ -38,11 +38,13 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        var nextAuditDeltaId = await GetNextAuditDeltaIdDirectAsync(connection, transaction, cancellationToken);
         foreach (var delta in audit.Deltas)
         {
             await using var command = new NpgsqlCommand(
                 """
                 insert into audit_deltas (
+                    audit_delta_id,
                     action_id,
                     scenario_version_id,
                     measure_id,
@@ -54,6 +56,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
                     was_locked,
                     change_kind)
                 values (
+                    @auditDeltaId,
                     @actionId,
                     @scenarioVersionId,
                     @measureId,
@@ -67,6 +70,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
                 """,
                 connection,
                 transaction);
+            command.Parameters.AddWithValue("@auditDeltaId", nextAuditDeltaId);
             command.Parameters.AddWithValue("@actionId", audit.ActionId);
             command.Parameters.AddWithValue("@scenarioVersionId", delta.Coordinate.ScenarioVersionId);
             command.Parameters.AddWithValue("@measureId", delta.Coordinate.MeasureId);
@@ -78,6 +82,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             command.Parameters.AddWithValue("@wasLocked", delta.WasLocked ? 1 : 0);
             command.Parameters.AddWithValue("@changeKind", delta.ChangeKind);
             await command.ExecuteNonQueryAsync(cancellationToken);
+            nextAuditDeltaId += 1;
         }
     }
 
@@ -236,10 +241,32 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             await headerCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        var nextCommandDeltaId = await GetNextCommandDeltaIdDirectAsync(connection, transaction, cancellationToken);
         foreach (var delta in batch.Deltas)
         {
-            await InsertCommandDeltaDirectAsync(connection, transaction, batch.CommandBatchId, delta, cancellationToken);
+            await InsertCommandDeltaDirectAsync(connection, transaction, nextCommandDeltaId, batch.CommandBatchId, delta, cancellationToken);
+            nextCommandDeltaId += 1;
         }
+    }
+
+    private static async Task<long> GetNextAuditDeltaIdDirectAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand("select coalesce(max(audit_delta_id), 0) + 1 from audit_deltas;", connection, transaction);
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        return Convert.ToInt64(value);
+    }
+
+    private static async Task<long> GetNextCommandDeltaIdDirectAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand("select coalesce(max(command_delta_id), 0) + 1 from planning_command_cell_deltas;", connection, transaction);
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        return Convert.ToInt64(value);
     }
 
     private Task<PlanningCommandBatch?> UndoLatestCommandDirectAsync(
@@ -318,6 +345,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
     private static async Task InsertCommandDeltaDirectAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
+        long commandDeltaId,
         long commandBatchId,
         PlanningCommandCellDelta delta,
         CancellationToken cancellationToken)
@@ -325,6 +353,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
         await using var command = new NpgsqlCommand(
             """
             insert into planning_command_cell_deltas (
+                command_delta_id,
                 command_batch_id,
                 scenario_version_id,
                 measure_id,
@@ -355,6 +384,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
                 new_cell_kind,
                 change_kind)
             values (
+                @commandDeltaId,
                 @commandBatchId,
                 @scenarioVersionId,
                 @measureId,
@@ -387,6 +417,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             """,
             connection,
             transaction);
+        command.Parameters.AddWithValue("@commandDeltaId", commandDeltaId);
         command.Parameters.AddWithValue("@commandBatchId", commandBatchId);
         command.Parameters.AddWithValue("@scenarioVersionId", delta.Coordinate.ScenarioVersionId);
         command.Parameters.AddWithValue("@measureId", delta.Coordinate.MeasureId);
