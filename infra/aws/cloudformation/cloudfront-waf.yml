@@ -1,0 +1,67 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFront WAF for Sales Planning UAT.
+
+Parameters:
+  WebAclName:
+    Type: String
+    Default: sales-planning-demo-cloudfront-waf
+  RateLimit:
+    Type: Number
+    Default: 2000
+
+Resources:
+  CloudFrontWebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Ref WebAclName
+      Scope: CLOUDFRONT
+      DefaultAction:
+        Allow: {}
+      Description: Minimal managed protection and rate limiting for Sales Planning UAT CloudFront.
+      VisibilityConfig:
+        CloudWatchMetricsEnabled: true
+        MetricName: salesPlanningCloudFrontWaf
+        SampledRequestsEnabled: true
+      Rules:
+        - Name: AWSManagedRulesAmazonIpReputationList
+          Priority: 0
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAmazonIpReputationList
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: awsManagedIpReputation
+            SampledRequestsEnabled: true
+        - Name: AWSManagedRulesKnownBadInputsRuleSet
+          Priority: 1
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: awsManagedKnownBadInputs
+            SampledRequestsEnabled: true
+        - Name: GlobalRateLimit
+          Priority: 2
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              AggregateKeyType: IP
+              Limit: !Ref RateLimit
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: globalRateLimit
+            SampledRequestsEnabled: true
+
+Outputs:
+  WebAclArn:
+    Value: !GetAtt CloudFrontWebAcl.Arn
+  WebAclId:
+    Value: !GetAtt CloudFrontWebAcl.Id

@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Private subnets and DB subnet group for Sales Planning UAT RDS.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-0c29c4e611198869c
+  PrivateSubnetACidr:
+    Type: String
+    Default: 172.31.48.0/24
+  PrivateSubnetBCidr:
+    Type: String
+    Default: 172.31.49.0/24
+  PrivateSubnetCCidr:
+    Type: String
+    Default: 172.31.50.0/24
+  PrivateSubnetAAz:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: ap-southeast-5a
+  PrivateSubnetBAz:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: ap-southeast-5b
+  PrivateSubnetCAz:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: ap-southeast-5c
+  DbSubnetGroupName:
+    Type: String
+    Default: sales-planning-demo-rds-private-subnets
+
+Resources:
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: sales-planning-demo-private-rt
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcId
+      AvailabilityZone: !Ref PrivateSubnetAAz
+      CidrBlock: !Ref PrivateSubnetACidr
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: sales-planning-demo-private-a
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcId
+      AvailabilityZone: !Ref PrivateSubnetBAz
+      CidrBlock: !Ref PrivateSubnetBCidr
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: sales-planning-demo-private-b
+
+  PrivateSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcId
+      AvailabilityZone: !Ref PrivateSubnetCAz
+      CidrBlock: !Ref PrivateSubnetCCidr
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: sales-planning-demo-private-c
+
+  PrivateSubnetARouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnetBRouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnetCRouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetC
+      RouteTableId: !Ref PrivateRouteTable
+
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private subnets for Sales Planning UAT RDS
+      DBSubnetGroupName: !Ref DbSubnetGroupName
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+        - !Ref PrivateSubnetC
+      Tags:
+        - Key: Name
+          Value: !Ref DbSubnetGroupName
+
+Outputs:
+  DbSubnetGroupName:
+    Value: !Ref DbSubnetGroup
+  PrivateSubnetAId:
+    Value: !Ref PrivateSubnetA
+  PrivateSubnetBId:
+    Value: !Ref PrivateSubnetB
+  PrivateSubnetCId:
+    Value: !Ref PrivateSubnetC
+  PrivateRouteTableId:
+    Value: !Ref PrivateRouteTable

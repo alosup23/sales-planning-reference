@@ -25,7 +25,7 @@ Parameters:
     Default: arn:aws:kms:ap-southeast-5:427304877733:key/efe0618e-10f3-4193-95a3-6b909de8b8c5
   DbHost:
     Type: String
-    Default: sales-planning-demo-pg.c78cmc6im0o5.ap-southeast-5.rds.amazonaws.com
+    Default: sales-planning-demo-pg-private.c78cmc6im0o5.ap-southeast-5.rds.amazonaws.com
   DbPort:
     Type: Number
     Default: 5432
