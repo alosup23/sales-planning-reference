@@ -51,9 +51,18 @@ Parameters:
   ContainerPort:
     Type: Number
     Default: 8080
+  CloudFrontOriginPrefixListId:
+    Type: String
+    Default: pl-09076f83e90b139d0
   CloudFrontOrigin:
     Type: String
     Default: https://d22xc0mfhkv9bk.cloudfront.net
+  OriginVerifyHeaderName:
+    Type: String
+    Default: X-Origin-Verify
+  OriginVerifyHeaderValue:
+    Type: String
+    NoEcho: true
   EntraTenantId:
     Type: String
     Default: 76ad236c-6db1-4d3d-9901-996450816c3c
@@ -108,13 +117,13 @@ Resources:
   ApiAlbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Public ALB ingress for Sales Planning UAT API
+      GroupDescription: CloudFront-restricted ALB ingress for Sales Planning UAT API
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
-          CidrIp: 0.0.0.0/0
+          SourcePrefixListId: !Ref CloudFrontOriginPrefixListId
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
@@ -175,11 +184,29 @@ Resources:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
       DefaultActions:
-        - Type: forward
-          TargetGroupArn: !Ref ApiTargetGroup
+        - Type: fixed-response
+          FixedResponseConfig:
+            ContentType: text/plain
+            MessageBody: Forbidden
+            StatusCode: 403
       LoadBalancerArn: !Ref ApiLoadBalancer
       Port: 80
       Protocol: HTTP
+
+  ApiForwardRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref ApiTargetGroup
+      Conditions:
+        - Field: http-header
+          HttpHeaderConfig:
+            HttpHeaderName: !Ref OriginVerifyHeaderName
+            Values:
+              - !Ref OriginVerifyHeaderValue
+      ListenerArn: !Ref ApiListener
+      Priority: 1
 
   ApiExecutionRole:
     Type: AWS::IAM::Role

@@ -1,9 +1,11 @@
 import fs from 'node:fs/promises';
 
-const [, , inputPath, outputPath, albDomainName] = process.argv;
+const [, , inputPath, outputPath, albDomainName, originVerifyHeaderName, originVerifyHeaderValue] = process.argv;
 
-if (!inputPath || !outputPath || !albDomainName) {
-  console.error('Usage: node scripts/update-cloudfront-api-origin.mjs <input.json> <output.json> <alb-domain-name>');
+if (!inputPath || !outputPath || !albDomainName || !originVerifyHeaderName || !originVerifyHeaderValue) {
+  console.error(
+    'Usage: node scripts/update-cloudfront-api-origin.mjs <input.json> <output.json> <alb-domain-name> <origin-verify-header-name> <origin-verify-header-value>'
+  );
   process.exit(1);
 }
 
@@ -24,7 +26,15 @@ const apiOrigin = {
   Id: apiOriginId,
   DomainName: albDomainName,
   OriginPath: '',
-  CustomHeaders: { Quantity: 0 },
+  CustomHeaders: {
+    Quantity: 1,
+    Items: [
+      {
+        HeaderName: originVerifyHeaderName,
+        HeaderValue: originVerifyHeaderValue
+      }
+    ]
+  },
   CustomOriginConfig: {
     HTTPPort: 80,
     HTTPSPort: 443,
