@@ -196,7 +196,6 @@ export default function App() {
       expandAllBranches,
     }),
     enabled: activeView === "planning-store" ? selectedPlanningStoreId !== null : activeView === "planning-department",
-    placeholderData: (previousData) => previousData,
   });
   const startupPlanningSliceReady = Boolean(gridQuery.data);
   const undoRedoAvailabilityQuery = useQuery({
@@ -289,13 +288,13 @@ export default function App() {
     setSelectedYearId(firstYear?.timePeriodId ?? null);
   }, [gridQuery.data, selectedYearId]);
 
-  const applyPatchToCachedPlanningSlices = (patch?: PlanningGridPatch | null) => {
+  const applyPatchToVisiblePlanningSlice = (patch?: PlanningGridPatch | null) => {
     if (!patch) {
       return false;
     }
 
     let didChange = false;
-    queryClient.setQueriesData<GridSliceResponse | undefined>({ queryKey: ["grid-slice", 1] }, (current) => {
+    queryClient.setQueryData<GridSliceResponse | undefined>(gridSliceQueryKey, (current) => {
       const next = applyPlanningGridPatch(current, patch);
       didChange = didChange || next !== current;
       return next;
@@ -325,6 +324,10 @@ export default function App() {
 
   const invalidatePlanningSliceCaches = async () => {
     await queryClient.invalidateQueries({ queryKey: ["grid-slice", 1], refetchType: "none" });
+  };
+
+  const clearInactivePlanningSliceCaches = () => {
+    queryClient.removeQueries({ queryKey: ["grid-slice", 1], type: "inactive" });
   };
 
   const refreshPlanningQueries = async ({
@@ -376,15 +379,15 @@ export default function App() {
     },
   ) => {
     syncUndoRedoAvailability(result.availability);
-    const patched = !(options?.forceGridRefresh ?? false) && applyPatchToCachedPlanningSlices(result.patch);
+    const patched = !(options?.forceGridRefresh ?? false) && applyPatchToVisiblePlanningSlice(result.patch);
     await invalidatePlanningSliceCaches();
+    clearInactivePlanningSliceCaches();
 
     await refreshPlanningQueries({
       includeStoreScopes: options?.includeStoreScopes ?? false,
       includeUndoRedo: !result.availability,
       includeInsights: true,
       includeGrid: !patched,
-      includeInactiveGrid: true,
     });
   };
 
