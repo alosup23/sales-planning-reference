@@ -90,16 +90,24 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
     }
 
     public Task<PlanningMetadataSnapshot> GetMetadataAsync(CancellationToken cancellationToken) =>
-        WithReadAsync(_innerRepository.GetMetadataAsync, cancellationToken);
+        ShouldUseHydratedCacheRead()
+            ? WithReadAsync(_innerRepository.GetMetadataAsync, cancellationToken)
+            : GetMetadataDirectAsync(cancellationToken);
 
     public Task<IReadOnlyList<PlanningCell>> GetCellsAsync(IEnumerable<PlanningCellCoordinate> coordinates, CancellationToken cancellationToken) =>
-        WithReadAsync(ct => _innerRepository.GetCellsAsync(coordinates, ct), cancellationToken);
+        ShouldUseHydratedCacheRead()
+            ? WithReadAsync(ct => _innerRepository.GetCellsAsync(coordinates, ct), cancellationToken)
+            : GetCellsDirectAsync(coordinates, cancellationToken);
 
     public Task<PlanningCell?> GetCellAsync(PlanningCellCoordinate coordinate, CancellationToken cancellationToken) =>
-        WithReadAsync(ct => _innerRepository.GetCellAsync(coordinate, ct), cancellationToken);
+        ShouldUseHydratedCacheRead()
+            ? WithReadAsync(ct => _innerRepository.GetCellAsync(coordinate, ct), cancellationToken)
+            : GetCellDirectAsync(coordinate, cancellationToken);
 
     public Task<IReadOnlyList<PlanningCell>> GetScenarioCellsAsync(long scenarioVersionId, CancellationToken cancellationToken) =>
-        WithReadAsync(ct => _innerRepository.GetScenarioCellsAsync(scenarioVersionId, ct), cancellationToken);
+        ShouldUseHydratedCacheRead()
+            ? WithReadAsync(ct => _innerRepository.GetScenarioCellsAsync(scenarioVersionId, ct), cancellationToken)
+            : GetScenarioCellsDirectAsync(scenarioVersionId, cancellationToken);
 
     public async Task UpsertCellsAsync(IEnumerable<PlanningCell> cells, CancellationToken cancellationToken)
     {
@@ -136,7 +144,9 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
     }
 
     public Task<PlanningUndoRedoAvailability> GetUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
-        WithReadAsync(ct => _innerRepository.GetUndoRedoAvailabilityAsync(scenarioVersionId, userId, limit, ct), cancellationToken);
+        ShouldUseHydratedCacheRead()
+            ? WithReadAsync(ct => _innerRepository.GetUndoRedoAvailabilityAsync(scenarioVersionId, userId, limit, ct), cancellationToken)
+            : GetUndoRedoAvailabilityDirectAsync(scenarioVersionId, userId, limit, cancellationToken);
 
     public Task<PlanningCommandBatch?> UndoLatestCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
         WithMutationAsync(
@@ -151,10 +161,10 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             cancellationToken);
 
     public Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, string? selectedDepartmentLabel, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, CancellationToken cancellationToken) =>
-        WithReadAsync(ct => _innerRepository.GetGridSliceAsync(scenarioVersionId, selectedStoreId, selectedDepartmentLabel, expandedProductNodeIds, expandAllBranches, ct), cancellationToken);
+        GetGridSliceDirectAsync(scenarioVersionId, selectedStoreId, selectedDepartmentLabel, expandedProductNodeIds, expandAllBranches, cancellationToken);
 
     public Task<GridBranchResponse> GetGridBranchRowsAsync(long scenarioVersionId, long parentProductNodeId, CancellationToken cancellationToken) =>
-        WithReadAsync(ct => _innerRepository.GetGridBranchRowsAsync(scenarioVersionId, parentProductNodeId, ct), cancellationToken);
+        GetGridBranchRowsDirectAsync(scenarioVersionId, parentProductNodeId, cancellationToken);
 
     public Task<ProductNode> AddRowAsync(AddRowRequest request, CancellationToken cancellationToken) =>
         WithMutationAsync(
@@ -181,7 +191,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             cancellationToken);
 
     public Task<IReadOnlyList<StoreNodeMetadata>> GetStoresAsync(CancellationToken cancellationToken) =>
-        WithReadAsync(_innerRepository.GetStoresAsync, cancellationToken);
+        GetStoresDirectAsync(cancellationToken);
 
     public Task<StoreNodeMetadata> UpsertStoreProfileAsync(long scenarioVersionId, StoreNodeMetadata storeProfile, CancellationToken cancellationToken) =>
         WithMutationAsync(
@@ -364,7 +374,9 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             cancellationToken);
 
     public Task<ProductNode?> FindProductNodeByPathAsync(string[] path, CancellationToken cancellationToken) =>
-        WithReadAsync(ct => _innerRepository.FindProductNodeByPathAsync(path, ct), cancellationToken);
+        ShouldUseHydratedCacheRead()
+            ? WithReadAsync(ct => _innerRepository.FindProductNodeByPathAsync(path, ct), cancellationToken)
+            : FindProductNodeByPathDirectAsync(path, cancellationToken);
 
     public Task ResetAsync(CancellationToken cancellationToken) =>
         WithMutationAsync(
@@ -459,7 +471,6 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
 
     private async Task<T> ExecuteAtomicCoreAsync<T>(Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken)
     {
-        await EnsureHydratedAsync(cancellationToken);
         var isOutermost = _atomicDepth.Value == 0;
         if (isOutermost)
         {
@@ -502,6 +513,11 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
     {
         await EnsureHydratedAsync(cancellationToken);
         return await action(cancellationToken);
+    }
+
+    private bool ShouldUseHydratedCacheRead()
+    {
+        return _atomicDepth.Value > 0 && (_pendingSyncPlan.Value?.HasMutations ?? false);
     }
 
     private async Task WithMutationAsync(Func<CancellationToken, Task> action, Action<PostgresSyncPlan> queueSync, CancellationToken cancellationToken)
