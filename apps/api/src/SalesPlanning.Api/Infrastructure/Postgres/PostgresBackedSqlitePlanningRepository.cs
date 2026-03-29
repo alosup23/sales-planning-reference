@@ -675,8 +675,8 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         await using (var pragmaCommand = sqlite.CreateCommand())
         {
             pragmaCommand.CommandText = """
-                pragma journal_mode = wal;
-                pragma synchronous = normal;
+                pragma journal_mode = memory;
+                pragma synchronous = off;
                 pragma temp_store = memory;
                 """;
             await pragmaCommand.ExecuteNonQueryAsync(cancellationToken);
