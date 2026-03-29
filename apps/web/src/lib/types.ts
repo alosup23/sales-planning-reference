@@ -316,6 +316,7 @@ export type StoreProfileResponse = {
 
 export type PlanningStoreScope = {
   storeId: number;
+  rootProductNodeId: number;
   branchName: string;
   storeCode?: string | null;
   clusterLabel: string;

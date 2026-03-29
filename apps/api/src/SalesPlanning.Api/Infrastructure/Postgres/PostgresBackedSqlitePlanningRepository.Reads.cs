@@ -654,7 +654,12 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
     {
         if (node.Level == 0)
         {
-            return true;
+            if (!string.IsNullOrWhiteSpace(selectedDepartmentLabel))
+            {
+                return false;
+            }
+
+            return selectedStoreId is null || node.StoreId == selectedStoreId.Value;
         }
 
         if (!string.IsNullOrWhiteSpace(selectedDepartmentLabel))

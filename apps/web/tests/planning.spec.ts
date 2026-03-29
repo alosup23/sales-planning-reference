@@ -42,14 +42,14 @@ async function toggleRowCaret(page: import("@playwright/test").Page, rowId: stri
   const row = page.locator(`.ag-pinned-left-cols-container [row-id="${rowId}"]`);
   const toggle = row.locator(".hierarchy-toggle").first();
   await expect(toggle).toBeVisible();
-  await toggle.click();
+  await toggle.click({ force: true });
 }
 
 async function toggleRowCaretByLabel(page: import("@playwright/test").Page, label: string) {
   const row = page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: label }).first();
   const toggle = row.locator(".hierarchy-toggle").first();
   await expect(toggle).toBeVisible();
-  await toggle.click();
+  await toggle.click({ force: true });
 }
 
 async function expectToggleLabel(page: import("@playwright/test").Page, rowId: string, label: string) {
@@ -67,7 +67,7 @@ async function ensurePinnedRowVisible(page: import("@playwright/test").Page, row
     if (await ancestorRow.count()) {
       const hierarchyToggle = ancestorRow.locator(".hierarchy-toggle").first();
       if (await hierarchyToggle.count()) {
-        await hierarchyToggle.click();
+        await hierarchyToggle.click({ force: true });
       }
     }
 

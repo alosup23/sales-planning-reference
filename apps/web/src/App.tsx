@@ -152,17 +152,35 @@ export default function App() {
   const [expandedBranchNodeIds, setExpandedBranchNodeIds] = useState<number[]>([]);
   const [expandAllBranches, setExpandAllBranches] = useState(false);
   const loadingBranchNodeIdsRef = useRef<Set<number>>(new Set());
+  const planningStoreScopesQueryKey = ["planning-store-scopes"] as const;
+  const undoRedoQueryKey = ["undo-redo-availability", 1] as const;
+  const planningStoreScopeQuery = useQuery({
+    queryKey: planningStoreScopesQueryKey,
+    queryFn: getPlanningStoreScopes,
+    enabled: activeView === "planning-store" || activeView === "planning-department",
+  });
   const effectivePlanningStoreId = selectedPlanningStoreId === "all" ? null : selectedPlanningStoreId;
   const planningScopeCacheKey = activeView === "planning-store"
     ? selectedPlanningStoreId ?? "__pending__"
     : "__all-stores__";
+  const bootstrapDepartmentExpansionKey = activeView === "planning-department" && !selectedDepartmentLabel && !expandAllBranches
+    ? (planningStoreScopeQuery.data?.stores.map((store) => store.rootProductNodeId).join(",") ?? "__loading__")
+    : "__none__";
+  const requestedExpandedBranchNodeIds = useMemo(() => {
+    if (activeView !== "planning-department" || selectedDepartmentLabel || expandAllBranches) {
+      return expandedBranchNodeIds;
+    }
+
+    const storeRootIds = planningStoreScopeQuery.data?.stores
+      .map((store) => store.rootProductNodeId)
+      .filter((productNodeId) => Number.isFinite(productNodeId) && productNodeId > 0) ?? [];
+    return [...new Set([...storeRootIds, ...expandedBranchNodeIds])].sort((left, right) => left - right);
+  }, [activeView, expandAllBranches, expandedBranchNodeIds, planningStoreScopeQuery.data, selectedDepartmentLabel]);
   const gridExpansionToken = "branch-cache";
   const gridSliceQueryKey = useMemo(
-    () => ["grid-slice", 1, activeView, planningScopeCacheKey, selectedDepartmentLabel, gridExpansionToken, expandAllBranches ? "all" : "branch"] as const,
-    [activeView, expandAllBranches, gridExpansionToken, planningScopeCacheKey, selectedDepartmentLabel],
+    () => ["grid-slice", 1, activeView, planningScopeCacheKey, selectedDepartmentLabel, bootstrapDepartmentExpansionKey, gridExpansionToken, expandAllBranches ? "all" : "branch"] as const,
+    [activeView, bootstrapDepartmentExpansionKey, expandAllBranches, gridExpansionToken, planningScopeCacheKey, selectedDepartmentLabel],
   );
-  const planningStoreScopesQueryKey = ["planning-store-scopes"] as const;
-  const undoRedoQueryKey = ["undo-redo-availability", 1] as const;
 
   useEffect(() => {
     void preloadPlanningGrid();
@@ -173,16 +191,11 @@ export default function App() {
     queryFn: () => getGridSlice({
       selectedStoreId: activeView === "planning-store" ? effectivePlanningStoreId : null,
       selectedDepartmentLabel: activeView === "planning-department" ? selectedDepartmentLabel : null,
-      expandedProductNodeIds: activeView === "planning-store" || activeView === "planning-department" ? expandedBranchNodeIds : [],
+      expandedProductNodeIds: activeView === "planning-store" || activeView === "planning-department" ? requestedExpandedBranchNodeIds : [],
       expandAllBranches,
     }),
     enabled: activeView === "planning-store" ? selectedPlanningStoreId !== null : activeView === "planning-department",
     placeholderData: (previousData) => previousData,
-  });
-  const planningStoreScopeQuery = useQuery({
-    queryKey: planningStoreScopesQueryKey,
-    queryFn: getPlanningStoreScopes,
-    enabled: activeView === "planning-store" || activeView === "planning-department",
   });
   const undoRedoAvailabilityQuery = useQuery({
     queryKey: undoRedoQueryKey,
@@ -1280,12 +1293,12 @@ export default function App() {
 
     if (aggregateExpansionNodeIds.length > 0) {
       const branchNodeId = row.productNodeId;
-      const allAggregateBranchesLoaded = aggregateExpansionNodeIds.every((productNodeId) => expandedBranchNodeIds.includes(productNodeId));
+      const allAggregateBranchesLoaded = aggregateExpansionNodeIds.every((productNodeId) => requestedExpandedBranchNodeIds.includes(productNodeId));
       if (allAggregateBranchesLoaded || loadingBranchNodeIdsRef.current.has(branchNodeId)) {
         return;
       }
 
-      const nextExpandedNodeIds = [...new Set([...expandedBranchNodeIds, ...aggregateExpansionNodeIds])].sort((left, right) => left - right);
+      const nextExpandedNodeIds = [...new Set([...requestedExpandedBranchNodeIds, ...aggregateExpansionNodeIds])].sort((left, right) => left - right);
       loadingBranchNodeIdsRef.current.add(branchNodeId);
       void getGridSlice({
         selectedDepartmentLabel,
@@ -1357,9 +1370,13 @@ export default function App() {
       return false;
     }
 
+    if (activeView === "planning-department" && row.structureRole === "department") {
+      return true;
+    }
+
     if (
       activeView === "planning-department"
-      && row.level > 0
+      && row.structureRole !== "store"
       && !row.bindingProductNodeId
       && (row.splashRoots?.length ?? 0) > 0
     ) {

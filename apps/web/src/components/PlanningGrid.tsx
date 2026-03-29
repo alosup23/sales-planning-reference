@@ -782,6 +782,7 @@ export function PlanningGrid({
               onToggleExpandedState: (row: GridRowView, expanded: boolean) => {
                 expandedRowStateRef.current.set(getRowKey(row), expanded);
               },
+              isRowExpanded: (row: GridRowView) => expandedRowStateRef.current.get(getRowKey(row)) ?? false,
             },
           }}
         />
@@ -960,12 +961,14 @@ type HierarchyCellRendererProps = ICellRendererParams<GridRowView> & {
   onEnsureBranchLoaded: (row: GridRowView) => void;
   canRowExpand?: (row: GridRowView) => boolean;
   onToggleExpandedState: (row: GridRowView, expanded: boolean) => void;
+  isRowExpanded?: (row: GridRowView) => boolean;
 };
 
 function HierarchyCellRenderer(props: HierarchyCellRendererProps) {
-  const { data, node, onEnsureBranchLoaded, canRowExpand, onToggleExpandedState, value } = props;
+  const { data, node, onEnsureBranchLoaded, canRowExpand, onToggleExpandedState, isRowExpanded, value } = props;
   const isGrouped = Boolean(node.group && data);
   const canExpand = Boolean(data && (isGrouped || canRowExpand?.(data) === true));
+  const expanded = Boolean((isGrouped ? node.expanded : false) || (data && !isGrouped && isRowExpanded?.(data)));
   const depth = Math.max(node.level ?? 0, 0);
 
   const handleToggle = (event: ReactMouseEvent<HTMLButtonElement>) => {
@@ -976,7 +979,7 @@ function HierarchyCellRenderer(props: HierarchyCellRendererProps) {
       return;
     }
 
-    const nextExpanded = !(node.expanded ?? false);
+    const nextExpanded = !expanded;
     if (nextExpanded) {
       onEnsureBranchLoaded(data);
     }
@@ -993,11 +996,11 @@ function HierarchyCellRenderer(props: HierarchyCellRendererProps) {
         <button
           type="button"
           className="hierarchy-toggle"
-          aria-label={`${node.expanded ? "Collapse" : "Expand"} ${value ?? data?.label ?? "row"}`}
+          aria-label={`${expanded ? "Collapse" : "Expand"} ${value ?? data?.label ?? "row"}`}
           onMouseDown={(event) => event.stopPropagation()}
           onClick={handleToggle}
         >
-          {node.expanded ? "▾" : "▸"}
+          {expanded ? "▾" : "▸"}
         </button>
       ) : (
         <span className="hierarchy-toggle-spacer" aria-hidden="true" />

@@ -41,6 +41,7 @@ public sealed record StoreProfileResponse(
 
 public sealed record PlanningStoreScopeDto(
     long StoreId,
+    long RootProductNodeId,
     string BranchName,
     string? StoreCode,
     string ClusterLabel,

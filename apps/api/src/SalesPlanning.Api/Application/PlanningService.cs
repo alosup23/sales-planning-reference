@@ -541,13 +541,21 @@ public sealed partial class PlanningService : IPlanningService
 
     public async Task<PlanningStoreScopeResponse> GetPlanningStoreScopesAsync(CancellationToken cancellationToken)
     {
+        var metadata = await _repository.GetMetadataAsync(cancellationToken);
         var stores = await _repository.GetStoresAsync(cancellationToken);
+        var rootNodeIdByStoreId = metadata.ProductNodes.Values
+            .Where(node => node.Level == 0)
+            .GroupBy(node => node.StoreId)
+            .ToDictionary(
+                group => group.Key,
+                group => group.OrderBy(node => node.ProductNodeId).First().ProductNodeId);
         return new PlanningStoreScopeResponse(
             stores
                 .OrderByDescending(store => store.IsActive)
                 .ThenBy(store => store.StoreLabel, StringComparer.OrdinalIgnoreCase)
                 .Select(store => new PlanningStoreScopeDto(
                     store.StoreId,
+                    rootNodeIdByStoreId.GetValueOrDefault(store.StoreId, store.StoreId),
                     store.StoreLabel,
                     store.StoreCode,
                     store.ClusterLabel,
