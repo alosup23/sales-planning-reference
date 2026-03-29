@@ -26,6 +26,7 @@ public interface IPlanningRepository
     Task<int> DeleteYearAsync(long scenarioVersionId, long yearTimePeriodId, CancellationToken cancellationToken);
     Task EnsureYearAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken);
     Task<IReadOnlyList<StoreNodeMetadata>> GetStoresAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyDictionary<long, long>> GetStoreRootProductNodeIdsAsync(CancellationToken cancellationToken);
     Task<StoreNodeMetadata> UpsertStoreProfileAsync(long scenarioVersionId, StoreNodeMetadata storeProfile, CancellationToken cancellationToken);
     Task DeleteStoreProfileAsync(long scenarioVersionId, long storeId, CancellationToken cancellationToken);
     Task InactivateStoreProfileAsync(long storeId, CancellationToken cancellationToken);

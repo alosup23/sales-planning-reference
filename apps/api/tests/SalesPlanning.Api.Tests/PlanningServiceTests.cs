@@ -42,6 +42,18 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
+    public async Task GetPlanningStoreScopesAsync_ReturnsStoreRootProductNodeIds()
+    {
+        var response = await _service.GetPlanningStoreScopesAsync(CancellationToken.None);
+        var storeARoot = await _repository.FindProductNodeByPathAsync(["Store A"], CancellationToken.None);
+
+        Assert.NotNull(storeARoot);
+        var storeA = Assert.Single(response.Stores, store => store.StoreId == 101);
+        Assert.Equal(storeARoot!.ProductNodeId, storeA.RootProductNodeId);
+        Assert.Equal("Store A", storeA.BranchName);
+    }
+
+    [Fact]
     public async Task ApplyEditsAsync_WhenGrossProfitPercentChanges_RecalculatesAspRevenueAndGrossProfit()
     {
         var gpPercentCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.GrossProfitPercent, 101, 2111, 202603), CancellationToken.None);

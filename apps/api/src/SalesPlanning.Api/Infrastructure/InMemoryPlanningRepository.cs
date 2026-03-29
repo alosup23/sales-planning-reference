@@ -36,6 +36,7 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository, IDisposabl
     public Task<int> DeleteYearAsync(long scenarioVersionId, long yearTimePeriodId, CancellationToken cancellationToken) => _inner.DeleteYearAsync(scenarioVersionId, yearTimePeriodId, cancellationToken);
     public Task EnsureYearAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken) => _inner.EnsureYearAsync(scenarioVersionId, fiscalYear, cancellationToken);
     public Task<IReadOnlyList<StoreNodeMetadata>> GetStoresAsync(CancellationToken cancellationToken) => _inner.GetStoresAsync(cancellationToken);
+    public Task<IReadOnlyDictionary<long, long>> GetStoreRootProductNodeIdsAsync(CancellationToken cancellationToken) => _inner.GetStoreRootProductNodeIdsAsync(cancellationToken);
     public Task<StoreNodeMetadata> UpsertStoreProfileAsync(long scenarioVersionId, StoreNodeMetadata storeProfile, CancellationToken cancellationToken) => _inner.UpsertStoreProfileAsync(scenarioVersionId, storeProfile, cancellationToken);
     public Task DeleteStoreProfileAsync(long scenarioVersionId, long storeId, CancellationToken cancellationToken) => _inner.DeleteStoreProfileAsync(scenarioVersionId, storeId, cancellationToken);
     public Task InactivateStoreProfileAsync(long storeId, CancellationToken cancellationToken) => _inner.InactivateStoreProfileAsync(storeId, cancellationToken);

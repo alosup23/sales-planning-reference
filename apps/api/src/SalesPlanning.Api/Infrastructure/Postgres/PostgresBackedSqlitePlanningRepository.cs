@@ -175,6 +175,9 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
     public Task<IReadOnlyList<StoreNodeMetadata>> GetStoresAsync(CancellationToken cancellationToken) =>
         GetStoresDirectAsync(cancellationToken);
 
+    public Task<IReadOnlyDictionary<long, long>> GetStoreRootProductNodeIdsAsync(CancellationToken cancellationToken) =>
+        GetStoreRootProductNodeIdsDirectAsync(cancellationToken);
+
     public Task<StoreNodeMetadata> UpsertStoreProfileAsync(long scenarioVersionId, StoreNodeMetadata storeProfile, CancellationToken cancellationToken) =>
         WithMutationAsync(
             ct => _innerRepository.UpsertStoreProfileAsync(scenarioVersionId, storeProfile, ct),

@@ -716,6 +716,33 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
             .ToList();
     }
 
+    public async Task<IReadOnlyDictionary<long, long>> GetStoreRootProductNodeIdsAsync(CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select store_id,
+                   product_node_id
+            from product_nodes
+            where level = 0
+            order by store_id, product_node_id;
+            """;
+
+        var roots = new Dictionary<long, long>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var storeId = reader.GetInt64(0);
+            if (!roots.ContainsKey(storeId))
+            {
+                roots[storeId] = reader.GetInt64(1);
+            }
+        }
+
+        return roots;
+    }
+
     public async Task<StoreNodeMetadata> UpsertStoreProfileAsync(long scenarioVersionId, StoreNodeMetadata storeProfile, CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);

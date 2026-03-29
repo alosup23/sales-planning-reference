@@ -131,6 +131,9 @@ public sealed class S3BackedSqlitePlanningRepository : IPlanningRepository
     public Task<IReadOnlyList<StoreNodeMetadata>> GetStoresAsync(CancellationToken cancellationToken) =>
         WithReadAsync(_innerRepository.GetStoresAsync, cancellationToken);
 
+    public Task<IReadOnlyDictionary<long, long>> GetStoreRootProductNodeIdsAsync(CancellationToken cancellationToken) =>
+        WithReadAsync(_innerRepository.GetStoreRootProductNodeIdsAsync, cancellationToken);
+
     public Task<StoreNodeMetadata> UpsertStoreProfileAsync(long scenarioVersionId, StoreNodeMetadata storeProfile, CancellationToken cancellationToken) =>
         WithMutationAsync((ct) => _innerRepository.UpsertStoreProfileAsync(scenarioVersionId, storeProfile, ct), cancellationToken);
 

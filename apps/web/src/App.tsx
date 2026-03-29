@@ -154,10 +154,11 @@ export default function App() {
   const loadingBranchNodeIdsRef = useRef<Set<number>>(new Set());
   const planningStoreScopesQueryKey = ["planning-store-scopes"] as const;
   const undoRedoQueryKey = ["undo-redo-availability", 1] as const;
+  const planningViewActive = activeView === "planning-store" || activeView === "planning-department";
   const planningStoreScopeQuery = useQuery({
     queryKey: planningStoreScopesQueryKey,
     queryFn: getPlanningStoreScopes,
-    enabled: activeView === "planning-store" || activeView === "planning-department",
+    enabled: planningViewActive,
   });
   const effectivePlanningStoreId = selectedPlanningStoreId === "all" ? null : selectedPlanningStoreId;
   const planningScopeCacheKey = activeView === "planning-store"
@@ -197,10 +198,11 @@ export default function App() {
     enabled: activeView === "planning-store" ? selectedPlanningStoreId !== null : activeView === "planning-department",
     placeholderData: (previousData) => previousData,
   });
+  const startupPlanningSliceReady = Boolean(gridQuery.data);
   const undoRedoAvailabilityQuery = useQuery({
     queryKey: undoRedoQueryKey,
     queryFn: () => getUndoRedoAvailability(1),
-    enabled: activeView === "planning-store" || activeView === "planning-department",
+    enabled: planningViewActive && startupPlanningSliceReady,
   });
   const hierarchyQuery = useQuery({
     queryKey: ["hierarchy-mappings"],

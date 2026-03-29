@@ -29,6 +29,32 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
         }, cancellationToken);
     }
 
+    private async Task<IReadOnlyDictionary<long, long>> GetStoreRootProductNodeIdsDirectAsync(CancellationToken cancellationToken)
+    {
+        return await ExecuteDirectReadAsync(async (connection, transaction, ct) =>
+        {
+            var roots = new Dictionary<long, long>();
+            await using var command = new NpgsqlCommand(
+            """
+            select distinct on (store_id)
+                   store_id,
+                   product_node_id
+            from product_nodes
+            where level = 0
+            order by store_id, product_node_id;
+            """,
+            connection,
+            transaction);
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                roots[reader.GetInt64(0)] = reader.GetInt64(1);
+            }
+
+            return roots;
+        }, cancellationToken);
+    }
+
     private async Task<IReadOnlyList<PlanningCell>> GetCellsDirectAsync(IEnumerable<PlanningCellCoordinate> coordinates, CancellationToken cancellationToken)
     {
         var coordinateList = coordinates.ToList();
