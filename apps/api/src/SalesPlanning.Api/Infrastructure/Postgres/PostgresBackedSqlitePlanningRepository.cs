@@ -5,6 +5,7 @@ using Npgsql;
 using SalesPlanning.Api.Application;
 using SalesPlanning.Api.Contracts;
 using SalesPlanning.Api.Domain;
+using System.Globalization;
 
 namespace SalesPlanning.Api.Infrastructure.Postgres;
 
@@ -385,6 +386,11 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             throw new FileNotFoundException("SQLite migration source was not found.", sqliteDatabasePath);
         }
 
+        _logger.LogInformation(
+            "Starting SQLite to PostgreSQL snapshot import from {SourceName} using seed key {SeedKey}.",
+            sourceName,
+            seedKey);
+
         await using var sqlite = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = sqliteDatabasePath,
@@ -419,7 +425,9 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
 
         foreach (var definition in PostgresTableDefinitions.All)
         {
+            _logger.LogInformation("Copying table {TableName} from SQLite into PostgreSQL.", definition.Name);
             await CopyTableSqliteToPostgresAsync(sqlite, postgres, transaction, definition, cancellationToken);
+            _logger.LogInformation("Copied table {TableName} into PostgreSQL.", definition.Name);
         }
 
         await UpdateDataVersionAsync(postgres, transaction, cancellationToken);
@@ -443,6 +451,10 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         await transaction.CommitAsync(cancellationToken);
         _hydrated = false;
         _localDataVersion = null;
+        _logger.LogInformation(
+            "Completed SQLite to PostgreSQL snapshot import from {SourceName} using seed key {SeedKey}.",
+            sourceName,
+            seedKey);
     }
 
     private async Task<T> ExecuteAtomicCoreAsync<T>(Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken)
@@ -574,8 +586,10 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
 
             if (_applyMigrationsOnStartup)
             {
+                _logger.LogInformation("Applying PostgreSQL migrations from {MigrationsDirectory}.", _migrationsDirectory);
                 var migrator = new PostgresMigrationRunner(_connectionString, _migrationsDirectory, LoggerFactory.Create(builder => { }).CreateLogger<PostgresMigrationRunner>());
                 await migrator.ApplyMigrationsAsync(cancellationToken);
+                _logger.LogInformation("PostgreSQL migrations are up to date.");
             }
 
             var remoteVersion = await GetRemoteDataVersionAsync(cancellationToken);
@@ -584,6 +598,11 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
                 && !string.IsNullOrWhiteSpace(_bootstrapS3ObjectKey)
                 && !string.IsNullOrWhiteSpace(_bootstrapSeedKey))
             {
+                _logger.LogInformation(
+                    "PostgreSQL data version is 0. Bootstrapping from s3://{Bucket}/{Key} with seed key {SeedKey}.",
+                    _bootstrapS3Bucket,
+                    _bootstrapS3ObjectKey,
+                    _bootstrapSeedKey);
                 var tempSqlitePath = Path.Combine(Path.GetTempPath(), "sales-planning-postgres-bootstrap", "source.db");
                 Directory.CreateDirectory(Path.GetDirectoryName(tempSqlitePath) ?? Path.GetTempPath());
                 if (File.Exists(tempSqlitePath))
@@ -597,6 +616,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
                 {
                     await response.ResponseStream.CopyToAsync(targetStream, cancellationToken);
                 }
+                _logger.LogInformation("Downloaded SQLite bootstrap snapshot to {BootstrapPath}.", tempSqlitePath);
 
                 await ImportSqliteSnapshotAsync(
                     tempSqlitePath,
@@ -606,6 +626,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             }
 
             _databaseReady = true;
+            _logger.LogInformation("PostgreSQL repository is ready for use.");
         }
         finally
         {
@@ -651,11 +672,23 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             await schemaCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        await using (var pragmaCommand = sqlite.CreateCommand())
+        {
+            pragmaCommand.CommandText = """
+                pragma journal_mode = wal;
+                pragma synchronous = normal;
+                pragma temp_store = memory;
+                """;
+            await pragmaCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         await using var postgres = new NpgsqlConnection(_connectionString);
         await postgres.OpenAsync(cancellationToken);
         foreach (var definition in PostgresTableDefinitions.All)
         {
+            _logger.LogInformation("Hydrating local SQLite cache table {TableName} from PostgreSQL.", definition.Name);
             await CopyTablePostgresToSqliteAsync(postgres, sqlite, definition, cancellationToken);
+            _logger.LogInformation("Hydrated local SQLite cache table {TableName}.", definition.Name);
         }
 
         sqlite.Close();
@@ -727,17 +760,32 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         await using var selectCommand = new NpgsqlCommand(selectSql, postgres);
         await using var reader = await selectCommand.ExecuteReaderAsync(cancellationToken);
         var insertSql = $"insert into {definition.Name} ({string.Join(", ", definition.Columns)}) values ({string.Join(", ", definition.Columns.Select((_, index) => $"@p{index}"))});";
+        await using var transaction = (SqliteTransaction)await sqlite.BeginTransactionAsync(cancellationToken);
+        await using var insertCommand = sqlite.CreateCommand();
+        insertCommand.CommandText = insertSql;
+        insertCommand.Transaction = transaction;
+        var parameters = new SqliteParameter[definition.Columns.Length];
+        for (var index = 0; index < definition.Columns.Length; index += 1)
+        {
+            var parameter = insertCommand.CreateParameter();
+            parameter.ParameterName = $"@p{index}";
+            insertCommand.Parameters.Add(parameter);
+            parameters[index] = parameter;
+        }
+
+        await insertCommand.PrepareAsync(cancellationToken);
+
         while (await reader.ReadAsync(cancellationToken))
         {
-            await using var insertCommand = sqlite.CreateCommand();
-            insertCommand.CommandText = insertSql;
             for (var index = 0; index < definition.Columns.Length; index += 1)
             {
-                insertCommand.Parameters.AddWithValue($"@p{index}", reader.IsDBNull(index) ? DBNull.Value : reader.GetValue(index));
+                parameters[index].Value = reader.IsDBNull(index) ? DBNull.Value : reader.GetValue(index);
             }
 
             await insertCommand.ExecuteNonQueryAsync(cancellationToken);
         }
+
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private static async Task CopyTableSqliteToPostgresAsync(SqliteConnection sqlite, NpgsqlConnection postgres, NpgsqlTransaction transaction, PostgresTableDefinition definition, CancellationToken cancellationToken)
@@ -753,32 +801,49 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             return;
         }
 
-        var selectSql = $"select {string.Join(", ", selectedColumns)} from {definition.Name};";
-        await using var selectCommand = sqlite.CreateCommand();
-        selectCommand.CommandText = selectSql;
-        await using var reader = await selectCommand.ExecuteReaderAsync(cancellationToken);
-        var selectedIndexByColumn = selectedColumns
-            .Select((column, index) => (column, index))
-            .ToDictionary(entry => entry.column, entry => entry.index, StringComparer.OrdinalIgnoreCase);
-        var copySql = $"copy {definition.Name} ({string.Join(", ", definition.Columns)}) from stdin (format binary)";
-        await using var importer = await postgres.BeginBinaryImportAsync(copySql, cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        try
         {
-            await importer.StartRowAsync(cancellationToken);
-            for (var index = 0; index < definition.Columns.Length; index += 1)
+            var selectSql = $"select {string.Join(", ", selectedColumns)} from {definition.Name};";
+            await using var selectCommand = sqlite.CreateCommand();
+            selectCommand.CommandText = selectSql;
+            await using var reader = await selectCommand.ExecuteReaderAsync(cancellationToken);
+            var selectedIndexByColumn = selectedColumns
+                .Select((column, index) => (column, index))
+                .ToDictionary(entry => entry.column, entry => entry.index, StringComparer.OrdinalIgnoreCase);
+            var copySql = $"copy {definition.Name} ({string.Join(", ", definition.Columns)}) from stdin (format binary)";
+            await using var importer = await postgres.BeginBinaryImportAsync(copySql, cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
             {
-                if (!selectedIndexByColumn.TryGetValue(definition.Columns[index], out var readerIndex) || reader.IsDBNull(readerIndex))
+                await importer.StartRowAsync(cancellationToken);
+                for (var index = 0; index < definition.Columns.Length; index += 1)
                 {
-                    await importer.WriteNullAsync(cancellationToken);
-                    continue;
+                    if (!selectedIndexByColumn.TryGetValue(definition.Columns[index], out var readerIndex) || reader.IsDBNull(readerIndex))
+                    {
+                        await importer.WriteNullAsync(cancellationToken);
+                        continue;
+                    }
+
+                    var postgresType = postgresColumnTypes.GetValueOrDefault(definition.Columns[index], "text");
+                    try
+                    {
+                        await WriteSqliteValueAsync(importer, reader.GetValue(readerIndex), postgresType, cancellationToken);
+                    }
+                    catch (Exception exception)
+                    {
+                        var rawValue = reader.GetValue(readerIndex);
+                        throw new InvalidOperationException(
+                            $"Failed to copy {definition.Name}.{definition.Columns[index]} as PostgreSQL type '{postgresType}'. SQLite value type was '{rawValue.GetType().FullName}' and value was '{Convert.ToString(rawValue, CultureInfo.InvariantCulture)}'.",
+                            exception);
+                    }
                 }
-
-                var postgresType = postgresColumnTypes.GetValueOrDefault(definition.Columns[index], "text");
-                await WriteSqliteValueAsync(importer, reader.GetValue(readerIndex), postgresType, cancellationToken);
             }
-        }
 
-        await importer.CompleteAsync(cancellationToken);
+            await importer.CompleteAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not InvalidOperationException)
+        {
+            throw new InvalidOperationException($"Failed to bulk copy table '{definition.Name}' from SQLite into PostgreSQL.", exception);
+        }
     }
 
     private static async Task<HashSet<string>> GetSqliteColumnsAsync(SqliteConnection sqlite, string tableName, CancellationToken cancellationToken)
@@ -828,7 +893,80 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             "numeric" => importer.WriteAsync(Convert.ToDecimal(value), cancellationToken),
             "double precision" => importer.WriteAsync(Convert.ToDouble(value), cancellationToken),
             "real" => importer.WriteAsync(Convert.ToSingle(value), cancellationToken),
-            _ => importer.WriteAsync(Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture), cancellationToken)
+            "boolean" => importer.WriteAsync(ToBoolean(value), cancellationToken),
+            "timestamp with time zone" => importer.WriteAsync(ToUtcDateTime(value), cancellationToken),
+            "timestamp without time zone" => importer.WriteAsync(ToUnspecifiedDateTime(value), cancellationToken),
+            "date" => importer.WriteAsync(ToDateOnly(value), cancellationToken),
+            "uuid" => importer.WriteAsync(ToGuid(value), cancellationToken),
+            _ => importer.WriteAsync(Convert.ToString(value, CultureInfo.InvariantCulture), cancellationToken)
+        };
+    }
+
+    private static bool ToBoolean(object value)
+    {
+        return value switch
+        {
+            bool booleanValue => booleanValue,
+            long longValue => longValue != 0,
+            int intValue => intValue != 0,
+            short shortValue => shortValue != 0,
+            byte byteValue => byteValue != 0,
+            string stringValue when bool.TryParse(stringValue, out var parsedBoolean) => parsedBoolean,
+            string stringValue when long.TryParse(stringValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedInteger) => parsedInteger != 0,
+            _ => Convert.ToInt64(value, CultureInfo.InvariantCulture) != 0
+        };
+    }
+
+    private static DateTime ToUtcDateTime(object value)
+    {
+        return value switch
+        {
+            DateTime dateTime => dateTime.Kind switch
+            {
+                DateTimeKind.Utc => dateTime,
+                DateTimeKind.Local => dateTime.ToUniversalTime(),
+                _ => DateTime.SpecifyKind(dateTime, DateTimeKind.Utc)
+            },
+            DateTimeOffset dateTimeOffset => dateTimeOffset.UtcDateTime,
+            string stringValue => DateTimeOffset.Parse(stringValue, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind).UtcDateTime,
+            _ => DateTime.SpecifyKind(Convert.ToDateTime(value, CultureInfo.InvariantCulture), DateTimeKind.Utc)
+        };
+    }
+
+    private static DateTime ToUnspecifiedDateTime(object value)
+    {
+        return value switch
+        {
+            DateTime dateTime => dateTime.Kind == DateTimeKind.Unspecified
+                ? dateTime
+                : DateTime.SpecifyKind(dateTime, DateTimeKind.Unspecified),
+            DateTimeOffset dateTimeOffset => DateTime.SpecifyKind(dateTimeOffset.DateTime, DateTimeKind.Unspecified),
+            string stringValue => DateTime.SpecifyKind(
+                DateTimeOffset.Parse(stringValue, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind).DateTime,
+                DateTimeKind.Unspecified),
+            _ => DateTime.SpecifyKind(Convert.ToDateTime(value, CultureInfo.InvariantCulture), DateTimeKind.Unspecified)
+        };
+    }
+
+    private static DateOnly ToDateOnly(object value)
+    {
+        return value switch
+        {
+            DateOnly dateOnly => dateOnly,
+            DateTime dateTime => DateOnly.FromDateTime(dateTime),
+            DateTimeOffset dateTimeOffset => DateOnly.FromDateTime(dateTimeOffset.DateTime),
+            string stringValue => DateOnly.Parse(stringValue, CultureInfo.InvariantCulture),
+            _ => DateOnly.FromDateTime(Convert.ToDateTime(value, CultureInfo.InvariantCulture))
+        };
+    }
+
+    private static Guid ToGuid(object value)
+    {
+        return value switch
+        {
+            Guid guid => guid,
+            string stringValue => Guid.Parse(stringValue),
+            _ => Guid.Parse(Convert.ToString(value, CultureInfo.InvariantCulture) ?? throw new InvalidOperationException("Cannot convert null value to GUID."))
         };
     }
 
