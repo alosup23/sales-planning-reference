@@ -1,0 +1,320 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Sales Planning UAT interactive API on ECS Fargate backed by RDS PostgreSQL.
+
+Parameters:
+  ServiceName:
+    Type: String
+    Default: sales-planning-demo-api
+  ClusterName:
+    Type: String
+    Default: sales-planning-demo-cluster
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-0c29c4e611198869c
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Default: subnet-0829b0ba1df103016,subnet-0bccfffc49dfea45c,subnet-0fa1876970692d5ce
+  DbSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Default: sg-02e38011d0de1a5d5
+  DbSecretArn:
+    Type: String
+    Default: arn:aws:secretsmanager:ap-southeast-5:427304877733:secret:rds!db-c3a5f4d8-c142-45cf-92ad-074a40299442-wKsUmu
+  DbSecretKmsKeyArn:
+    Type: String
+    Default: arn:aws:kms:ap-southeast-5:427304877733:key/efe0618e-10f3-4193-95a3-6b909de8b8c5
+  DbHost:
+    Type: String
+    Default: sales-planning-demo-pg.c78cmc6im0o5.ap-southeast-5.rds.amazonaws.com
+  DbPort:
+    Type: Number
+    Default: 5432
+  DbName:
+    Type: String
+    Default: salesplanning
+  ImageUri:
+    Type: String
+    Default: 427304877733.dkr.ecr.ap-southeast-5.amazonaws.com/sales-planning-demo-api:latest
+  DesiredCount:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    MaxValue: 2
+  Cpu:
+    Type: Number
+    Default: 1024
+    AllowedValues: [256, 512, 1024, 2048]
+  Memory:
+    Type: Number
+    Default: 2048
+    AllowedValues: [512, 1024, 2048, 3072, 4096]
+  ContainerPort:
+    Type: Number
+    Default: 8080
+  CloudFrontOrigin:
+    Type: String
+    Default: https://d22xc0mfhkv9bk.cloudfront.net
+  EntraTenantId:
+    Type: String
+    Default: 76ad236c-6db1-4d3d-9901-996450816c3c
+  EntraClientId:
+    Type: String
+    Default: 557f0c81-0531-4616-b62e-0b69eb7cb86f
+  EntraApiAudience:
+    Type: String
+    Default: api://557f0c81-0531-4616-b62e-0b69eb7cb86f
+  EntraApiScope:
+    Type: String
+    Default: SalesPlanning.Access
+
+Resources:
+  ApiRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: sales-planning-demo-api
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: false
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only the latest 10 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ClusterName
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/sales-planning-demo-api
+      RetentionInDays: 7
+
+  ApiAlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public ALB ingress for Sales Planning UAT API
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  ApiTaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Fargate task ingress for Sales Planning UAT API
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref ContainerPort
+          ToPort: !Ref ContainerPort
+          SourceSecurityGroupId: !Ref ApiAlbSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  DbIngressFromApiTasks:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DbSecurityGroupId
+      IpProtocol: tcp
+      FromPort: !Ref DbPort
+      ToPort: !Ref DbPort
+      SourceSecurityGroupId: !Ref ApiTaskSecurityGroup
+      Description: Allow ECS tasks to reach PostgreSQL
+
+  ApiLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: sales-plan-api-alb
+      Scheme: internet-facing
+      Type: application
+      IpAddressType: ipv4
+      SecurityGroups:
+        - !Ref ApiAlbSecurityGroup
+      Subnets: !Ref PublicSubnetIds
+
+  ApiTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: sales-plan-api-tg
+      Port: !Ref ContainerPort
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VpcId
+      HealthCheckEnabled: true
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      Matcher:
+        HttpCode: 200-399
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 30
+
+  ApiListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ApiTargetGroup
+      LoadBalancerArn: !Ref ApiLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  ApiExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sales-planning-demo-ecs-exec
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  ApiTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sales-planning-demo-ecs-task
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: sales-planning-demo-ecs-task-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref DbSecretArn
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: !Ref DbSecretKmsKeyArn
+
+  ApiTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: sales-planning-demo-api
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: !Ref Cpu
+      Memory: !Ref Memory
+      NetworkMode: awsvpc
+      ExecutionRoleArn: !GetAtt ApiExecutionRole.Arn
+      TaskRoleArn: !GetAtt ApiTaskRole.Arn
+      ContainerDefinitions:
+        - Name: api
+          Image: !Ref ImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+              Protocol: tcp
+          Environment:
+            - Name: ASPNETCORE_URLS
+              Value: !Sub http://+:${ContainerPort}
+            - Name: PlanningStorageMode
+              Value: postgres
+            - Name: PlanningApplyMigrationsOnStartup
+              Value: "false"
+            - Name: PlanningSecurityMode
+              Value: entra
+            - Name: PlanningDbPath
+              Value: /tmp/sales-planning-demo/planning.db
+            - Name: EnableTestReset
+              Value: "false"
+            - Name: PlanningPostgresHost
+              Value: !Ref DbHost
+            - Name: PlanningPostgresPort
+              Value: !Sub ${DbPort}
+            - Name: PlanningPostgresDatabase
+              Value: !Ref DbName
+            - Name: PlanningPostgresSecretArn
+              Value: !Ref DbSecretArn
+            - Name: CorsAllowedOrigins
+              Value: !Ref CloudFrontOrigin
+            - Name: EntraTenantId
+              Value: !Ref EntraTenantId
+            - Name: EntraClientId
+              Value: !Ref EntraClientId
+            - Name: EntraApiAudience
+              Value: !Ref EntraApiAudience
+            - Name: EntraApiScope
+              Value: !Ref EntraApiScope
+            - Name: DOTNET_EnableDiagnostics
+              Value: "0"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ApiLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: api
+
+  ApiService:
+    Type: AWS::ECS::Service
+    DependsOn: ApiListener
+    Properties:
+      ServiceName: !Ref ServiceName
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: !Ref DesiredCount
+      EnableExecuteCommand: false
+      HealthCheckGracePeriodSeconds: 60
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 0
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref ApiTaskSecurityGroup
+          Subnets: !Ref PublicSubnetIds
+      LoadBalancers:
+        - ContainerName: api
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn: !Ref ApiTargetGroup
+      TaskDefinition: !Ref ApiTaskDefinition
+
+Outputs:
+  EcrRepositoryUri:
+    Value: !GetAtt ApiRepository.RepositoryUri
+  ClusterName:
+    Value: !Ref Cluster
+  ServiceName:
+    Value: !GetAtt ApiService.Name
+  LoadBalancerDnsName:
+    Value: !GetAtt ApiLoadBalancer.DNSName
+  LoadBalancerUrl:
+    Value: !Sub http://${ApiLoadBalancer.DNSName}
+  TaskSecurityGroupId:
+    Value: !Ref ApiTaskSecurityGroup
+  AlbSecurityGroupId:
+    Value: !Ref ApiAlbSecurityGroup
