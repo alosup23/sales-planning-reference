@@ -289,15 +289,15 @@ export default function App() {
     setSelectedYearId(firstYear?.timePeriodId ?? null);
   }, [gridQuery.data, selectedYearId]);
 
-  const applyPatchToVisiblePlanningSlice = (patch?: PlanningGridPatch | null) => {
+  const applyPatchToCachedPlanningSlices = (patch?: PlanningGridPatch | null) => {
     if (!patch) {
       return false;
     }
 
     let didChange = false;
-    queryClient.setQueryData<GridSliceResponse | undefined>(gridSliceQueryKey, (current) => {
+    queryClient.setQueriesData<GridSliceResponse | undefined>({ queryKey: ["grid-slice", 1] }, (current) => {
       const next = applyPlanningGridPatch(current, patch);
-      didChange = next !== current;
+      didChange = didChange || next !== current;
       return next;
     });
 
@@ -321,6 +321,10 @@ export default function App() {
     }
 
     queryClient.setQueryData<UndoRedoAvailability>(undoRedoQueryKey, availability);
+  };
+
+  const invalidatePlanningSliceCaches = async () => {
+    await queryClient.invalidateQueries({ queryKey: ["grid-slice", 1], refetchType: "none" });
   };
 
   const refreshPlanningQueries = async ({
@@ -366,7 +370,8 @@ export default function App() {
     },
   ) => {
     syncUndoRedoAvailability(result.availability);
-    const patched = !(options?.forceGridRefresh ?? false) && applyPatchToVisiblePlanningSlice(result.patch);
+    const patched = !(options?.forceGridRefresh ?? false) && applyPatchToCachedPlanningSlices(result.patch);
+    await invalidatePlanningSliceCaches();
 
     await refreshPlanningQueries({
       includeStoreScopes: options?.includeStoreScopes ?? false,

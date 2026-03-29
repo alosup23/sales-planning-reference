@@ -404,6 +404,40 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
+    public async Task ApplyEditsAsync_OnLeafMonthRevenue_KeepsClassAndDepartmentMonthTotalsAligned()
+    {
+        var colaBefore = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202601), CancellationToken.None);
+
+        await _service.ApplyEditsAsync(
+            new EditCellsRequest(
+                1,
+                PlanningMeasures.SalesRevenue,
+                "Leaf month revenue update",
+                new[]
+                {
+                    new EditCellRequest(101, 2111, 202601, 12345m, "input", colaBefore!.RowVersion)
+                }),
+            "planner.one",
+            CancellationToken.None);
+
+        var colaRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202601), CancellationToken.None);
+        var sparklingFruitRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2112, 202601), CancellationToken.None);
+        var softDrinksRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202601), CancellationToken.None);
+        var teaRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2120, 202601), CancellationToken.None);
+        var departmentRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2100, 202601), CancellationToken.None);
+
+        Assert.NotNull(colaRevenue);
+        Assert.NotNull(sparklingFruitRevenue);
+        Assert.NotNull(softDrinksRevenue);
+        Assert.NotNull(teaRevenue);
+        Assert.NotNull(departmentRevenue);
+        Assert.NotNull(colaBefore);
+        Assert.NotEqual(colaBefore!.EffectiveValue, colaRevenue!.EffectiveValue);
+        Assert.Equal(colaRevenue.EffectiveValue + sparklingFruitRevenue!.EffectiveValue, softDrinksRevenue!.EffectiveValue);
+        Assert.Equal(softDrinksRevenue.EffectiveValue + teaRevenue!.EffectiveValue, departmentRevenue!.EffectiveValue);
+    }
+
+    [Fact]
     public async Task GenerateNextYearAsync_CopiesEditableInputsAndRecomputesCalculatedMeasures()
     {
         var result = await _service.GenerateNextYearAsync(new GenerateNextYearRequest(1, 202600), "planner.one", CancellationToken.None);
