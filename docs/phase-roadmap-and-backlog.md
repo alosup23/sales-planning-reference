@@ -7,7 +7,17 @@ Goal:
 - deliver a fast, secure, UAT-ready planning platform on AWS
 - include all data foundations required for future AI merchandising
 
+Current status:
+
+- functional Phase 1 UAT scope is live
+- Phase 1 core runtime is now on `CloudFront + ECS Fargate + RDS PostgreSQL + WAF`
+- remaining Phase 1 hardening items are mainly performance and operations refinements rather than scope gaps
+
 ### Wave 1: Contracts And Data Model
+
+Status:
+
+- completed in UAT
 
 Repo modules:
 
@@ -25,6 +35,10 @@ Key backlog:
 
 ### Wave 2: Native PostgreSQL Path
 
+Status:
+
+- completed for the active interactive runtime path
+
 Repo modules:
 
 - `apps/api/src/SalesPlanning.Api/Infrastructure/Postgres`
@@ -32,11 +46,14 @@ Repo modules:
 
 Key backlog:
 
-- replace SQLite compatibility path
-- add native read/query repository
 - add incremental aggregate maintenance
+- remove remaining coarse recalculation behavior
 
 ### Wave 3: Query / Command API
+
+Status:
+
+- partially completed in UAT
 
 Repo modules:
 
@@ -46,11 +63,15 @@ Repo modules:
 
 Key backlog:
 
-- introduce `v2` query endpoints
-- introduce patch-returning command endpoints
-- add undo/redo endpoints
+- complete `v2` query endpoint split
+- narrow remaining broad refresh paths
+- keep command responses patch-oriented
 
 ### Wave 4: Frontend Grid Refactor
+
+Status:
+
+- partially completed in UAT
 
 Repo modules:
 
@@ -63,12 +84,15 @@ Repo modules:
 Key backlog:
 
 - move to AG Grid SSRM
-- lazy branch loading
-- patch-based updates
-- undo/redo UI
-- finalize compact menu UX
+- keep lazy branch loading
+- retain patch-based updates
+- preserve compact menu UX
 
 ### Wave 5: Master-Data Maintenance
+
+Status:
+
+- completed in UAT for the current Phase 1 domains
 
 Repo modules:
 
@@ -84,6 +108,10 @@ Key backlog:
 
 ### Wave 6: Async Jobs And Deployment Cleanup
 
+Status:
+
+- not complete
+
 Repo modules:
 
 - `apps/api/tools/*`
@@ -97,6 +125,10 @@ Key backlog:
 
 ### Wave 7: Security Hardening
 
+Status:
+
+- substantially complete for UAT, with a few remaining hardening steps
+
 Repo modules:
 
 - `apps/api/src/SalesPlanning.Api/Program.cs`
@@ -105,8 +137,10 @@ Repo modules:
 Key backlog:
 
 - strict backend auth
-- role separation
-- WAF and observability finalization
+- role separation refinement
+- ALB HTTPS origin completion
+- observability finalization
+- deletion of the parked rollback DB after acceptance
 
 ## Phase 2
 
@@ -114,7 +148,18 @@ Goal:
 
 - deliver expert merchandising recommendations and decision support
 
+Phase 2 design constraint:
+
+- Phase 2 must reuse the existing Phase 1 master-data contracts, planning core, and import/export semantics
+- no redesign of the transactional planning core is allowed unless required to improve model accuracy or performance
+
 ### Wave 8: AI Data Services
+
+Prerequisites:
+
+- stable Phase 1 reconciliation routines
+- import/export job orchestration
+- performance instrumentation on live planning transactions
 
 Repo modules:
 
@@ -128,13 +173,25 @@ Key backlog:
 
 ### Wave 9: Recommendation Services
 
+Prerequisites:
+
+- approved business policy models for pricing and markdown recommendations
+- evaluation datasets from actual sales, inventory, and sell-through history
+
 Key backlog:
 
 - price recommendation engine
 - markdown recommendation engine
 - forecast guidance engine
+- explainability and confidence scoring
+- category-aware heuristics for baby products
 
 ### Wave 10: AI Review UX
+
+Prerequisites:
+
+- recommendation APIs with structured outputs
+- role-aware review workflow
 
 Repo modules:
 

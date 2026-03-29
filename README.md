@@ -1,14 +1,14 @@
-# Sales Budget & Planning Reference Skeleton
+# Sales Budget & Planning Reference Repository
 
-This repository contains the evolving reference implementation for an enterprise sales planning application, plus the target-state requirements and AWS architecture needed to move from UAT into a production-ready platform.
+This repository contains the live UAT reference implementation for the Sales Budget & Planning application, plus the complete requirements, architecture, operating guidance, training materials, and phase roadmap for later production and AI-enhanced merchandising waves.
 
-Current implementation stack:
+Current live implementation stack:
 
-- `React + TypeScript + AG Grid Enterprise` on the web front end
-- `.NET 8 Web API` for planning actions, locking, import/export, and the splash engine
-- working UAT runtime currently on `S3-backed SQLite`
-- in-progress `PostgreSQL` migration path for the next architecture wave
-- Microsoft Entra single-tenant sign-in on the frontend plus API auth seams on the backend
+- `React + TypeScript + AG Grid Enterprise` web application on `S3 + CloudFront`
+- `.NET 8` interactive API on `ECS Fargate`
+- `Amazon RDS for PostgreSQL` for authoritative persistence
+- `AWS WAF` on CloudFront
+- Microsoft Entra sign-in on the web application and backend API authorization
 
 ## Workspace Layout
 
@@ -20,8 +20,12 @@ Current implementation stack:
 
 - UAT requirements and UX behavior:
   - [docs/uat-product-requirements.md](/Users/aloysius/Documents/New%20project/docs/uat-product-requirements.md)
-- AWS target-state architecture, data model, API contracts, grid event model, and phased migration:
+- AWS architecture, deployed UAT state, data model, API contracts, grid event model, and phased migration:
   - [docs/aws-target-state-architecture.md](/Users/aloysius/Documents/New%20project/docs/aws-target-state-architecture.md)
+- final deployed AWS configuration, endpoints, runtime topology, and security decisions:
+  - [docs/current-uat-aws-configuration.md](/Users/aloysius/Documents/New%20project/docs/current-uat-aws-configuration.md)
+- API endpoint reference and transaction flows:
+  - [docs/api-endpoints-and-transaction-flows.md](/Users/aloysius/Documents/New%20project/docs/api-endpoints-and-transaction-flows.md)
 - master-data import and export formats:
   - [docs/master-data-file-formats.md](/Users/aloysius/Documents/New%20project/docs/master-data-file-formats.md)
 - non-functional, calculation, AI, and backlog support documents:
@@ -29,6 +33,11 @@ Current implementation stack:
   - [docs/calculation-and-reconciliation-spec.md](/Users/aloysius/Documents/New%20project/docs/calculation-and-reconciliation-spec.md)
   - [docs/ai-phase-2-merchandising-architecture.md](/Users/aloysius/Documents/New%20project/docs/ai-phase-2-merchandising-architecture.md)
   - [docs/phase-roadmap-and-backlog.md](/Users/aloysius/Documents/New%20project/docs/phase-roadmap-and-backlog.md)
+- user enablement and training:
+  - [docs/user-guide.md](/Users/aloysius/Documents/New%20project/docs/user-guide.md)
+  - [docs/training-process-overview.md](/Users/aloysius/Documents/New%20project/docs/training-process-overview.md)
+- current limitations and recommendations:
+  - [docs/current-limitations-and-recommendations.md](/Users/aloysius/Documents/New%20project/docs/current-limitations-and-recommendations.md)
 - current implementation notes:
   - [docs/reference-implementation.md](/Users/aloysius/Documents/New%20project/docs/reference-implementation.md)
 
@@ -45,6 +54,10 @@ Current implementation stack:
 - Copied-store creation, workbook upload, and hierarchy maintenance sheet for department/class/subclass mapping
 - Workbook import and export support in the store-sheet format with round-trip validation and exception workbooks
 - Store Profile maintenance with CRUD, inactivation, controlled option values, and Branch Profile import/export
+- Product Profile, Inventory Profile, Pricing Policy, Seasonality & Events, and Vendor Supply maintenance
+- Undo / redo up to `30` actions
+- CloudFront WAF and origin-protected ECS API runtime
+- RDS PostgreSQL private-subnet operating model for the live UAT database
 - Playwright browser smoke and interaction coverage for planning and hierarchy maintenance flows
 - API authorization hardening, narrowed CORS, and test-reset disablement outside local/test mode
 
@@ -52,7 +65,10 @@ Current implementation stack:
 
 - Real-time collaboration notifications
 - Approval workflows
-- Final production runtime cutover to the target AWS architecture
+- Full AG Grid server-side row model
+- Async workbook job orchestration
+- ALB HTTPS origin link from CloudFront
+- Phase 2 merchandising AI recommendation workflows
 
 ## Local Setup
 
@@ -72,7 +88,7 @@ npm install
 npm run dev
 ```
 
-The frontend expects the API at `https://localhost:7080` by default and can be updated in [`api.ts`](/Users/aloysius/Documents/New project/apps/web/src/lib/api.ts).
+The frontend expects the API at `https://localhost:7080` by default and can be updated in [api.ts](/Users/aloysius/Documents/New%20project/apps/web/src/lib/api.ts).
 
 For normal local development, the Vite dev server proxies `/api` requests to the API so edits work without any certificate setup.
 For local browser tests, auth is intentionally disabled and the API is started with `PlanningSecurityMode=disabled`.
@@ -93,7 +109,7 @@ The Playwright harness starts an isolated local stack automatically:
 
 ## Continuous Integration
 
-GitHub Actions validation is defined in [ci.yml](/Users/aloysius/Documents/New project/.github/workflows/ci.yml).
+GitHub Actions validation is defined in [ci.yml](/Users/aloysius/Documents/New%20project/.github/workflows/ci.yml).
 
 Each run performs:
 

@@ -11,6 +11,22 @@ Rules:
 - Export must include the additional fields.
 - New master-data files introduced here must support import and export in the same format.
 
+## Common Workbook Conventions
+
+- Column headers are case-sensitive and must match the exported templates.
+- Existing files may include business columns only or business columns plus operational review columns.
+- If present, these operational columns are ignored on import and re-created by the system when needed:
+  - `Remark`
+  - `Expected Value`
+- Boolean-style fields should use:
+  - `TRUE` / `FALSE`
+  - or `Yes` / `No`
+- Date fields should use a consistent Excel date format or ISO-style date text.
+- Numeric fields may be blank where the column is optional.
+- Export always includes the full Phase 1 plus Phase 2-ready schema even when optional fields are empty.
+- Import updates existing rows by natural key and inserts missing rows by natural key.
+- Validation failures must be returned as an exception workbook preserving the original source rows.
+
 ## 1. Branch Profile.xlsx
 
 Natural key:

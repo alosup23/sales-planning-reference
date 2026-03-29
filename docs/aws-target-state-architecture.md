@@ -40,6 +40,30 @@ Phase strategy:
 - Phase 2:
   - AI-powered merchandising, pricing, markdown, and forecast recommendation capabilities
 
+## 2.1 Current Deployed UAT State
+
+The live UAT deployment as of `2026-03-29` is:
+
+- web:
+  - `S3 + CloudFront`
+- edge protection:
+  - `AWS WAF` on CloudFront
+- interactive API:
+  - `.NET 8` on `ECS Fargate`
+- persistence:
+  - `Amazon RDS for PostgreSQL`
+- active DB placement:
+  - true private subnets via `sales-planning-demo-rds-private-subnets`
+- auth:
+  - Microsoft Entra web sign-in and backend API authorization
+
+The live UAT deployment already reflects the core Phase 1 runtime decision, but several target-state improvements remain outstanding, especially:
+
+- AG Grid SSRM
+- async import/export jobs
+- ALB HTTPS origin completion
+- richer reconciliation and observability
+
 ## 3. Why This Replaces The Current Runtime Direction
 
 The prior design path used:
@@ -81,6 +105,15 @@ flowchart LR
   JOB --> LOGS
 ```
 
+## 4.1 Live UAT topology delta
+
+Current live UAT differs from the final target in these ways:
+
+- Redis is not deployed yet
+- workbook jobs are still synchronous
+- ECS currently remains in the existing public subnets for UAT simplicity
+- CloudFront-to-ALB traffic is still HTTP because ACM and Route 53 are not in place for the ALB hostname
+
 ## 5. Environment Strategy
 
 ### 5.1 UAT
@@ -93,6 +126,7 @@ UAT should optimize cost while preserving interactive performance:
 - async import/export as a worker task, not request-time compute
 - prefer one small always-on interactive service before introducing additional worker services
 - keep non-critical off-hours scale-down options available if UAT operating hours allow them
+- keep one active database only once rollback retention is no longer required
 
 ### 5.2 Production
 

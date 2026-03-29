@@ -1,6 +1,6 @@
 # AWS Demo / UAT Deployment
 
-This document describes the current AWS UAT deployment status and the intended migration direction toward the target AWS architecture.
+This document describes the current live AWS UAT deployment and the remaining steps required to move from the working Phase 1 UAT platform to a fully hardened production operating model.
 
 The detailed target-state architecture now lives in:
 
@@ -12,13 +12,22 @@ The detailed target-state architecture now lives in:
 ## Current live UAT runtime
 
 - Frontend: static Vite build uploaded to `sales-planning-demo-web-427304877733-ap-southeast-5-an`
-- API: `.NET 8` ASP.NET Core API currently hosted on AWS Lambda behind HTTP API
+- Public app endpoint:
+  - `https://d22xc0mfhkv9bk.cloudfront.net`
+- API: `.NET 8` ASP.NET Core API on `ECS Fargate`
 - Persistence:
-  - current working live mode: `S3-backed SQLite`
-  - in-progress migration target: `Amazon RDS for PostgreSQL`
+  - live working mode: `Amazon RDS for PostgreSQL`
+  - active DB instance:
+    - `sales-planning-demo-pg-private`
+  - active DB subnet group:
+    - `sales-planning-demo-rds-private-subnets`
 - Identity:
-  - current UAT access gate: Microsoft Entra sign-in on the web app
-  - next security milestone after PostgreSQL stabilization: restore clean backend API authorizer / audience validation
+  - Microsoft Entra sign-in on the web app
+  - backend API authorization enabled
+- Edge protection:
+  - `AWS WAF` attached to CloudFront
+  - ALB ingress restricted to the CloudFront origin-facing prefix list
+  - CloudFront origin header validation enabled on the ALB listener
 
 ## UAT cost guardrails
 
@@ -39,6 +48,12 @@ Note:
   - `apps/api/src/SalesPlanning.Api/Infrastructure/Postgres/Migrations`
 - PostgreSQL repository and connection resolver
 - PostgreSQL admin import / migration tool
+- ECS deployment template:
+  - `infra/aws/cloudformation/interactive-api-ecs.yml`
+- private-subnet RDS network template:
+  - `infra/aws/cloudformation/rds-private-subnets.yml`
+- CloudFront WAF template:
+  - `infra/aws/cloudformation/cloudfront-waf.yml`
 
 ## Target PostgreSQL operating model
 
@@ -74,9 +89,11 @@ Recommended seed key for the live cutover:
 
 At the time of this document update:
 
-- the working live app remains on `s3-sqlite`
-- the PostgreSQL migration code path has been added, but the full live cutover is not yet complete
-- the final target runtime for performance is no longer Lambda for interactive planning traffic
+- the live app is running on `ECS Fargate + RDS PostgreSQL`
+- the active RDS instance is in true private subnets
+- the previous RDS instance remains only as a temporary stopped rollback buffer
+- CloudFront WAF is deployed
+- ALB HTTPS origin completion remains deferred until Route 53 + ACM are in place
 
 Recommended target interactive runtime:
 
@@ -84,21 +101,14 @@ Recommended target interactive runtime:
 - `RDS PostgreSQL` for persistence
 - optional `ElastiCache Redis` for hot metadata and aggregate caches
 
-## Recommended cutover sequence
+## Remaining hardening sequence
 
-1. Finalize PostgreSQL schema and native repository behavior.
-2. Run one-time import into PostgreSQL out of band.
-3. Validate row counts, aggregates, and workbook compatibility.
-4. Deploy interactive API on `ECS Fargate`.
-5. Point CloudFront or API routing to the new interactive API.
-6. Retest:
-   - health
-   - store scopes
-   - scoped grid load
-   - branch expansion
-   - edit / splash / lock
-   - store/product maintenance
-   - import/export
+1. Add Route 53 hosted zone and ACM certificates.
+2. Move CloudFront-to-ALB origin traffic to HTTPS.
+3. Move ECS tasks into private subnets if the UAT cost model and NAT/VPC endpoint plan permit it.
+4. Convert workbook import/export to async jobs.
+5. Add reconciliation routines and operational dashboards.
+6. Retire the stopped rollback DB once acceptance is complete.
 
 ## Hydration guidance
 
