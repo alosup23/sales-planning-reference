@@ -458,6 +458,35 @@ test("store leaf edits propagate to the department view aggregates", async ({ pa
   expect(afterDepartmentValue).not.toBe(beforeDepartmentValue);
 });
 
+test("store leaf year edits propagate to the department view aggregates", async ({ page }) => {
+  const departmentStoreRowId = "department-view:department-store-class:Beverages:Store A";
+
+  await selectWorkspace(page, "planning-department");
+  await expectReady(page);
+  await toggleRowCaretByLabel(page, "Beverages");
+  await expectReady(page);
+  const beforeDepartmentValue = (await gridCellText(page, departmentStoreRowId, "202600:1"))?.replace(/\s+/g, "") ?? "";
+
+  await selectWorkspace(page, "planning-store");
+  await expectReady(page);
+  await toggleRowCaret(page, storeRowId(101, 2000));
+  await expectReady(page);
+  await toggleRowCaret(page, storeRowId(101, 2100));
+  await expectReady(page);
+  await toggleRowCaret(page, storeRowId(101, 2110));
+  await expectReady(page);
+  await editCell(page, storeRowId(101, 2111), "202600:1", "54321");
+  await expectReady(page);
+
+  await selectWorkspace(page, "planning-department");
+  await expectReady(page);
+  await toggleRowCaretByLabel(page, "Beverages");
+  await expectReady(page);
+  const afterDepartmentValue = (await gridCellText(page, departmentStoreRowId, "202600:1"))?.replace(/\s+/g, "") ?? "";
+
+  expect(afterDepartmentValue).not.toBe(beforeDepartmentValue);
+});
+
 test("adds Department and Class rows and shows them in hierarchy maintenance", async ({ page }) => {
   await page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`).click({ button: "right" });
   await page.getByRole("button", { name: "Expand All" }).click();

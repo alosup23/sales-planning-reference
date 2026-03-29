@@ -332,16 +332,22 @@ export default function App() {
     includeUndoRedo = true,
     includeInsights = true,
     includeGrid = true,
+    includeInactiveGrid = false,
   }: {
     includeStoreScopes?: boolean;
     includeUndoRedo?: boolean;
     includeInsights?: boolean;
     includeGrid?: boolean;
+    includeInactiveGrid?: boolean;
   } = {}) => {
     const tasks: Array<Promise<unknown>> = [];
 
     if (includeGrid) {
       tasks.push(queryClient.refetchQueries({ queryKey: gridSliceQueryKey, exact: true, type: "active" }));
+    }
+
+    if (includeInactiveGrid) {
+      tasks.push(queryClient.refetchQueries({ queryKey: ["grid-slice", 1], type: "inactive" }));
     }
 
     if (includeStoreScopes) {
@@ -378,6 +384,7 @@ export default function App() {
       includeUndoRedo: !result.availability,
       includeInsights: true,
       includeGrid: !patched,
+      includeInactiveGrid: true,
     });
   };
 
