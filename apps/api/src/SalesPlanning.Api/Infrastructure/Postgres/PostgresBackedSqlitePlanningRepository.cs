@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using Amazon;
 using Amazon.S3;
 using Npgsql;
+using NpgsqlTypes;
 using SalesPlanning.Api.Application;
 using SalesPlanning.Api.Contracts;
 using SalesPlanning.Api.Domain;
@@ -1086,6 +1087,12 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
 
     private static async Task UpsertPlanningCellsAsync(NpgsqlConnection postgres, NpgsqlTransaction transaction, IEnumerable<PlanningCell> cells, CancellationToken cancellationToken)
     {
+        var cellList = cells as IReadOnlyList<PlanningCell> ?? cells.ToList();
+        if (cellList.Count == 0)
+        {
+            return;
+        }
+
         const string sql = """
             insert into planning_cells (
                 scenario_version_id,
@@ -1136,25 +1143,47 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
                 cell_kind = excluded.cell_kind;
             """;
 
-        foreach (var cell in cells)
+        await using var command = new NpgsqlCommand(sql, postgres, transaction)
         {
-            await using var command = new NpgsqlCommand(sql, postgres, transaction);
-            command.Parameters.AddWithValue("@scenarioVersionId", cell.Coordinate.ScenarioVersionId);
-            command.Parameters.AddWithValue("@measureId", cell.Coordinate.MeasureId);
-            command.Parameters.AddWithValue("@storeId", cell.Coordinate.StoreId);
-            command.Parameters.AddWithValue("@productNodeId", cell.Coordinate.ProductNodeId);
-            command.Parameters.AddWithValue("@timePeriodId", cell.Coordinate.TimePeriodId);
-            command.Parameters.AddWithValue("@inputValue", (object?)cell.InputValue ?? DBNull.Value);
-            command.Parameters.AddWithValue("@overrideValue", (object?)cell.OverrideValue ?? DBNull.Value);
-            command.Parameters.AddWithValue("@isSystemGeneratedOverride", cell.IsSystemGeneratedOverride ? 1 : 0);
-            command.Parameters.AddWithValue("@derivedValue", cell.DerivedValue);
-            command.Parameters.AddWithValue("@effectiveValue", cell.EffectiveValue);
-            command.Parameters.AddWithValue("@growthFactor", cell.GrowthFactor);
-            command.Parameters.AddWithValue("@isLocked", cell.IsLocked ? 1 : 0);
-            command.Parameters.AddWithValue("@lockReason", (object?)cell.LockReason ?? DBNull.Value);
-            command.Parameters.AddWithValue("@lockedBy", (object?)cell.LockedBy ?? DBNull.Value);
-            command.Parameters.AddWithValue("@rowVersion", cell.RowVersion);
-            command.Parameters.AddWithValue("@cellKind", cell.CellKind);
+            CommandTimeout = 300
+        };
+        var scenarioVersionIdParameter = command.Parameters.Add("@scenarioVersionId", NpgsqlDbType.Bigint);
+        var measureIdParameter = command.Parameters.Add("@measureId", NpgsqlDbType.Bigint);
+        var storeIdParameter = command.Parameters.Add("@storeId", NpgsqlDbType.Bigint);
+        var productNodeIdParameter = command.Parameters.Add("@productNodeId", NpgsqlDbType.Bigint);
+        var timePeriodIdParameter = command.Parameters.Add("@timePeriodId", NpgsqlDbType.Bigint);
+        var inputValueParameter = command.Parameters.Add("@inputValue", NpgsqlDbType.Numeric);
+        var overrideValueParameter = command.Parameters.Add("@overrideValue", NpgsqlDbType.Numeric);
+        var isSystemGeneratedOverrideParameter = command.Parameters.Add("@isSystemGeneratedOverride", NpgsqlDbType.Integer);
+        var derivedValueParameter = command.Parameters.Add("@derivedValue", NpgsqlDbType.Numeric);
+        var effectiveValueParameter = command.Parameters.Add("@effectiveValue", NpgsqlDbType.Numeric);
+        var growthFactorParameter = command.Parameters.Add("@growthFactor", NpgsqlDbType.Numeric);
+        var isLockedParameter = command.Parameters.Add("@isLocked", NpgsqlDbType.Integer);
+        var lockReasonParameter = command.Parameters.Add("@lockReason", NpgsqlDbType.Text);
+        var lockedByParameter = command.Parameters.Add("@lockedBy", NpgsqlDbType.Text);
+        var rowVersionParameter = command.Parameters.Add("@rowVersion", NpgsqlDbType.Bigint);
+        var cellKindParameter = command.Parameters.Add("@cellKind", NpgsqlDbType.Text);
+
+        await command.PrepareAsync(cancellationToken);
+
+        foreach (var cell in cellList)
+        {
+            scenarioVersionIdParameter.Value = cell.Coordinate.ScenarioVersionId;
+            measureIdParameter.Value = cell.Coordinate.MeasureId;
+            storeIdParameter.Value = cell.Coordinate.StoreId;
+            productNodeIdParameter.Value = cell.Coordinate.ProductNodeId;
+            timePeriodIdParameter.Value = cell.Coordinate.TimePeriodId;
+            inputValueParameter.Value = (object?)cell.InputValue ?? DBNull.Value;
+            overrideValueParameter.Value = (object?)cell.OverrideValue ?? DBNull.Value;
+            isSystemGeneratedOverrideParameter.Value = cell.IsSystemGeneratedOverride ? 1 : 0;
+            derivedValueParameter.Value = cell.DerivedValue;
+            effectiveValueParameter.Value = cell.EffectiveValue;
+            growthFactorParameter.Value = cell.GrowthFactor;
+            isLockedParameter.Value = cell.IsLocked ? 1 : 0;
+            lockReasonParameter.Value = (object?)cell.LockReason ?? DBNull.Value;
+            lockedByParameter.Value = (object?)cell.LockedBy ?? DBNull.Value;
+            rowVersionParameter.Value = cell.RowVersion;
+            cellKindParameter.Value = cell.CellKind;
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
     }
