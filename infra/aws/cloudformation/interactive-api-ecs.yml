@@ -221,6 +221,19 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: sales-planning-demo-ecs-exec-secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref DbSecretArn
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: !Ref DbSecretKmsKeyArn
 
   ApiTaskRole:
     Type: AWS::IAM::Role
@@ -298,6 +311,9 @@ Resources:
               Value: !Ref EntraApiScope
             - Name: DOTNET_EnableDiagnostics
               Value: "0"
+          Secrets:
+            - Name: PlanningPostgresSecretPayload
+              ValueFrom: !Ref DbSecretArn
           LogConfiguration:
             LogDriver: awslogs
             Options:

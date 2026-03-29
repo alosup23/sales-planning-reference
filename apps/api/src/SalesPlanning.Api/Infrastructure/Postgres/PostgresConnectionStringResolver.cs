@@ -15,6 +15,39 @@ public static class PostgresConnectionStringResolver
             return directConnectionString.Trim();
         }
 
+        var configuredHost = configuration["PlanningPostgresHost"];
+        var configuredDatabase = configuration["PlanningPostgresDatabase"];
+        var configuredPort = configuration["PlanningPostgresPort"];
+        var configuredUsername = configuration["PlanningPostgresUsername"];
+        var configuredPassword = configuration["PlanningPostgresPassword"];
+
+        if (!string.IsNullOrWhiteSpace(configuredHost) &&
+            !string.IsNullOrWhiteSpace(configuredDatabase) &&
+            !string.IsNullOrWhiteSpace(configuredUsername) &&
+            !string.IsNullOrWhiteSpace(configuredPassword))
+        {
+            return BuildConnectionString(
+                configuredHost,
+                configuredDatabase,
+                configuredUsername,
+                configuredPassword,
+                configuredPort,
+                null);
+        }
+
+        var injectedSecretPayload = configuration["PlanningPostgresSecretPayload"];
+        if (!string.IsNullOrWhiteSpace(injectedSecretPayload))
+        {
+            return ResolveFromSecretPayload(
+                injectedSecretPayload,
+                "PlanningPostgresSecretPayload",
+                configuredHost,
+                configuredDatabase,
+                configuredPort,
+                configuredUsername,
+                configuredPassword);
+        }
+
         var secretArn = configuration["PlanningPostgresSecretArn"];
         if (string.IsNullOrWhiteSpace(secretArn))
         {
@@ -33,6 +66,25 @@ public static class PostgresConnectionStringResolver
             throw new InvalidOperationException($"Secrets Manager secret {secretArn} does not contain a string payload.");
         }
 
+        return ResolveFromSecretPayload(
+            secretString,
+            secretArn,
+            configuredHost,
+            configuredDatabase,
+            configuredPort,
+            configuredUsername,
+            configuredPassword);
+    }
+
+    private static string ResolveFromSecretPayload(
+        string secretString,
+        string secretName,
+        string? configuredHost,
+        string? configuredDatabase,
+        string? configuredPort,
+        string? configuredUsername,
+        string? configuredPassword)
+    {
         if (!secretString.TrimStart().StartsWith("{", StringComparison.Ordinal))
         {
             return secretString.Trim();
@@ -42,40 +94,47 @@ public static class PostgresConnectionStringResolver
         var root = document.RootElement;
         if (root.TryGetProperty("connectionString", out var connectionStringElement) && connectionStringElement.ValueKind == JsonValueKind.String)
         {
-            return connectionStringElement.GetString() ?? throw new InvalidOperationException($"Secrets Manager secret {secretArn} has an empty connectionString value.");
+            return connectionStringElement.GetString() ?? throw new InvalidOperationException($"{secretName} has an empty connectionString value.");
         }
-
-        var configuredHost = configuration["PlanningPostgresHost"];
-        var configuredDatabase = configuration["PlanningPostgresDatabase"];
-        var configuredPort = configuration["PlanningPostgresPort"];
 
         var host = root.TryGetProperty("host", out var hostElement)
             ? hostElement.GetString()
             : configuredHost;
         var database = root.TryGetProperty("dbname", out var dbNameElement)
             ? dbNameElement.GetString()
-            : root.TryGetProperty("database", out var databaseElement)
+                : root.TryGetProperty("database", out var databaseElement)
                 ? databaseElement.GetString()
                 : configuredDatabase;
         var username = root.TryGetProperty("username", out var usernameElement)
             ? usernameElement.GetString()
             : root.TryGetProperty("user", out var userElement)
                 ? userElement.GetString()
-                : configuration["PlanningPostgresUsername"];
+                : configuredUsername;
         var password = root.TryGetProperty("password", out var passwordElement)
             ? passwordElement.GetString()
-            : configuration["PlanningPostgresPassword"];
+            : configuredPassword;
 
         if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(database) || string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
         {
             throw new InvalidOperationException(
-                $"Secrets Manager secret {secretArn} did not contain a full PostgreSQL connection payload. Configure PlanningPostgresHost, PlanningPostgresDatabase, and optional PlanningPostgresPort fallbacks.");
+                $"{secretName} did not contain a full PostgreSQL connection payload. Configure PlanningPostgresHost, PlanningPostgresDatabase, and optional PlanningPostgresPort fallbacks.");
         }
 
+        return BuildConnectionString(host, database, username, password, configuredPort, root);
+    }
+
+    private static string BuildConnectionString(
+        string host,
+        string database,
+        string username,
+        string password,
+        string? configuredPort,
+        JsonElement? root)
+    {
         var builder = new NpgsqlConnectionStringBuilder
         {
             Host = host,
-            Port = root.TryGetProperty("port", out var portElement) && portElement.TryGetInt32(out var port)
+            Port = root is JsonElement rootElement && rootElement.TryGetProperty("port", out var portElement) && portElement.TryGetInt32(out var port)
                 ? port
                 : int.TryParse(configuredPort, out var configuredPortValue) ? configuredPortValue : 5432,
             Database = database,
