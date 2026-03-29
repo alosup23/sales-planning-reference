@@ -161,28 +161,16 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         GetGridBranchRowsDirectAsync(scenarioVersionId, parentProductNodeId, cancellationToken);
 
     public Task<ProductNode> AddRowAsync(AddRowRequest request, CancellationToken cancellationToken) =>
-        WithMutationAsync(
-            ct => _innerRepository.AddRowAsync(request, ct),
-            plan => plan.QueueTableReplace(ProductNodeMutationTables),
-            cancellationToken);
+        AddRowDirectAsync(request, cancellationToken);
 
     public Task<int> DeleteRowAsync(long scenarioVersionId, long productNodeId, CancellationToken cancellationToken) =>
-        WithMutationAsync(
-            ct => _innerRepository.DeleteRowAsync(scenarioVersionId, productNodeId, ct),
-            plan => plan.QueueTableReplace(ProductNodeMutationTables),
-            cancellationToken);
+        DeleteRowDirectAsync(scenarioVersionId, productNodeId, cancellationToken);
 
     public Task<int> DeleteYearAsync(long scenarioVersionId, long yearTimePeriodId, CancellationToken cancellationToken) =>
-        WithMutationAsync(
-            ct => _innerRepository.DeleteYearAsync(scenarioVersionId, yearTimePeriodId, ct),
-            plan => plan.QueueTableReplace(TimePeriodMutationTables),
-            cancellationToken);
+        DeleteYearDirectAsync(scenarioVersionId, yearTimePeriodId, cancellationToken);
 
     public Task EnsureYearAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken) =>
-        WithMutationAsync(
-            ct => _innerRepository.EnsureYearAsync(scenarioVersionId, fiscalYear, ct),
-            plan => plan.QueueTableReplace(TimePeriodMutationTables),
-            cancellationToken);
+        EnsureYearDirectAsync(scenarioVersionId, fiscalYear, cancellationToken);
 
     public Task<IReadOnlyList<StoreNodeMetadata>> GetStoresAsync(CancellationToken cancellationToken) =>
         GetStoresDirectAsync(cancellationToken);

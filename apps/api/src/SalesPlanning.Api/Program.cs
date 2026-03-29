@@ -7,6 +7,7 @@ using Microsoft.IdentityModel.Tokens;
 using SalesPlanning.Api.Application;
 using SalesPlanning.Api.Infrastructure;
 using SalesPlanning.Api.Infrastructure.Postgres;
+using SalesPlanning.Api.Infrastructure.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 var storageMode = builder.Configuration["PlanningStorageMode"] ?? "local-sqlite";
@@ -21,6 +22,7 @@ var corsAllowedOrigins = (builder.Configuration["CorsAllowedOrigins"] ?? "http:/
 var entraTenantId = builder.Configuration["EntraTenantId"] ?? "76ad236c-6db1-4d3d-9901-996450816c3c";
 var entraClientId = builder.Configuration["EntraClientId"] ?? "557f0c81-0531-4616-b62e-0b69eb7cb86f";
 var entraApiAudience = builder.Configuration["EntraApiAudience"] ?? $"api://{entraClientId}";
+var entraApiScope = builder.Configuration["EntraApiScope"] ?? "SalesPlanning.Access";
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -83,6 +85,7 @@ if (authEnabled)
         .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         .AddJwtBearer(options =>
         {
+            options.MapInboundClaims = false;
             options.Authority = $"https://login.microsoftonline.com/{entraTenantId}/v2.0";
             options.TokenValidationParameters = new TokenValidationParameters
             {
@@ -95,10 +98,15 @@ if (authEnabled)
                 ValidateAudience = true,
                 ValidAudience = entraApiAudience,
                 ValidateLifetime = true,
-                NameClaimType = "name"
+                NameClaimType = "name",
+                RoleClaimType = "roles",
+                ValidTypes = ["JWT", "at+jwt"]
             };
         });
-    builder.Services.AddAuthorization();
+    builder.Services.AddAuthorization(options =>
+    {
+        options.AddPolicy(EntraApiAccessPolicy.PolicyName, EntraApiAccessPolicy.Build(entraApiScope));
+    });
 }
 
 builder.Services.AddCors(options =>
@@ -132,7 +140,7 @@ if (authEnabled)
 var controllers = app.MapControllers();
 if (authEnabled)
 {
-    controllers.RequireAuthorization();
+    controllers.RequireAuthorization(EntraApiAccessPolicy.PolicyName);
 }
 app.MapGet("/health", () => Results.Ok(new
 {
