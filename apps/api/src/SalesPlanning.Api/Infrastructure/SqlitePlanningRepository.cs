@@ -443,6 +443,18 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
             return false;
         }
 
+        if (selectedStoreId is null)
+        {
+            if (expandAllBranches)
+            {
+                return true;
+            }
+
+            return node.ParentProductNodeId is long allStoresParentProductNodeId
+                   && expandedProductNodeIds.Contains(allStoresParentProductNodeId)
+                   && productNodes.ContainsKey(allStoresParentProductNodeId);
+        }
+
         if (expandAllBranches)
         {
             return true;

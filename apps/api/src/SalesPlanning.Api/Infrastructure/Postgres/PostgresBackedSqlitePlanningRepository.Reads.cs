@@ -679,6 +679,18 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             return false;
         }
 
+        if (selectedStoreId is null)
+        {
+            if (expandAllBranches)
+            {
+                return true;
+            }
+
+            return node.ParentProductNodeId is long allStoresParentProductNodeId
+                   && expandedProductNodeIds.Contains(allStoresParentProductNodeId)
+                   && productNodes.ContainsKey(allStoresParentProductNodeId);
+        }
+
         if (expandAllBranches)
         {
             return true;
