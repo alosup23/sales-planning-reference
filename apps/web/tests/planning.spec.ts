@@ -334,15 +334,12 @@ test.beforeEach(async ({ page, request }) => {
   await openGrid(page);
 });
 
-test("loads with collapsed years, readable measure labels, and a collapsed Store Total root by default", async ({ page }) => {
+test("loads with collapsed years, readable measure labels, and the first store level expanded by default", async ({ page }) => {
   await expect(page.locator(".ag-header-group-text", { hasText: "FY26" }).first()).toBeVisible();
   await expect(page.locator(".ag-header-cell-text", { hasText: "Sales Revenue" }).first()).toBeVisible();
   await expect(page.locator(".ag-header-cell-text", { hasText: "Sold Qty" }).first()).toBeVisible();
   await expect(page.locator(".ag-header-group-text", { hasText: "Jan" })).toHaveCount(0);
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${storeRootRowId}"]`)).toBeVisible();
-  await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2000)}"]`)).toHaveCount(0);
-  await toggleRowCaret(page, storeRootRowId);
-  await expectReady(page);
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2000)}"]`)).toBeVisible();
   await expect(page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2100)}"]`)).toHaveCount(0);
   await expect(await gridCell(page, storeRowId(101, 2000), "202600:1")).toContainText(/[0-9,]+/);
@@ -354,11 +351,6 @@ test("loads with collapsed years, readable measure labels, and a collapsed Store
 test("supports expand and collapse controls for rows and years", async ({ page }) => {
   const storeARow = page.locator(`.ag-pinned-left-cols-container [row-id="${storeRowId(101, 2000)}"]`);
 
-  await expect(storeARow).toHaveCount(0);
-  await expectToggleLabel(page, storeRootRowId, "Expand Store Total");
-
-  await toggleRowCaret(page, storeRootRowId);
-  await expectReady(page);
   await expect(storeARow).toBeVisible();
   await expectToggleLabel(page, storeRootRowId, "Collapse Store Total");
   await expectToggleLabel(page, storeRowId(101, 2000), "Expand Store A");
@@ -678,7 +670,6 @@ test("deletes a year with confirmation", async ({ page }) => {
 test("does not commit growth factors on Tab and preserves row expansion state", async ({ page }) => {
   await page.getByRole("button", { name: "Growth Factors" }).click();
 
-  await expandRowById(page, storeRootRowId);
   const storeRow = page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store A" }).first();
   await expect(storeRow).toBeVisible();
 
@@ -691,6 +682,29 @@ test("does not commit growth factors on Tab and preserves row expansion state", 
   await expect(valueCell).toContainText(beforeValue ?? "");
   await expect(page.locator(".ag-cell-inline-editing")).toHaveCount(0);
   await expect(page.locator(".growth-factor-input").first()).toBeVisible();
+});
+
+test("keeps the edited branch open after a visible store leaf edit", async ({ page }) => {
+  await expandYears(page);
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store A" }).first()).toBeVisible();
+  await expandRowByLabel(page, "Store A");
+  await expectReady(page);
+  await expandRowByLabel(page, "Beverages");
+  await expectReady(page);
+  await expandRowByLabel(page, "Soft Drinks");
+  await expectReady(page);
+
+  const subclassRow = page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Cola" }).first();
+  await expect(subclassRow).toBeVisible();
+
+  await editCellByPinnedText(page, "Cola", "202601:1", "12345");
+  await expectReady(page);
+
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Store A" }).first()).toBeVisible();
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Beverages" }).first()).toBeVisible();
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: "Soft Drinks" }).first()).toBeVisible();
+  await expect(subclassRow).toBeVisible();
+  await expect(await gridCellByPinnedText(page, "Cola", "202601:1")).toContainText("12,345");
 });
 
 test("generates the following year from the active year", async ({ page }) => {

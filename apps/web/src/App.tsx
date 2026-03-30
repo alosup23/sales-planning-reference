@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiRequestError,
@@ -154,6 +154,8 @@ export default function App() {
   const [selectedDepartmentLabel, setSelectedDepartmentLabel] = useState<string | null>(null);
   const [activeAsyncJob, setActiveAsyncJob] = useState<AsyncJobStatus | null>(null);
   const [planningGridRefreshToken, setPlanningGridRefreshToken] = useState(0);
+  const [pendingPlanningPatch, setPendingPlanningPatch] = useState<PlanningGridPatch | null>(null);
+  const [planningPatchToken, setPlanningPatchToken] = useState(0);
   const [expandAllBranches, setExpandAllBranches] = useState(false);
   const planningStoreScopesQueryKey = ["planning-store-scopes"] as const;
   const planningDepartmentScopesQueryKey = ["planning-department-scopes"] as const;
@@ -189,6 +191,7 @@ export default function App() {
       expandAllBranches,
     }),
     enabled: activeView === "planning-store" ? selectedPlanningStoreId !== null : activeView === "planning-department",
+    refetchOnWindowFocus: false,
   });
   const startupPlanningSliceReady = Boolean(gridQuery.data);
   const undoRedoAvailabilityQuery = useQuery({
@@ -282,10 +285,6 @@ export default function App() {
     queryClient.setQueryData<UndoRedoAvailability>(undoRedoQueryKey, availability);
   };
 
-  const invalidatePlanningSliceCaches = async () => {
-    await queryClient.invalidateQueries({ queryKey: ["grid-view-root", 1], refetchType: "none" });
-  };
-
   const clearInactivePlanningSliceCaches = () => {
     queryClient.removeQueries({ queryKey: ["grid-view-root", 1], type: "inactive" });
   };
@@ -332,22 +331,21 @@ export default function App() {
     result: {
       patch?: PlanningGridPatch | null;
       availability?: UndoRedoAvailability | null;
-    },
-    options?: {
-      includeStoreScopes?: boolean;
-      forceGridRefresh?: boolean;
-    },
+    }
   ) => {
     syncUndoRedoAvailability(result.availability);
-    await invalidatePlanningSliceCaches();
+    if (result.patch) {
+      setPendingPlanningPatch(result.patch);
+      setPlanningPatchToken((current) => current + 1);
+    }
+
     clearInactivePlanningSliceCaches();
-    setPlanningGridRefreshToken((current) => current + 1);
 
     await refreshPlanningQueries({
-      includeStoreScopes: options?.includeStoreScopes ?? false,
+      includeStoreScopes: false,
       includeUndoRedo: !result.availability,
       includeInsights: true,
-      includeGrid: true,
+      includeGrid: !result.patch,
     });
   };
 
@@ -393,7 +391,7 @@ export default function App() {
 
         if (options?.includePlanningGrid) {
           setPlanningGridRefreshToken((current) => current + 1);
-          await invalidatePlanningSliceCaches();
+          clearInactivePlanningSliceCaches();
         }
 
         if (options?.includeStoreScopes || options?.includeMaintenanceRefresh || options?.includePlanningGrid) {
@@ -426,7 +424,7 @@ export default function App() {
     onSuccess: async (result) => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      await applyPlanningCommandResult(result, { forceGridRefresh: true });
+      await applyPlanningCommandResult(result);
     },
     onError: (error: Error) => setLastError(error.message),
   });
@@ -436,7 +434,7 @@ export default function App() {
     onSuccess: async (result) => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      await applyPlanningCommandResult(result, { forceGridRefresh: true });
+      await applyPlanningCommandResult(result);
     },
     onError: (error: Error) => setLastError(error.message),
   });
@@ -514,7 +512,7 @@ export default function App() {
     onSuccess: async (result) => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      await applyPlanningCommandResult(result, { forceGridRefresh: true });
+      await applyPlanningCommandResult(result);
     },
     onError: (error: Error) => setLastError(error.message),
   });
@@ -524,7 +522,7 @@ export default function App() {
     onSuccess: async (result) => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      await applyPlanningCommandResult(result, { forceGridRefresh: true });
+      await applyPlanningCommandResult(result);
     },
     onError: (error: Error) => setLastError(error.message),
   });
@@ -534,7 +532,7 @@ export default function App() {
     onSuccess: async (result) => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      await applyPlanningCommandResult(result, { forceGridRefresh: true });
+      await applyPlanningCommandResult(result);
     },
     onError: (error: Error) => setLastError(error.message),
   });
@@ -1275,7 +1273,7 @@ export default function App() {
 
   };
 
-  const loadPlanningChildRows = async (parentViewRowId: string): Promise<GridRow[]> => {
+  const loadPlanningChildRows = useCallback(async (parentViewRowId: string): Promise<GridRow[]> => {
     const result = await getGridViewChildren({
       parentViewRowId,
       view: activeView === "planning-department" ? "department" : "store",
@@ -1286,7 +1284,7 @@ export default function App() {
     });
     setLastError(null);
     return result.rows;
-  };
+  }, [activeView, departmentLayout, effectivePlanningStoreId, expandAllBranches, selectedDepartmentLabel]);
 
   const handleExpandAllBranches = () => {
     setExpandAllBranches(true);
@@ -1928,6 +1926,9 @@ export default function App() {
               onScopeRowClick={handleScopeRowClick}
               sheetLabel={activeView === "planning-store" ? "Planning - by Store" : "Planning - by Department"}
               expansionStateKey={activeView === "planning-department" ? departmentLayout : activeView}
+              defaultExpandedDepth={activeView === "planning-store" ? 0 : -1}
+              pendingPatch={pendingPlanningPatch}
+              patchToken={planningPatchToken}
               refreshToken={planningGridRefreshToken}
               pendingRevealRow={pendingRevealRow}
               onRevealHandled={() => setPendingRevealRow(null)}

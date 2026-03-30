@@ -22,7 +22,7 @@ import {
 } from "ag-grid-community";
 import { ServerSideRowModelModule } from "ag-grid-enterprise";
 import { AgGridReact } from "ag-grid-react";
-import type { AddRowResponse, GridMeasure, GridPeriod, GridRow, GridSliceResponse, UndoRedoAvailability } from "../lib/types";
+import type { AddRowResponse, GridMeasure, GridPeriod, GridRow, GridSliceResponse, PlanningGridPatch, UndoRedoAvailability } from "../lib/types";
 import "ag-grid-community/styles/ag-grid.css";
 import "ag-grid-community/styles/ag-theme-quartz.css";
 
@@ -54,6 +54,9 @@ type PlanningGridProps = {
   onScopeRowClick?: (row: GridRow) => void;
   sheetLabel: string;
   expansionStateKey?: string;
+  defaultExpandedDepth?: number;
+  pendingPatch?: PlanningGridPatch | null;
+  patchToken?: number;
   refreshToken?: number;
   pendingRevealRow: AddRowResponse | null;
   onRevealHandled: () => void;
@@ -111,6 +114,9 @@ export function PlanningGrid({
   onScopeRowClick,
   sheetLabel,
   expansionStateKey,
+  defaultExpandedDepth = -1,
+  pendingPatch,
+  patchToken,
   refreshToken,
   pendingRevealRow,
   onRevealHandled,
@@ -177,6 +183,67 @@ export function PlanningGrid({
     rowCacheRef.current.clear();
     registerRows(rootRows);
   }, [rootRows, refreshToken]);
+
+  useEffect(() => {
+    if (!pendingPatch || pendingPatch.cells.length === 0) {
+      return;
+    }
+
+    const api = gridRef.current?.api;
+    if (!api) {
+      return;
+    }
+
+    const updatesByRowKey = new Map<string, GridRowView>();
+
+    const applyPatchToRow = (row: GridRowView, cellPatch: PlanningGridPatch["cells"][number]): GridRowView => {
+      const nextRow = updatesByRowKey.get(getRowKey(row)) ?? {
+        ...row,
+        cells: { ...row.cells },
+      };
+      const nextPeriodCell = nextRow.cells[cellPatch.timePeriodId];
+      nextRow.cells[cellPatch.timePeriodId] = {
+        measures: {
+          ...(nextPeriodCell?.measures ?? {}),
+          [cellPatch.measureId]: { ...cellPatch.cell },
+        },
+      };
+      updatesByRowKey.set(getRowKey(row), nextRow);
+      return nextRow;
+    };
+
+    api.forEachNode((node) => {
+      const row = node.data;
+      if (!row) {
+        return;
+      }
+
+      const canonicalStoreId = row.bindingStoreId ?? row.storeId;
+      const canonicalProductNodeId = row.bindingProductNodeId ?? row.productNodeId;
+      let nextRow = row;
+      let rowChanged = false;
+
+      pendingPatch.cells.forEach((cellPatch) => {
+        if (canonicalStoreId !== cellPatch.storeId || canonicalProductNodeId !== cellPatch.productNodeId) {
+          return;
+        }
+
+        nextRow = applyPatchToRow(nextRow, cellPatch);
+        rowChanged = true;
+      });
+
+      if (!rowChanged) {
+        return;
+      }
+
+      rowCacheRef.current.set(getRowKey(nextRow), nextRow);
+      node.setData(nextRow);
+    });
+
+    if (updatesByRowKey.size > 0) {
+      setRowCacheVersion((current) => current + 1);
+    }
+  }, [patchToken, pendingPatch]);
 
   const selectedRow = selectedRowKey ? rowCacheRef.current.get(selectedRowKey.id) ?? null : null;
   const contextRow = contextMenu ? rowCacheRef.current.get(contextMenu.rowKey.id) ?? null : null;
@@ -806,7 +873,16 @@ export function PlanningGrid({
           getRowId={(params) => getRowKey(params.data)}
           isServerSideGroupOpenByDefault={(params) => {
             const row = params.rowNode.data as GridRowView | undefined;
-            return row ? (expandedRowStateRef.current.get(getRowKey(row)) ?? false) : false;
+            if (!row) {
+              return false;
+            }
+
+            const remembered = expandedRowStateRef.current.get(getRowKey(row));
+            if (remembered !== undefined) {
+              return remembered;
+            }
+
+            return row.level <= defaultExpandedDepth;
           }}
           suppressAggFuncInHeader
           enableCellTextSelection
