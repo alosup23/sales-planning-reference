@@ -287,6 +287,19 @@ export default function App() {
     setSelectedYearId(firstYear?.timePeriodId ?? null);
   }, [gridQuery.data, selectedYearId]);
 
+  const loadPlanningChildRows = useCallback(async (parentViewRowId: string): Promise<GridRow[]> => {
+    const result = await getGridViewChildren({
+      parentViewRowId,
+      view: activeView === "planning-department" ? "department" : "store",
+      selectedStoreId: activeView === "planning-store" ? effectivePlanningStoreId : null,
+      selectedDepartmentLabel: activeView === "planning-department" ? selectedDepartmentLabel : null,
+      departmentLayout: activeView === "planning-department" ? departmentLayout : null,
+      expandAllBranches,
+    });
+    setLastError(null);
+    return result.rows;
+  }, [activeView, departmentLayout, effectivePlanningStoreId, expandAllBranches, selectedDepartmentLabel]);
+
   const syncUndoRedoAvailability = (availability?: UndoRedoAvailability | null) => {
     if (!availability) {
       return;
@@ -1296,19 +1309,6 @@ export default function App() {
     }
 
   };
-
-  const loadPlanningChildRows = useCallback(async (parentViewRowId: string): Promise<GridRow[]> => {
-    const result = await getGridViewChildren({
-      parentViewRowId,
-      view: activeView === "planning-department" ? "department" : "store",
-      selectedStoreId: activeView === "planning-store" ? effectivePlanningStoreId : null,
-      selectedDepartmentLabel: activeView === "planning-department" ? selectedDepartmentLabel : null,
-      departmentLayout: activeView === "planning-department" ? departmentLayout : null,
-      expandAllBranches,
-    });
-    setLastError(null);
-    return result.rows;
-  }, [activeView, departmentLayout, effectivePlanningStoreId, expandAllBranches, selectedDepartmentLabel]);
 
   const handleExpandAllBranches = () => {
     setExpandAllBranches(true);
