@@ -1162,8 +1162,23 @@ function HierarchyCellRenderer(props: HierarchyCellRendererProps) {
 }
 
 function GrowthCellRenderer(props: GrowthCellRendererProps) {
+  const { measure, showGrowthFactors, value } = props;
+  const currentValue = Number(value ?? 0);
+
+  if (!showGrowthFactors) {
+    return (
+      <div className="measure-cell">
+        <span className="measure-value">{formatValue({ value: currentValue } as ValueFormatterParams<GridRowView>, measure)}</span>
+      </div>
+    );
+  }
+
+  return <GrowthFactorEditor {...props} currentValue={currentValue} />;
+}
+
+function GrowthFactorEditor(props: GrowthCellRendererProps & { currentValue: number }) {
   const { data, measure, period, showGrowthFactors, onApplyGrowthFactor } = props;
-  const currentValue = Number(props.value ?? 0);
+  const { currentValue } = props;
   const cell = data?.cells[period.timePeriodId]?.measures[measure.measureId];
   const [draftGrowthFactor, setDraftGrowthFactor] = useState(String(cell?.growthFactor ?? 1));
   const isApplyingGrowthFactorRef = useRef(false);
@@ -1206,45 +1221,43 @@ function GrowthCellRenderer(props: GrowthCellRendererProps) {
   };
 
   return (
-    <div className={`measure-cell${showGrowthFactors ? " measure-cell-with-growth" : ""}`}>
+    <div className="measure-cell measure-cell-with-growth">
       <span className="measure-value">{formatValue({ value: currentValue } as ValueFormatterParams<GridRowView>, measure)}</span>
-      {showGrowthFactors ? (
-        <input
-          className="growth-factor-input"
-          aria-label={`${measure.label} growth factor`}
-          type="number"
-          step="0.1"
-          value={draftGrowthFactor}
-          disabled={!canEditGrowthFactor}
-          onFocus={() => props.api.stopEditing()}
-          onMouseDown={(event) => event.stopPropagation()}
-          onClick={(event) => event.stopPropagation()}
-          onDoubleClick={(event) => event.stopPropagation()}
-          onChange={(event) => setDraftGrowthFactor(event.target.value)}
-          onBlur={() => {
-            if (isApplyingGrowthFactorRef.current) {
-              return;
-            }
+      <input
+        className="growth-factor-input"
+        aria-label={`${measure.label} growth factor`}
+        type="number"
+        step="0.1"
+        value={draftGrowthFactor}
+        disabled={!canEditGrowthFactor}
+        onFocus={() => props.api.stopEditing()}
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+        onDoubleClick={(event) => event.stopPropagation()}
+        onChange={(event) => setDraftGrowthFactor(event.target.value)}
+        onBlur={() => {
+          if (isApplyingGrowthFactorRef.current) {
+            return;
+          }
 
+          setDraftGrowthFactor(String(cell?.growthFactor ?? 1));
+        }}
+        onKeyDown={async (event) => {
+          event.stopPropagation();
+          if (event.key === "Enter") {
+            event.preventDefault();
+            props.api.stopEditing();
+            await commitGrowthFactor();
+          }
+
+          if (event.key === "Escape") {
             setDraftGrowthFactor(String(cell?.growthFactor ?? 1));
-          }}
-          onKeyDown={async (event) => {
-            event.stopPropagation();
-            if (event.key === "Enter") {
-              event.preventDefault();
-              props.api.stopEditing();
-              await commitGrowthFactor();
-            }
-
-            if (event.key === "Escape") {
-              setDraftGrowthFactor(String(cell?.growthFactor ?? 1));
-              event.preventDefault();
-              props.api.stopEditing();
-              event.currentTarget.blur();
-            }
-          }}
-        />
-      ) : null}
+            event.preventDefault();
+            props.api.stopEditing();
+            event.currentTarget.blur();
+          }
+        }}
+      />
     </div>
   );
 }
