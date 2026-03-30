@@ -39,7 +39,8 @@ This document records the final deployed Phase 1 UAT AWS runtime, the current li
 - `Amazon ECS Fargate`
 - `1` running task in UAT
 - application image hosted in `Amazon ECR`
-- in-process async job manager for import, export, and reconciliation progress
+- async job orchestration hosted in the API service
+- async job state, progress, payloads, retention, and downloadable outputs persisted in PostgreSQL
 - ALB listener with:
   - default `403`
   - forward only when the CloudFront origin header is present
@@ -62,8 +63,10 @@ This document records the final deployed Phase 1 UAT AWS runtime, the current li
 
 - Microsoft Entra-backed frontend sign-in
 - backend API authorization enabled
-- DB credentials resolved from `AWS Secrets Manager`
+- authoritative DB credentials stored in `AWS Secrets Manager`
+- live ECS startup uses direct PostgreSQL username/password environment values injected by the CloudFormation deployment to avoid runtime secret-resolution stalls
 - ALB ingress restricted to the AWS-managed CloudFront origin-facing prefix list
+- ASP.NET Data Protection keys persisted in PostgreSQL instead of container-local storage
 
 ## 4. Network Placement
 
@@ -121,6 +124,7 @@ This document records the final deployed Phase 1 UAT AWS runtime, the current li
   - secret origin header validation
 - database is no longer publicly accessible
 - API returns `401` on protected routes without a valid token
+- Data Protection keys survive ECS task replacement because they are stored in PostgreSQL
 
 ## 7. Cost-Aware UAT Decisions
 
@@ -148,6 +152,6 @@ Important note:
 - add Route 53 hosted zone and ACM certificate
 - move CloudFront to HTTPS-only origin traffic to the ALB
 - consider moving ECS tasks into private subnets with the required NAT or endpoint strategy
-- externalize async job state for production durability
-- add scheduled reconciliation orchestration and richer operational observability
+- consider replacing deployment-time DB credential injection with a private Secrets Manager or SSM retrieval path once the required endpoint strategy is available
+- add richer operational observability and alarms around job backlog, reconciliation failures, and edit latency
 - remove the stopped rollback DB when it is no longer needed

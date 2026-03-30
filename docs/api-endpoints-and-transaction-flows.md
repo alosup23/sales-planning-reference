@@ -197,25 +197,28 @@ This document lists the current Phase 1 UAT API endpoints and describes the main
 2. User selects the relevant workbook.
 3. App queues the file through the matching async job endpoint.
 4. App polls `GET /jobs/{jobId}` and shows live progress text in the status card.
-5. Server validates workbook structure and business rows.
-6. If there are errors, the async job exposes an exception workbook download.
-7. If valid, the rows are inserted or updated by natural business key and reconciliation is run automatically.
+5. Server persists the job request and payload in PostgreSQL.
+6. Background processing validates workbook structure and business rows.
+7. If there are errors, the async job exposes an exception workbook download.
+8. If valid, the rows are inserted or updated by natural business key and reconciliation is run automatically.
 
 ### 8.9 Async Export
 
 1. User opens a maintenance workspace or planning workspace.
 2. User clicks export.
 3. App queues the export job.
-4. App polls the job status until completion.
-5. Browser downloads the generated file when it is ready.
+4. Server persists the export request in PostgreSQL and generates the file in the background.
+5. App polls the job status until completion.
+6. Browser downloads the generated file when it is ready.
 
 ### 8.10 Reconciliation
 
 1. User clicks `Run Reconciliation`.
 2. App queues `POST /api/v1/jobs/reconciliation`.
-3. Server checks additive product and time rollups against the canonical model.
-4. App shows progress in the status card.
-5. On completion, the reconciliation report is downloadable as JSON.
+3. Server persists the reconciliation request and processes it in the background.
+4. Server checks additive product and time rollups against the canonical model.
+5. App shows progress in the status card.
+6. On completion, the reconciliation report is downloadable as JSON and retained according to the configured retention policy.
 
 ## 9. Current Behavior Notes
 
@@ -223,5 +226,6 @@ This document lists the current Phase 1 UAT API endpoints and describes the main
 - `undo` and `redo` depth is capped at `30`.
 - Department view is server-composed.
 - AG Grid now runs on Server-Side Row Model.
-- Import, export, and reconciliation are async job flows with progress reporting.
+- Import, export, and reconciliation are async job flows with progress reporting and durable PostgreSQL-backed job state.
+- Reconciliation can also be scheduled from the durable scheduler tables and run independently of a user session.
 - The current UAT runtime is optimized for scoped planning interactions, not unlimited full-hierarchy expansion.

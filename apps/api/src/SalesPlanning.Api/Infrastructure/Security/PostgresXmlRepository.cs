@@ -11,6 +11,7 @@ public sealed class PostgresXmlRepository(string connectionString) : IXmlReposit
         var results = new List<XElement>();
         using var connection = new NpgsqlConnection(connectionString);
         connection.Open();
+        EnsureTableExists(connection);
 
         using var command = new NpgsqlCommand(
             """
@@ -33,6 +34,7 @@ public sealed class PostgresXmlRepository(string connectionString) : IXmlReposit
     {
         using var connection = new NpgsqlConnection(connectionString);
         connection.Open();
+        EnsureTableExists(connection);
 
         using var command = new NpgsqlCommand(
             """
@@ -46,6 +48,20 @@ public sealed class PostgresXmlRepository(string connectionString) : IXmlReposit
 
         command.Parameters.AddWithValue("@friendlyName", friendlyName);
         command.Parameters.AddWithValue("@xml", element.ToString(SaveOptions.DisableFormatting));
+        command.ExecuteNonQuery();
+    }
+
+    private static void EnsureTableExists(NpgsqlConnection connection)
+    {
+        using var command = new NpgsqlCommand(
+            """
+            create table if not exists app_data_protection_keys (
+                friendly_name text primary key,
+                xml text not null,
+                created_at timestamptz not null default now()
+            );
+            """,
+            connection);
         command.ExecuteNonQuery();
     }
 }

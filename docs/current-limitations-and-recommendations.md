@@ -8,13 +8,23 @@ This document records the known current limitations of the live Phase 1 UAT plat
 
 Current limitation:
 
-- the grid now uses AG Grid Server-Side Row Model and the department view is server-composed, but some planning recalculation paths still touch broader working sets than the desired final delta-only model
+- edit, splash, and growth-factor processing now use targeted server-side working sets, but the highest-volume aggregate paths still do more recalculation work than the final delta-only target model
 
 Recommendation:
 
 - move recalculation fully to strict impacted-ancestor scope only
 - add persisted aggregate projections for the hottest summary paths
-- continue measuring edit, splash, and growth-factor latency under larger UAT volumes
+- keep measuring leaf-edit, splash, and growth-factor latency under larger UAT data volumes
+
+## 2. ECS Network Posture
+
+Current limitation:
+
+- the active ECS tasks still run in the current public subnets for UAT simplicity
+
+Recommendation:
+
+- move ECS tasks into private subnets with NAT or the required VPC endpoint design once the cost and operational tradeoffs are approved
 
 ## 3. CloudFront To ALB Origin Encryption
 
@@ -31,15 +41,16 @@ Recommendation:
 - complete Route 53 and ACM setup
 - move CloudFront origin protocol policy to HTTPS-only
 
-## 4. ECS Network Posture
+## 4. Credential Delivery Model
 
 Current limitation:
 
-- the active ECS tasks still run in the current public subnets for UAT simplicity
+- to avoid ECS startup stalls on runtime secret resolution, the current live ECS stack injects the PostgreSQL username and password directly into task environment variables during CloudFormation deployment
 
 Recommendation:
 
-- evaluate a private-subnet ECS deployment with the required NAT or VPC endpoint design once cost and operational tradeoffs are approved
+- for production, replace deployment-time DB credential injection with a private Secrets Manager or SSM retrieval path
+- if Secrets Manager remains the target, add the required private endpoint or equivalent network path so startup never depends on public egress
 
 ## 5. Rollback Database
 
@@ -51,84 +62,32 @@ Recommendation:
 
 - snapshot and delete it after UAT acceptance to avoid auto-restart and cost drift
 
-## 6. Data Protection Keys
+## 6. Async Job And Reconciliation Operations
+
+Current state:
+
+- import, export, and reconciliation jobs are now durable in PostgreSQL
+- reconciliation scheduling, report persistence, and retention are operationalized inside the API service
 
 Current limitation:
 
-- ASP.NET Data Protection keys are still container-local
+- the scheduler still runs as an in-service background worker rather than as a fully external orchestrator
 
 Recommendation:
 
-- persist keys outside the container if future features depend on stable encrypted cookie continuity or key reuse across tasks
-
-## 2. Async Job Durability And Reconciliation Operations
-
-Current limitation:
-
-- import, export, and reconciliation now run through async background jobs with progress and downloadable outputs, but the current UAT job manager is in-memory inside the ECS task
-- reconciliation is fully runnable on demand and is executed after imports, but it is not yet scheduled through an external durable scheduler
-
-Recommendation:
-
-- persist job state outside the API task for production
-- add scheduled reconciliation jobs
+- for production, consider moving scheduled reconciliation triggering to EventBridge or an equivalent external scheduler
 - add dashboards and alarms for:
   - API latency
-  - query failure rate
-  - import failure rate
   - command latency
-  - DB connectivity
-
-## 3. CloudFront To ALB Origin Encryption
-
-Current limitation:
-
-- CloudFront still uses `http-only` to the ALB origin
-
-Reason:
-
-- ALB HTTPS completion requires a Route 53 hostname and ACM certificate in the ALB region
-
-Recommendation:
-
-- complete Route 53 and ACM setup
-- move CloudFront origin protocol policy to HTTPS-only
-
-## 4. ECS Network Posture
-
-Current limitation:
-
-- the active ECS tasks still run in the current public subnets for UAT simplicity
-
-Recommendation:
-
-- evaluate a private-subnet ECS deployment with the required NAT or VPC endpoint design once cost and operational tradeoffs are approved
-
-## 5. Rollback Database
-
-Current limitation:
-
-- the prior DB instance remains as a temporary stopped rollback copy
-
-Recommendation:
-
-- snapshot and delete it after UAT acceptance to avoid auto-restart and cost drift
-
-## 6. Data Protection Keys
-
-Current limitation:
-
-- ASP.NET Data Protection keys are still container-local
-
-Recommendation:
-
-- persist keys outside the container if future features depend on stable encrypted cookie continuity or key reuse across tasks
+  - async job backlog
+  - import failure rate
+  - reconciliation failures
 
 ## 7. Phase 2 Readiness
 
 Current strength:
 
-- Phase 1 already captures the data foundations required for Phase 2 recommendation workflows
+- Phase 1 now captures the data foundations required for Phase 2 recommendation workflows
 
 Remaining work:
 
@@ -139,9 +98,9 @@ Remaining work:
 
 ## 8. Priority Recommendation Order
 
-1. Delta recalculation and tighter performance optimization
-2. Durable async job persistence and scheduled reconciliation
+1. Delta recalculation and persisted aggregate optimization
+2. Private-subnet ECS with private secret retrieval
 3. ALB HTTPS origin completion
 4. Production observability and alerting
-5. Private-subnet ECS review
+5. Retire the rollback DB
 6. Phase 2 recommendation APIs and AI review workflow

@@ -32,6 +32,12 @@ Parameters:
   DbName:
     Type: String
     Default: salesplanning
+  DbUsername:
+    Type: String
+    Default: salesplanning
+  DbPassword:
+    Type: String
+    NoEcho: true
   ImageUri:
     Type: String
     Default: 427304877733.dkr.ecr.ap-southeast-5.amazonaws.com/sales-planning-demo-api:latest
@@ -297,6 +303,10 @@ Resources:
               Value: !Sub ${DbPort}
             - Name: PlanningPostgresDatabase
               Value: !Ref DbName
+            - Name: PlanningPostgresUsername
+              Value: !Ref DbUsername
+            - Name: PlanningPostgresPassword
+              Value: !Ref DbPassword
             - Name: PlanningPostgresSecretArn
               Value: !Ref DbSecretArn
             - Name: CorsAllowedOrigins
