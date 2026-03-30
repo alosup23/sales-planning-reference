@@ -56,6 +56,7 @@ type PlanningGridProps = {
   sheetLabel: string;
   expansionStateKey?: string;
   defaultExpandedDepth?: number;
+  initialVisibleRowTarget?: number;
   pendingPatch?: PlanningGridPatch | null;
   patchToken?: number;
   refreshToken?: number;
@@ -117,6 +118,7 @@ export function PlanningGrid({
   sheetLabel,
   expansionStateKey,
   defaultExpandedDepth = -1,
+  initialVisibleRowTarget = 1,
   pendingPatch,
   patchToken,
   refreshToken,
@@ -583,7 +585,14 @@ export function PlanningGrid({
       return;
     }
 
-    if (event.api.getDisplayedRowCount() <= 0) {
+    let loadedDataRowCount = 0;
+    event.api.forEachNode((node) => {
+      if (node.data) {
+        loadedDataRowCount += 1;
+      }
+    });
+
+    if (loadedDataRowCount < initialVisibleRowTarget) {
       return;
     }
 

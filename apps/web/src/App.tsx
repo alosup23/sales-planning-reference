@@ -150,7 +150,7 @@ export default function App() {
   const [seasonalityPageNumber, setSeasonalityPageNumber] = useState(1);
   const [vendorSearchTerm, setVendorSearchTerm] = useState("");
   const [vendorPageNumber, setVendorPageNumber] = useState(1);
-  const [selectedPlanningStoreId, setSelectedPlanningStoreId] = useState<PlanningStoreScopeSelection>("all");
+  const [selectedPlanningStoreId, setSelectedPlanningStoreId] = useState<PlanningStoreScopeSelection>(null);
   const [selectedDepartmentLabel, setSelectedDepartmentLabel] = useState<string | null>(null);
   const [activeAsyncJob, setActiveAsyncJob] = useState<AsyncJobStatus | null>(null);
   const [planningGridRefreshToken, setPlanningGridRefreshToken] = useState(0);
@@ -255,6 +255,15 @@ export default function App() {
     queryFn: () => getPlanningInsights(insightScope!.storeId, insightScope!.productNodeId, insightScope!.yearTimePeriodId),
     enabled: Boolean(insightScope),
   });
+
+  useEffect(() => {
+    if (selectedPlanningStoreId !== null || !planningStoreScopeQuery.data?.stores.length) {
+      return;
+    }
+
+    const firstActiveStore = planningStoreScopeQuery.data.stores.find((store) => store.isActive) ?? planningStoreScopeQuery.data.stores[0];
+    setSelectedPlanningStoreId(firstActiveStore.storeId);
+  }, [selectedPlanningStoreId, planningStoreScopeQuery.data]);
 
   useEffect(() => {
     setExpandAllBranches(false);
@@ -985,7 +994,7 @@ export default function App() {
 
   const statusText = useMemo(() => {
     const planningViewActive = activeView === "planning-store" || activeView === "planning-department";
-    if ((planningViewActive && (planningStoreScopeQuery.isLoading || gridQuery.isLoading || gridQuery.isFetching))
+    if ((planningViewActive && (planningStoreScopeQuery.isLoading || gridQuery.isLoading))
       || (activeView === "planning-department" && departmentScopeQuery.isLoading)
       || (activeView === "store-profile" && storeProfileQuery.isLoading)
       || (activeView === "hierarchy" && hierarchyQuery.isLoading)
@@ -1078,7 +1087,7 @@ export default function App() {
                 : activeView === "vendor-supply"
                   ? "Vendor supply maintenance ready."
       : "Multi-year planning grid ready.";
-  }, [activeAsyncJob, activeView, departmentScopeQuery.error, departmentScopeQuery.isLoading, gridQuery.error, gridQuery.isFetching, gridQuery.isLoading, hasUnsavedChanges, hierarchyQuery.error, hierarchyQuery.isLoading, inventoryProfileQuery.error, inventoryProfileQuery.isLoading, isMutating, lastError, lastSavedAt, planningStoreScopeQuery.error, planningStoreScopeQuery.isLoading, pricingPolicyQuery.error, pricingPolicyQuery.isLoading, productHierarchyQuery.error, productHierarchyQuery.isLoading, productProfileOptionsQuery.error, productProfileOptionsQuery.isLoading, productProfileQuery.error, productProfileQuery.isLoading, seasonalityEventQuery.error, seasonalityEventQuery.isLoading, storeProfileOptionsQuery.error, storeProfileOptionsQuery.isLoading, storeProfileQuery.error, storeProfileQuery.isLoading, vendorSupplyQuery.error, vendorSupplyQuery.isLoading]);
+  }, [activeAsyncJob, activeView, departmentScopeQuery.error, departmentScopeQuery.isLoading, gridQuery.error, gridQuery.isLoading, hasUnsavedChanges, hierarchyQuery.error, hierarchyQuery.isLoading, inventoryProfileQuery.error, inventoryProfileQuery.isLoading, isMutating, lastError, lastSavedAt, planningStoreScopeQuery.error, planningStoreScopeQuery.isLoading, pricingPolicyQuery.error, pricingPolicyQuery.isLoading, productHierarchyQuery.error, productHierarchyQuery.isLoading, productProfileOptionsQuery.error, productProfileOptionsQuery.isLoading, productProfileQuery.error, productProfileQuery.isLoading, seasonalityEventQuery.error, seasonalityEventQuery.isLoading, storeProfileOptionsQuery.error, storeProfileOptionsQuery.isLoading, storeProfileQuery.error, storeProfileQuery.isLoading, vendorSupplyQuery.error, vendorSupplyQuery.isLoading]);
 
   const activeGridData = gridQuery.data ?? null;
 
@@ -1947,6 +1956,7 @@ export default function App() {
               sheetLabel={activeView === "planning-store" ? "Planning - by Store" : "Planning - by Department"}
               expansionStateKey={activeView === "planning-department" ? departmentLayout : activeView}
               defaultExpandedDepth={activeView === "planning-store" ? 0 : -1}
+              initialVisibleRowTarget={activeView === "planning-store" ? 2 : 1}
               pendingPatch={pendingPlanningPatch}
               patchToken={planningPatchToken}
               refreshToken={planningGridRefreshToken}
