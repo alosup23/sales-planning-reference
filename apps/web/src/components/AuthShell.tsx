@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type PropsWithChildren } from "react";
+import { useState, type FocusEvent, type PropsWithChildren } from "react";
 import { AuthenticatedTemplate, UnauthenticatedTemplate, useMsal } from "@azure/msal-react";
 import { loginRequest } from "../lib/auth";
 
@@ -38,44 +38,29 @@ export function SignedInUserMenu() {
   const account = instance.getActiveAccount() ?? accounts[0] ?? null;
   const [menuOpen, setMenuOpen] = useState(false);
 
-  const initials = useMemo(() => {
-    const source = (account?.name ?? account?.username ?? "U").trim();
-    const parts = source.split(/\s+/).filter(Boolean);
-    if (parts.length === 0) {
-      return "U";
-    }
-
-    if (parts.length === 1) {
-      return parts[0].slice(0, 2).toUpperCase();
-    }
-
-    return `${parts[0][0] ?? ""}${parts[1][0] ?? ""}`.toUpperCase();
-  }, [account?.name, account?.username]);
-
-  useEffect(() => {
-    if (!menuOpen || !account) {
-      return;
-    }
-
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (!(target instanceof HTMLElement) || target.closest(".auth-user-menu")) {
-        return;
-      }
-
-      setMenuOpen(false);
-    };
-
-    window.addEventListener("pointerdown", handlePointerDown);
-    return () => window.removeEventListener("pointerdown", handlePointerDown);
-  }, [account, menuOpen]);
-
   if (!account) {
     return null;
   }
 
+  const source = (account.name ?? account.username ?? "U").trim();
+  const parts = source.split(/\s+/).filter(Boolean);
+  const initials = parts.length === 0
+    ? "U"
+    : parts.length === 1
+      ? parts[0].slice(0, 2).toUpperCase()
+      : `${parts[0][0] ?? ""}${parts[1][0] ?? ""}`.toUpperCase();
+
+  const handleBlur = (event: FocusEvent<HTMLDivElement>) => {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
+      return;
+    }
+
+    setMenuOpen(false);
+  };
+
   return (
-    <div className="auth-user-menu">
+    <div className="auth-user-menu" onBlur={handleBlur}>
       <button
         type="button"
         className="profile-menu-button"

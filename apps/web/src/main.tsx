@@ -9,10 +9,10 @@ import "./styles/app.css";
 
 const queryClient = new QueryClient();
 
-class AppErrorBoundary extends React.Component<{ children: ReactNode }, { error: Error | null }> {
+class AppErrorBoundary extends React.Component<{ children: ReactNode }, { error: Error | null; componentStack: string }> {
   constructor(props: { children: ReactNode }) {
     super(props);
-    this.state = { error: null };
+    this.state = { error: null, componentStack: "" };
   }
 
   static getDerivedStateFromError(error: Error) {
@@ -21,6 +21,7 @@ class AppErrorBoundary extends React.Component<{ children: ReactNode }, { error:
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error("Sales planning app crashed during render.", error, errorInfo);
+    this.setState({ error, componentStack: errorInfo.componentStack ?? "" });
   }
 
   render() {
@@ -43,6 +44,11 @@ class AppErrorBoundary extends React.Component<{ children: ReactNode }, { error:
             <div className="status-card status-card-error" aria-live="assertive">
               {this.state.error.message || "Unexpected application error."}
             </div>
+            {this.state.componentStack ? (
+              <pre className="status-card status-card-error" style={{ whiteSpace: "pre-wrap", marginTop: "1rem" }}>
+                {this.state.componentStack}
+              </pre>
+            ) : null}
           </div>
         </section>
       </main>
