@@ -46,6 +46,7 @@ button {
   grid-template-columns: minmax(0, 1fr) 280px;
   gap: 8px;
   align-items: start;
+  position: relative;
 }
 
 .hero {
@@ -211,6 +212,12 @@ button {
   place-items: center;
   padding: 32px;
   color: #44505a;
+}
+
+.planning-shell-overlay {
+  position: absolute;
+  inset: 0 288px 0 0;
+  z-index: 5;
 }
 
 .planning-toolbar {

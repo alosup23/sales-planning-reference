@@ -19,6 +19,7 @@ import {
   type RowGroupOpenedEvent,
   type SelectionChangedEvent,
   type ValueFormatterParams,
+  type ModelUpdatedEvent,
 } from "ag-grid-community";
 import { ServerSideRowModelModule } from "ag-grid-enterprise";
 import { AgGridReact } from "ag-grid-react";
@@ -58,6 +59,7 @@ type PlanningGridProps = {
   pendingPatch?: PlanningGridPatch | null;
   patchToken?: number;
   refreshToken?: number;
+  onInitialRowsRendered?: () => void;
   pendingRevealRow: AddRowResponse | null;
   onRevealHandled: () => void;
 };
@@ -118,6 +120,7 @@ export function PlanningGrid({
   pendingPatch,
   patchToken,
   refreshToken,
+  onInitialRowsRendered,
   pendingRevealRow,
   onRevealHandled,
 }: PlanningGridProps) {
@@ -133,10 +136,12 @@ export function PlanningGrid({
   const yearGroupStateRef = useRef<Map<string, boolean>>(new Map());
   const columnWidthStateRef = useRef<Map<string, number>>(new Map());
   const rowCacheRef = useRef<Map<string, GridRowView>>(new Map());
+  const initialRowsRenderedRef = useRef(false);
 
   useEffect(() => {
     expandedRowStateRef.current.clear();
     rowCacheRef.current.clear();
+    initialRowsRenderedRef.current = false;
     setRowCacheVersion((current) => current + 1);
   }, [sheetLabel, expansionStateKey, refreshToken]);
 
@@ -573,6 +578,19 @@ export function PlanningGrid({
     });
   };
 
+  const handleModelUpdated = (event: ModelUpdatedEvent<GridRowView>) => {
+    if (initialRowsRenderedRef.current || !onInitialRowsRendered) {
+      return;
+    }
+
+    if (event.api.getDisplayedRowCount() <= 0) {
+      return;
+    }
+
+    initialRowsRenderedRef.current = true;
+    onInitialRowsRendered();
+  };
+
   const handleCellClicked = (event: CellClickedEvent<GridRowView>) => {
     const clickedElement = event.event?.target instanceof HTMLElement ? event.event.target : null;
     const clickedToggle = clickedElement?.closest(".ag-group-contracted, .ag-group-expanded, .ag-group-contracted-icon, .ag-group-expanded-icon");
@@ -900,6 +918,7 @@ export function PlanningGrid({
           onCellContextMenu={handleCellContextMenu}
           onCellEditRequest={handleCellEditRequest}
           onRowGroupOpened={handleRowGroupOpened}
+          onModelUpdated={handleModelUpdated}
           onColumnGroupOpened={handleColumnGroupOpened}
           onColumnResized={handleColumnResized}
           autoGroupColumnDef={{

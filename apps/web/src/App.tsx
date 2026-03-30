@@ -150,10 +150,11 @@ export default function App() {
   const [seasonalityPageNumber, setSeasonalityPageNumber] = useState(1);
   const [vendorSearchTerm, setVendorSearchTerm] = useState("");
   const [vendorPageNumber, setVendorPageNumber] = useState(1);
-  const [selectedPlanningStoreId, setSelectedPlanningStoreId] = useState<PlanningStoreScopeSelection>(null);
+  const [selectedPlanningStoreId, setSelectedPlanningStoreId] = useState<PlanningStoreScopeSelection>("all");
   const [selectedDepartmentLabel, setSelectedDepartmentLabel] = useState<string | null>(null);
   const [activeAsyncJob, setActiveAsyncJob] = useState<AsyncJobStatus | null>(null);
   const [planningGridRefreshToken, setPlanningGridRefreshToken] = useState(0);
+  const [planningSurfaceReady, setPlanningSurfaceReady] = useState(false);
   const [pendingPlanningPatch, setPendingPlanningPatch] = useState<PlanningGridPatch | null>(null);
   const [planningPatchToken, setPlanningPatchToken] = useState(0);
   const [expandAllBranches, setExpandAllBranches] = useState(false);
@@ -256,17 +257,17 @@ export default function App() {
   });
 
   useEffect(() => {
-    if (selectedPlanningStoreId !== null || !planningStoreScopeQuery.data?.stores.length) {
+    setExpandAllBranches(false);
+  }, [activeView, departmentLayout]);
+
+  useEffect(() => {
+    if (!planningViewActive) {
+      setPlanningSurfaceReady(false);
       return;
     }
 
-    const firstActiveStore = planningStoreScopeQuery.data.stores.find((store) => store.isActive) ?? planningStoreScopeQuery.data.stores[0];
-    setSelectedPlanningStoreId(firstActiveStore.storeId);
-  }, [selectedPlanningStoreId, planningStoreScopeQuery.data]);
-
-  useEffect(() => {
-    setExpandAllBranches(false);
-  }, [activeView, departmentLayout]);
+    setPlanningSurfaceReady(false);
+  }, [activeView, departmentLayout, planningGridRefreshToken, planningViewActive, selectedDepartmentLabel, selectedPlanningStoreId]);
 
   useEffect(() => {
     if (selectedYearId || !gridQuery.data) {
@@ -1910,6 +1911,11 @@ export default function App() {
         />
       ) : (
         <div className="planning-workspace">
+          {!planningSurfaceReady ? (
+            <section className="planning-shell planning-shell-loading planning-shell-overlay" aria-live="polite">
+              Preparing planning workspace...
+            </section>
+          ) : null}
           <Suspense
             fallback={
               <section className="planning-shell planning-shell-loading" aria-live="polite">
@@ -1944,6 +1950,7 @@ export default function App() {
               pendingPatch={pendingPlanningPatch}
               patchToken={planningPatchToken}
               refreshToken={planningGridRefreshToken}
+              onInitialRowsRendered={() => setPlanningSurfaceReady(true)}
               pendingRevealRow={pendingRevealRow}
               onRevealHandled={() => setPendingRevealRow(null)}
             />
