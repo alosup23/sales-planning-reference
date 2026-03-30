@@ -547,8 +547,10 @@ public sealed partial class PlanningService : IPlanningService
 
     public async Task<SaveScenarioResponse> SaveScenarioAsync(SaveScenarioRequest request, string userId, CancellationToken cancellationToken)
     {
+        var savedAt = DateTimeOffset.UtcNow;
+        await _repository.RecordSaveCheckpointAsync(request.ScenarioVersionId, userId, request.Mode, savedAt, cancellationToken);
         await AppendAuditAsync("save", request.Mode, userId, $"Scenario {request.ScenarioVersionId} save checkpoint", [], cancellationToken);
-        return new SaveScenarioResponse("saved", request.Mode, DateTimeOffset.UtcNow);
+        return new SaveScenarioResponse("saved", request.Mode, savedAt);
     }
 
     public async Task<UndoRedoAvailabilityDto> GetUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken)

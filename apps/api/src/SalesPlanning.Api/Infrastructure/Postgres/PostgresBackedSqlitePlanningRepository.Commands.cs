@@ -6,6 +6,51 @@ namespace SalesPlanning.Api.Infrastructure.Postgres;
 
 public sealed partial class PostgresBackedSqlitePlanningRepository
 {
+    private Task RecordSaveCheckpointDirectAsync(
+        long scenarioVersionId,
+        string userId,
+        string mode,
+        DateTimeOffset savedAt,
+        CancellationToken cancellationToken) =>
+        ExecuteDirectNonVersionedMutationAsync(
+            async (connection, transaction, ct) =>
+            {
+                await using var dataVersionCommand = new NpgsqlCommand(
+                    "select data_version from planning_data_state where state_key = 'default';",
+                    connection,
+                    transaction);
+                var dataVersionValue = await dataVersionCommand.ExecuteScalarAsync(ct);
+                var dataVersion = dataVersionValue is null or DBNull
+                    ? 0L
+                    : Convert.ToInt64(dataVersionValue);
+
+                await using var command = new NpgsqlCommand(
+                    """
+                    insert into planning_save_checkpoints (
+                        scenario_version_id,
+                        user_id,
+                        mode,
+                        saved_at,
+                        data_version)
+                    values (
+                        @scenarioVersionId,
+                        @userId,
+                        @mode,
+                        @savedAt,
+                        @dataVersion);
+                    """,
+                    connection,
+                    transaction);
+                command.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+                command.Parameters.AddWithValue("@userId", userId);
+                command.Parameters.AddWithValue("@mode", mode);
+                command.Parameters.AddWithValue("@savedAt", savedAt);
+                command.Parameters.AddWithValue("@dataVersion", dataVersion);
+                await command.ExecuteNonQueryAsync(ct);
+            },
+            cancellationToken);
+    
+
     private Task<long> GetNextActionIdDirectAsync(CancellationToken cancellationToken) =>
         ExecuteDirectReadAsync(
             async (connection, transaction, ct) =>

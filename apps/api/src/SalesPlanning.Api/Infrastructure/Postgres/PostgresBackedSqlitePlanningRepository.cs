@@ -13,7 +13,6 @@ namespace SalesPlanning.Api.Infrastructure.Postgres;
 public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRepository
 {
     private const int BulkWriteChunkSize = 500;
-    private const int PlanningCellWriteChunkSize = 200;
     private static readonly string[] StoreMutationTables = ["store_metadata", "store_profile_options", "product_nodes", "planning_cells"];
     private static readonly string[] HierarchyTables =
     [
@@ -59,9 +58,14 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
     private readonly AsyncLocal<int> _atomicDepth = new();
     private readonly AsyncLocal<PostgresSyncPlan?> _pendingSyncPlan = new();
     private readonly AsyncLocal<PostgresDirectAtomicContext?> _directAtomicContext = new();
+    private readonly object _readCacheGate = new();
     private bool _hydrated;
     private bool _databaseReady;
     private long? _localDataVersion;
+    private PlanningMetadataSnapshot? _metadataCache;
+    private IReadOnlyList<StoreNodeMetadata>? _storeListCache;
+    private IReadOnlyDictionary<long, long>? _storeRootProductNodeIdsCache;
+    private IReadOnlyList<HierarchyDepartmentRecord>? _hierarchyMappingsCache;
 
     public PostgresBackedSqlitePlanningRepository(
         string connectionString,
@@ -86,6 +90,137 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         _bootstrapSeedKey = bootstrapSeedKey;
         Directory.CreateDirectory(Path.GetDirectoryName(localCachePath) ?? ".");
         _innerRepository = new SqlitePlanningRepository(localCachePath);
+    }
+
+    private PlanningMetadataSnapshot? GetCachedMetadataSnapshot()
+    {
+        lock (_readCacheGate)
+        {
+            return _metadataCache;
+        }
+    }
+
+    private void SetCachedMetadataSnapshot(PlanningMetadataSnapshot snapshot)
+    {
+        lock (_readCacheGate)
+        {
+            _metadataCache = snapshot;
+            _storeListCache = snapshot.Stores.Values
+                .OrderBy(store => store.StoreLabel, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            _storeRootProductNodeIdsCache = snapshot.ProductNodes.Values
+                .Where(node => node.Level == 0)
+                .GroupBy(node => node.StoreId)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.OrderBy(node => node.ProductNodeId).First().ProductNodeId);
+        }
+    }
+
+    private IReadOnlyList<StoreNodeMetadata>? GetCachedStoreList()
+    {
+        lock (_readCacheGate)
+        {
+            return _storeListCache;
+        }
+    }
+
+    private IReadOnlyDictionary<long, long>? GetCachedStoreRoots()
+    {
+        lock (_readCacheGate)
+        {
+            return _storeRootProductNodeIdsCache;
+        }
+    }
+
+    private IReadOnlyList<HierarchyDepartmentRecord>? GetCachedHierarchyMappings()
+    {
+        lock (_readCacheGate)
+        {
+            return _hierarchyMappingsCache;
+        }
+    }
+
+    private void SetCachedHierarchyMappings(IReadOnlyList<HierarchyDepartmentRecord> mappings)
+    {
+        lock (_readCacheGate)
+        {
+            _hierarchyMappingsCache = mappings;
+        }
+    }
+
+    private void InvalidateMetadataCaches()
+    {
+        lock (_readCacheGate)
+        {
+            _metadataCache = null;
+            _storeListCache = null;
+            _storeRootProductNodeIdsCache = null;
+        }
+    }
+
+    private void InvalidateHierarchyCache()
+    {
+        lock (_readCacheGate)
+        {
+            _hierarchyMappingsCache = null;
+        }
+    }
+
+    private void InvalidateReadCaches(params string[] tableNames)
+    {
+        var invalidateMetadata = false;
+        var invalidateHierarchy = false;
+
+        foreach (var tableName in tableNames)
+        {
+            if (string.Equals(tableName, "product_nodes", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(tableName, "time_periods", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(tableName, "store_metadata", StringComparison.OrdinalIgnoreCase))
+            {
+                invalidateMetadata = true;
+            }
+
+            if (string.Equals(tableName, "hierarchy_departments_v2", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(tableName, "hierarchy_classes_v2", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(tableName, "hierarchy_subclasses_v2", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(tableName, "hierarchy_categories", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(tableName, "hierarchy_subcategories", StringComparison.OrdinalIgnoreCase))
+            {
+                invalidateHierarchy = true;
+            }
+        }
+
+        if (invalidateMetadata)
+        {
+            InvalidateMetadataCaches();
+        }
+
+        if (invalidateHierarchy)
+        {
+            InvalidateHierarchyCache();
+        }
+    }
+
+    private async Task WithMutationAndCacheInvalidationAsync(
+        Func<CancellationToken, Task> action,
+        Action<PostgresSyncPlan> queueSync,
+        IReadOnlyCollection<string> tableNames,
+        CancellationToken cancellationToken)
+    {
+        await WithMutationAsync(action, queueSync, cancellationToken);
+        InvalidateReadCaches(tableNames.ToArray());
+    }
+
+    private async Task<T> WithMutationAndCacheInvalidationAsync<T>(
+        Func<CancellationToken, Task<T>> action,
+        Action<PostgresSyncPlan> queueSync,
+        IReadOnlyCollection<string> tableNames,
+        CancellationToken cancellationToken)
+    {
+        var result = await WithMutationAsync(action, queueSync, cancellationToken);
+        InvalidateReadCaches(tableNames.ToArray());
+        return result;
     }
 
     public Task<T> ExecuteAtomicAsync<T>(Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken)
@@ -163,17 +298,35 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
     public Task<GridBranchResponse> GetGridBranchRowsAsync(long scenarioVersionId, long parentProductNodeId, CancellationToken cancellationToken) =>
         GetGridBranchRowsDirectAsync(scenarioVersionId, parentProductNodeId, cancellationToken);
 
-    public Task<ProductNode> AddRowAsync(AddRowRequest request, CancellationToken cancellationToken) =>
-        AddRowDirectAsync(request, cancellationToken);
+    public async Task<ProductNode> AddRowAsync(AddRowRequest request, CancellationToken cancellationToken)
+    {
+        var node = await AddRowDirectAsync(request, cancellationToken);
+        InvalidateReadCaches(ProductNodeMutationTables);
+        return node;
+    }
 
-    public Task<int> DeleteRowAsync(long scenarioVersionId, long productNodeId, CancellationToken cancellationToken) =>
-        DeleteRowDirectAsync(scenarioVersionId, productNodeId, cancellationToken);
+    public async Task<int> DeleteRowAsync(long scenarioVersionId, long productNodeId, CancellationToken cancellationToken)
+    {
+        var deletedCount = await DeleteRowDirectAsync(scenarioVersionId, productNodeId, cancellationToken);
+        InvalidateReadCaches(ProductNodeMutationTables);
+        return deletedCount;
+    }
 
-    public Task<int> DeleteYearAsync(long scenarioVersionId, long yearTimePeriodId, CancellationToken cancellationToken) =>
-        DeleteYearDirectAsync(scenarioVersionId, yearTimePeriodId, cancellationToken);
+    public async Task<int> DeleteYearAsync(long scenarioVersionId, long yearTimePeriodId, CancellationToken cancellationToken)
+    {
+        var deletedCount = await DeleteYearDirectAsync(scenarioVersionId, yearTimePeriodId, cancellationToken);
+        InvalidateReadCaches(TimePeriodMutationTables);
+        return deletedCount;
+    }
 
-    public Task EnsureYearAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken) =>
-        EnsureYearDirectAsync(scenarioVersionId, fiscalYear, cancellationToken);
+    public async Task EnsureYearAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken)
+    {
+        await EnsureYearDirectAsync(scenarioVersionId, fiscalYear, cancellationToken);
+        InvalidateReadCaches(TimePeriodMutationTables);
+    }
+
+    public Task RecordSaveCheckpointAsync(long scenarioVersionId, string userId, string mode, DateTimeOffset savedAt, CancellationToken cancellationToken) =>
+        RecordSaveCheckpointDirectAsync(scenarioVersionId, userId, mode, savedAt, cancellationToken);
 
     public Task<IReadOnlyList<StoreNodeMetadata>> GetStoresAsync(CancellationToken cancellationToken) =>
         GetStoresDirectAsync(cancellationToken);
@@ -182,93 +335,106 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         GetStoreRootProductNodeIdsDirectAsync(cancellationToken);
 
     public Task<StoreNodeMetadata> UpsertStoreProfileAsync(long scenarioVersionId, StoreNodeMetadata storeProfile, CancellationToken cancellationToken) =>
-        WithMutationAsync(
+        WithMutationAndCacheInvalidationAsync(
             ct => _innerRepository.UpsertStoreProfileAsync(scenarioVersionId, storeProfile, ct),
             plan => plan.QueueTableReplace(StoreMutationTables),
+            StoreMutationTables,
             cancellationToken);
 
     public Task DeleteStoreProfileAsync(long scenarioVersionId, long storeId, CancellationToken cancellationToken) =>
-        WithMutationAsync(
+        WithMutationAndCacheInvalidationAsync(
             ct => _innerRepository.DeleteStoreProfileAsync(scenarioVersionId, storeId, ct),
             plan => plan.QueueTableReplace(StoreMutationTables),
+            StoreMutationTables,
             cancellationToken);
 
     public Task InactivateStoreProfileAsync(long storeId, CancellationToken cancellationToken) =>
-        WithMutationAsync(
+        WithMutationAndCacheInvalidationAsync(
             ct => _innerRepository.InactivateStoreProfileAsync(storeId, ct),
             plan => plan.QueueTableReplace("store_metadata"),
+            ["store_metadata"],
             cancellationToken);
 
     public Task<IReadOnlyList<StoreProfileOptionValue>> GetStoreProfileOptionsAsync(CancellationToken cancellationToken) =>
         WithReadAsync(_innerRepository.GetStoreProfileOptionsAsync, cancellationToken);
 
     public Task UpsertStoreProfileOptionAsync(string fieldName, string value, bool isActive, CancellationToken cancellationToken) =>
-        WithMutationAsync(
+        WithMutationAndCacheInvalidationAsync(
             ct => _innerRepository.UpsertStoreProfileOptionAsync(fieldName, value, isActive, ct),
             plan => plan.QueueTableReplace("store_profile_options"),
+            ["store_profile_options"],
             cancellationToken);
 
     public Task DeleteStoreProfileOptionAsync(string fieldName, string value, CancellationToken cancellationToken) =>
-        WithMutationAsync(
+        WithMutationAndCacheInvalidationAsync(
             ct => _innerRepository.DeleteStoreProfileOptionAsync(fieldName, value, ct),
             plan => plan.QueueTableReplace("store_profile_options"),
+            ["store_profile_options"],
             cancellationToken);
 
     public Task<IReadOnlyList<HierarchyDepartmentRecord>> GetHierarchyMappingsAsync(CancellationToken cancellationToken) =>
         WithReadAsync(_innerRepository.GetHierarchyMappingsAsync, cancellationToken);
 
     public Task UpsertHierarchyDepartmentAsync(string departmentLabel, CancellationToken cancellationToken) =>
-        WithMutationAsync(
+        WithMutationAndCacheInvalidationAsync(
             ct => _innerRepository.UpsertHierarchyDepartmentAsync(departmentLabel, ct),
             plan => plan.QueueTableReplace(HierarchyTables),
+            HierarchyTables,
             cancellationToken);
 
     public Task UpsertHierarchyClassAsync(string departmentLabel, string classLabel, CancellationToken cancellationToken) =>
-        WithMutationAsync(
+        WithMutationAndCacheInvalidationAsync(
             ct => _innerRepository.UpsertHierarchyClassAsync(departmentLabel, classLabel, ct),
             plan => plan.QueueTableReplace(HierarchyTables),
+            HierarchyTables,
             cancellationToken);
 
     public Task UpsertHierarchySubclassAsync(string departmentLabel, string classLabel, string subclassLabel, CancellationToken cancellationToken) =>
-        WithMutationAsync(
+        WithMutationAndCacheInvalidationAsync(
             ct => _innerRepository.UpsertHierarchySubclassAsync(departmentLabel, classLabel, subclassLabel, ct),
             plan => plan.QueueTableReplace(HierarchyTables),
+            HierarchyTables,
             cancellationToken);
 
     public Task<(IReadOnlyList<ProductProfileMetadata> Profiles, int TotalCount)> GetProductProfilesAsync(string? searchTerm, int pageNumber, int pageSize, CancellationToken cancellationToken) =>
         WithReadAsync(ct => _innerRepository.GetProductProfilesAsync(searchTerm, pageNumber, pageSize, ct), cancellationToken);
 
     public Task<ProductProfileMetadata> UpsertProductProfileAsync(ProductProfileMetadata profile, CancellationToken cancellationToken) =>
-        WithMutationAsync(
+        WithMutationAndCacheInvalidationAsync(
             ct => _innerRepository.UpsertProductProfileAsync(profile, ct),
             plan => plan.QueueTableReplace(ProductMutationTables),
+            ProductMutationTables,
             cancellationToken);
 
     public Task DeleteProductProfileAsync(string skuVariant, CancellationToken cancellationToken) =>
-        WithMutationAsync(
+        WithMutationAndCacheInvalidationAsync(
             ct => _innerRepository.DeleteProductProfileAsync(skuVariant, ct),
             plan => plan.QueueTableReplace(ProductMutationTables),
+            ProductMutationTables,
             cancellationToken);
 
     public Task InactivateProductProfileAsync(string skuVariant, CancellationToken cancellationToken) =>
-        WithMutationAsync(
+        WithMutationAndCacheInvalidationAsync(
             ct => _innerRepository.InactivateProductProfileAsync(skuVariant, ct),
             plan => plan.QueueTableReplace(ProductMutationTables),
+            ProductMutationTables,
             cancellationToken);
 
     public Task<IReadOnlyList<ProductProfileOptionValue>> GetProductProfileOptionsAsync(CancellationToken cancellationToken) =>
         WithReadAsync(_innerRepository.GetProductProfileOptionsAsync, cancellationToken);
 
     public Task UpsertProductProfileOptionAsync(string fieldName, string value, bool isActive, CancellationToken cancellationToken) =>
-        WithMutationAsync(
+        WithMutationAndCacheInvalidationAsync(
             ct => _innerRepository.UpsertProductProfileOptionAsync(fieldName, value, isActive, ct),
             plan => plan.QueueTableReplace("product_profile_options"),
+            ["product_profile_options"],
             cancellationToken);
 
     public Task DeleteProductProfileOptionAsync(string fieldName, string value, CancellationToken cancellationToken) =>
-        WithMutationAsync(
+        WithMutationAndCacheInvalidationAsync(
             ct => _innerRepository.DeleteProductProfileOptionAsync(fieldName, value, ct),
             plan => plan.QueueTableReplace("product_profile_options"),
+            ["product_profile_options"],
             cancellationToken);
 
     public Task<IReadOnlyList<ProductHierarchyCatalogRecord>> GetProductHierarchyCatalogAsync(CancellationToken cancellationToken) =>
@@ -278,21 +444,24 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         WithReadAsync(_innerRepository.GetProductSubclassCatalogAsync, cancellationToken);
 
     public Task UpsertProductHierarchyCatalogAsync(ProductHierarchyCatalogRecord record, CancellationToken cancellationToken) =>
-        WithMutationAsync(
+        WithMutationAndCacheInvalidationAsync(
             ct => _innerRepository.UpsertProductHierarchyCatalogAsync(record, ct),
             plan => plan.QueueTableReplace(ProductMutationTables),
+            ProductMutationTables,
             cancellationToken);
 
     public Task DeleteProductHierarchyCatalogAsync(string dptNo, string clssNo, CancellationToken cancellationToken) =>
-        WithMutationAsync(
+        WithMutationAndCacheInvalidationAsync(
             ct => _innerRepository.DeleteProductHierarchyCatalogAsync(dptNo, clssNo, ct),
             plan => plan.QueueTableReplace(ProductMutationTables),
+            ProductMutationTables,
             cancellationToken);
 
     public Task ReplaceProductMasterDataAsync(IReadOnlyList<ProductHierarchyCatalogRecord> hierarchyRows, IReadOnlyList<ProductProfileMetadata> profiles, CancellationToken cancellationToken) =>
-        WithMutationAsync(
+        WithMutationAndCacheInvalidationAsync(
             ct => _innerRepository.ReplaceProductMasterDataAsync(hierarchyRows, profiles, ct),
             plan => plan.QueueTableReplace(ProductMutationTables),
+            ProductMutationTables,
             cancellationToken);
 
     public Task<(IReadOnlyList<InventoryProfileRecord> Profiles, int TotalCount)> GetInventoryProfilesAsync(string? searchTerm, int pageNumber, int pageSize, CancellationToken cancellationToken) =>
@@ -356,9 +525,10 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         InactivateVendorSupplyProfileDirectAsync(vendorSupplyProfileId, cancellationToken);
 
     public Task RebuildPlanningFromMasterDataAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken) =>
-        WithMutationAsync(
+        WithMutationAndCacheInvalidationAsync(
             ct => _innerRepository.RebuildPlanningFromMasterDataAsync(scenarioVersionId, fiscalYear, ct),
             plan => plan.QueueFullSnapshot(),
+            ProductMutationTables.Concat(TimePeriodMutationTables).Concat(StoreMutationTables).Concat(HierarchyTables).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             cancellationToken);
 
     public Task<ProductNode?> FindProductNodeByPathAsync(string[] path, CancellationToken cancellationToken) =>
@@ -367,9 +537,10 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             : FindProductNodeByPathDirectAsync(path, cancellationToken);
 
     public Task ResetAsync(CancellationToken cancellationToken) =>
-        WithMutationAsync(
+        WithMutationAndCacheInvalidationAsync(
             ct => _innerRepository.ResetAsync(ct),
             plan => plan.QueueFullSnapshot(),
+            ProductMutationTables.Concat(TimePeriodMutationTables).Concat(StoreMutationTables).Concat(HierarchyTables).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             cancellationToken);
 
     public async Task ApplyMigrationsAsync(string migrationsDirectory, CancellationToken cancellationToken)
@@ -613,6 +784,22 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         await transaction.CommitAsync(cancellationToken);
         _hydrated = false;
         _localDataVersion = null;
+    }
+
+    private async Task ExecuteDirectNonVersionedMutationAsync(Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task> action, CancellationToken cancellationToken)
+    {
+        if (_atomicDepth.Value > 0)
+        {
+            var current = await GetOrCreateDirectAtomicContextAsync(cancellationToken);
+            await action(current.Connection, current.Transaction, cancellationToken);
+            return;
+        }
+
+        await EnsureDatabaseReadyAsync(cancellationToken);
+        await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await action(connection, transaction, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private async Task<T> ExecuteDirectMutationAsync<T>(Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task<T>> action, CancellationToken cancellationToken)
@@ -1108,8 +1295,144 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             .ThenBy(cell => cell.Coordinate.ProductNodeId)
             .ThenBy(cell => cell.Coordinate.TimePeriodId)
             .ToList();
+        var stageTableName = $"planning_cells_stage_{Guid.NewGuid():N}";
+        await using (var createStageCommand = new NpgsqlCommand(
+            $"""
+            create temp table {stageTableName} (
+                scenario_version_id bigint not null,
+                measure_id bigint not null,
+                store_id bigint not null,
+                product_node_id bigint not null,
+                time_period_id bigint not null,
+                input_value numeric null,
+                override_value numeric null,
+                is_system_generated_override integer not null,
+                derived_value numeric not null,
+                effective_value numeric not null,
+                growth_factor numeric not null,
+                is_locked integer not null,
+                lock_reason text null,
+                locked_by text null,
+                row_version bigint not null,
+                cell_kind text not null
+            ) on commit drop;
+            """,
+            postgres,
+            transaction))
+        {
+            createStageCommand.CommandTimeout = 300;
+            await createStageCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
 
-        const string sql = """
+        await using (var importer = await postgres.BeginBinaryImportAsync(
+                         $"""
+                          copy {stageTableName} (
+                              scenario_version_id,
+                              measure_id,
+                              store_id,
+                              product_node_id,
+                              time_period_id,
+                              input_value,
+                              override_value,
+                              is_system_generated_override,
+                              derived_value,
+                              effective_value,
+                              growth_factor,
+                              is_locked,
+                              lock_reason,
+                              locked_by,
+                              row_version,
+                              cell_kind)
+                          from stdin (format binary)
+                          """,
+                         cancellationToken))
+        {
+            foreach (var cell in orderedCells)
+            {
+                await importer.StartRowAsync(cancellationToken);
+                await importer.WriteAsync(cell.Coordinate.ScenarioVersionId, NpgsqlDbType.Bigint, cancellationToken);
+                await importer.WriteAsync(cell.Coordinate.MeasureId, NpgsqlDbType.Bigint, cancellationToken);
+                await importer.WriteAsync(cell.Coordinate.StoreId, NpgsqlDbType.Bigint, cancellationToken);
+                await importer.WriteAsync(cell.Coordinate.ProductNodeId, NpgsqlDbType.Bigint, cancellationToken);
+                await importer.WriteAsync(cell.Coordinate.TimePeriodId, NpgsqlDbType.Bigint, cancellationToken);
+                if (cell.InputValue is { } inputValue)
+                {
+                    await importer.WriteAsync(inputValue, NpgsqlDbType.Numeric, cancellationToken);
+                }
+                else
+                {
+                    await importer.WriteNullAsync(cancellationToken);
+                }
+
+                if (cell.OverrideValue is { } overrideValue)
+                {
+                    await importer.WriteAsync(overrideValue, NpgsqlDbType.Numeric, cancellationToken);
+                }
+                else
+                {
+                    await importer.WriteNullAsync(cancellationToken);
+                }
+
+                await importer.WriteAsync(cell.IsSystemGeneratedOverride ? 1 : 0, NpgsqlDbType.Integer, cancellationToken);
+                await importer.WriteAsync(cell.DerivedValue, NpgsqlDbType.Numeric, cancellationToken);
+                await importer.WriteAsync(cell.EffectiveValue, NpgsqlDbType.Numeric, cancellationToken);
+                await importer.WriteAsync(cell.GrowthFactor, NpgsqlDbType.Numeric, cancellationToken);
+                await importer.WriteAsync(cell.IsLocked ? 1 : 0, NpgsqlDbType.Integer, cancellationToken);
+                if (cell.LockReason is { } lockReason)
+                {
+                    await importer.WriteAsync(lockReason, NpgsqlDbType.Text, cancellationToken);
+                }
+                else
+                {
+                    await importer.WriteNullAsync(cancellationToken);
+                }
+
+                if (cell.LockedBy is { } lockedBy)
+                {
+                    await importer.WriteAsync(lockedBy, NpgsqlDbType.Text, cancellationToken);
+                }
+                else
+                {
+                    await importer.WriteNullAsync(cancellationToken);
+                }
+
+                await importer.WriteAsync(cell.RowVersion, NpgsqlDbType.Bigint, cancellationToken);
+                await importer.WriteAsync(cell.CellKind, NpgsqlDbType.Text, cancellationToken);
+            }
+
+            await importer.CompleteAsync(cancellationToken);
+        }
+
+        await using (var updateCommand = new NpgsqlCommand(
+            $"""
+            update planning_cells as target
+            set input_value = source.input_value,
+                override_value = source.override_value,
+                is_system_generated_override = source.is_system_generated_override,
+                derived_value = source.derived_value,
+                effective_value = source.effective_value,
+                growth_factor = source.growth_factor,
+                is_locked = source.is_locked,
+                lock_reason = source.lock_reason,
+                locked_by = source.locked_by,
+                row_version = source.row_version,
+                cell_kind = source.cell_kind
+            from {stageTableName} as source
+            where target.scenario_version_id = source.scenario_version_id
+              and target.measure_id = source.measure_id
+              and target.store_id = source.store_id
+              and target.product_node_id = source.product_node_id
+              and target.time_period_id = source.time_period_id;
+            """,
+            postgres,
+            transaction))
+        {
+            updateCommand.CommandTimeout = 300;
+            await updateCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var insertCommand = new NpgsqlCommand(
+            $"""
             insert into planning_cells (
                 scenario_version_id,
                 measure_id,
@@ -1128,94 +1451,36 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
                 row_version,
                 cell_kind)
             select
-                input_rows.scenario_version_id,
-                input_rows.measure_id,
-                input_rows.store_id,
-                input_rows.product_node_id,
-                input_rows.time_period_id,
-                input_rows.input_value,
-                input_rows.override_value,
-                input_rows.is_system_generated_override,
-                input_rows.derived_value,
-                input_rows.effective_value,
-                input_rows.growth_factor,
-                input_rows.is_locked,
-                input_rows.lock_reason,
-                input_rows.locked_by,
-                input_rows.row_version,
-                input_rows.cell_kind
-            from unnest(
-                @scenarioVersionIds,
-                @measureIds,
-                @storeIds,
-                @productNodeIds,
-                @timePeriodIds,
-                @inputValues,
-                @overrideValues,
-                @isSystemGeneratedOverrides,
-                @derivedValues,
-                @effectiveValues,
-                @growthFactors,
-                @isLockedValues,
-                @lockReasons,
-                @lockedByValues,
-                @rowVersions,
-                @cellKinds)
-                as input_rows(
-                    scenario_version_id,
-                    measure_id,
-                    store_id,
-                    product_node_id,
-                    time_period_id,
-                    input_value,
-                    override_value,
-                    is_system_generated_override,
-                    derived_value,
-                    effective_value,
-                    growth_factor,
-                    is_locked,
-                    lock_reason,
-                    locked_by,
-                    row_version,
-                    cell_kind)
-            on conflict (scenario_version_id, measure_id, store_id, product_node_id, time_period_id)
-            do update set
-                input_value = excluded.input_value,
-                override_value = excluded.override_value,
-                is_system_generated_override = excluded.is_system_generated_override,
-                derived_value = excluded.derived_value,
-                effective_value = excluded.effective_value,
-                growth_factor = excluded.growth_factor,
-                is_locked = excluded.is_locked,
-                lock_reason = excluded.lock_reason,
-                locked_by = excluded.locked_by,
-                row_version = excluded.row_version,
-                cell_kind = excluded.cell_kind;
-            """;
-
-        foreach (var cellChunk in orderedCells.Chunk(PlanningCellWriteChunkSize))
+                source.scenario_version_id,
+                source.measure_id,
+                source.store_id,
+                source.product_node_id,
+                source.time_period_id,
+                source.input_value,
+                source.override_value,
+                source.is_system_generated_override,
+                source.derived_value,
+                source.effective_value,
+                source.growth_factor,
+                source.is_locked,
+                source.lock_reason,
+                source.locked_by,
+                source.row_version,
+                source.cell_kind
+            from {stageTableName} as source
+            left join planning_cells as target
+              on target.scenario_version_id = source.scenario_version_id
+             and target.measure_id = source.measure_id
+             and target.store_id = source.store_id
+             and target.product_node_id = source.product_node_id
+             and target.time_period_id = source.time_period_id
+            where target.scenario_version_id is null;
+            """,
+            postgres,
+            transaction))
         {
-            await using var command = new NpgsqlCommand(sql, postgres, transaction)
-            {
-                CommandTimeout = 300
-            };
-            command.Parameters.Add(CreateArrayParameter("@scenarioVersionIds", NpgsqlDbType.Bigint, cellChunk.Select(cell => cell.Coordinate.ScenarioVersionId).ToArray()));
-            command.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, cellChunk.Select(cell => cell.Coordinate.MeasureId).ToArray()));
-            command.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, cellChunk.Select(cell => cell.Coordinate.StoreId).ToArray()));
-            command.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, cellChunk.Select(cell => cell.Coordinate.ProductNodeId).ToArray()));
-            command.Parameters.Add(CreateArrayParameter("@timePeriodIds", NpgsqlDbType.Bigint, cellChunk.Select(cell => cell.Coordinate.TimePeriodId).ToArray()));
-            command.Parameters.Add(CreateArrayParameter("@inputValues", NpgsqlDbType.Numeric, cellChunk.Select(cell => cell.InputValue).ToArray()));
-            command.Parameters.Add(CreateArrayParameter("@overrideValues", NpgsqlDbType.Numeric, cellChunk.Select(cell => cell.OverrideValue).ToArray()));
-            command.Parameters.Add(CreateArrayParameter("@isSystemGeneratedOverrides", NpgsqlDbType.Integer, cellChunk.Select(cell => cell.IsSystemGeneratedOverride ? 1 : 0).ToArray()));
-            command.Parameters.Add(CreateArrayParameter("@derivedValues", NpgsqlDbType.Numeric, cellChunk.Select(cell => cell.DerivedValue).ToArray()));
-            command.Parameters.Add(CreateArrayParameter("@effectiveValues", NpgsqlDbType.Numeric, cellChunk.Select(cell => cell.EffectiveValue).ToArray()));
-            command.Parameters.Add(CreateArrayParameter("@growthFactors", NpgsqlDbType.Numeric, cellChunk.Select(cell => cell.GrowthFactor).ToArray()));
-            command.Parameters.Add(CreateArrayParameter("@isLockedValues", NpgsqlDbType.Integer, cellChunk.Select(cell => cell.IsLocked ? 1 : 0).ToArray()));
-            command.Parameters.Add(CreateArrayParameter("@lockReasons", NpgsqlDbType.Text, cellChunk.Select(cell => cell.LockReason).ToArray()));
-            command.Parameters.Add(CreateArrayParameter("@lockedByValues", NpgsqlDbType.Text, cellChunk.Select(cell => cell.LockedBy).ToArray()));
-            command.Parameters.Add(CreateArrayParameter("@rowVersions", NpgsqlDbType.Bigint, cellChunk.Select(cell => cell.RowVersion).ToArray()));
-            command.Parameters.Add(CreateArrayParameter("@cellKinds", NpgsqlDbType.Text, cellChunk.Select(cell => cell.CellKind).ToArray()));
-            await command.ExecuteNonQueryAsync(cancellationToken);
+            insertCommand.CommandTimeout = 300;
+            await insertCommand.ExecuteNonQueryAsync(cancellationToken);
         }
     }
 

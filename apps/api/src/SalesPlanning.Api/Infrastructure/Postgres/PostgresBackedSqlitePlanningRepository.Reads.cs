@@ -11,27 +11,77 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
 {
     private async Task<PlanningMetadataSnapshot> GetMetadataDirectAsync(CancellationToken cancellationToken)
     {
-        return await ExecuteDirectReadAsync(async (connection, transaction, ct) =>
+        return await ExecuteDirectReadAsync(
+            (connection, transaction, ct) => GetMetadataCachedDirectAsync(connection, transaction, ct),
+            cancellationToken);
+    }
+
+    private async Task<PlanningMetadataSnapshot> GetMetadataCachedDirectAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        CancellationToken cancellationToken)
+    {
+        var cached = GetCachedMetadataSnapshot();
+        if (cached is not null)
         {
-            var productNodes = await LoadProductNodesDirectAsync(connection, transaction, ct);
-            var timePeriods = await LoadTimePeriodsDirectAsync(connection, transaction, ct);
-            var stores = await LoadStoreMetadataDirectAsync(connection, transaction, ct);
-            return new PlanningMetadataSnapshot(productNodes, timePeriods, stores);
-        }, cancellationToken);
+            return cached;
+        }
+
+        var productNodes = await LoadProductNodesDirectAsync(connection, transaction, cancellationToken);
+        var timePeriods = await LoadTimePeriodsDirectAsync(connection, transaction, cancellationToken);
+        var stores = await LoadStoreMetadataDirectAsync(connection, transaction, cancellationToken);
+        var snapshot = new PlanningMetadataSnapshot(productNodes, timePeriods, stores);
+        SetCachedMetadataSnapshot(snapshot);
+        return snapshot;
     }
 
     private async Task<IReadOnlyList<StoreNodeMetadata>> GetStoresDirectAsync(CancellationToken cancellationToken)
     {
+        var cached = GetCachedStoreList();
+        if (cached is not null)
+        {
+            return cached;
+        }
+
         return await ExecuteDirectReadAsync(async (connection, transaction, ct) =>
         {
-            return (await LoadStoreMetadataDirectAsync(connection, transaction, ct)).Values
+            var stores = (await LoadStoreMetadataDirectAsync(connection, transaction, ct)).Values
                 .OrderBy(store => store.StoreLabel, StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            lock (_readCacheGate)
+            {
+                _storeListCache = stores;
+            }
+
+            return stores;
         }, cancellationToken);
     }
 
     private async Task<IReadOnlyDictionary<long, long>> GetStoreRootProductNodeIdsDirectAsync(CancellationToken cancellationToken)
     {
+        var cached = GetCachedStoreRoots();
+        if (cached is not null)
+        {
+            return cached;
+        }
+
+        var metadata = GetCachedMetadataSnapshot();
+        if (metadata is not null)
+        {
+            var roots = metadata.ProductNodes.Values
+                .Where(node => node.Level == 0)
+                .GroupBy(node => node.StoreId)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.OrderBy(node => node.ProductNodeId).First().ProductNodeId);
+            lock (_readCacheGate)
+            {
+                _storeRootProductNodeIdsCache = roots;
+            }
+
+            return roots;
+        }
+
         return await ExecuteDirectReadAsync(async (connection, transaction, ct) =>
         {
             var roots = new Dictionary<long, long>();
@@ -50,6 +100,11 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             while (await reader.ReadAsync(ct))
             {
                 roots[reader.GetInt64(0)] = reader.GetInt64(1);
+            }
+
+            lock (_readCacheGate)
+            {
+                _storeRootProductNodeIdsCache = roots;
             }
 
             return roots;
@@ -229,10 +284,11 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
     {
         return await ExecuteDirectReadAsync(async (connection, transaction, ct) =>
         {
-            var productNodes = await LoadProductNodesDirectAsync(connection, transaction, ct);
-            var timePeriods = await LoadTimePeriodsDirectAsync(connection, transaction, ct);
-            var stores = await LoadStoreMetadataDirectAsync(connection, transaction, ct);
-            var hierarchyMappings = await LoadHierarchyMappingsDirectAsync(connection, transaction, ct);
+            var metadata = await GetMetadataCachedDirectAsync(connection, transaction, ct);
+            var productNodes = metadata.ProductNodes;
+            var timePeriods = metadata.TimePeriods;
+            var stores = metadata.Stores;
+            var hierarchyMappings = await GetHierarchyMappingsCachedDirectAsync(connection, transaction, ct);
 
             var expandedNodeSet = expandedProductNodeIds?.ToHashSet() ?? [];
             var visibleNodes = productNodes.Values
@@ -271,7 +327,8 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
     {
         return await ExecuteDirectReadAsync(async (connection, transaction, ct) =>
         {
-            var productNodes = await LoadProductNodesDirectAsync(connection, transaction, ct);
+            var metadata = await GetMetadataCachedDirectAsync(connection, transaction, ct);
+            var productNodes = metadata.ProductNodes;
             if (!productNodes.TryGetValue(parentProductNodeId, out var parentNode))
             {
                 throw new InvalidOperationException($"Branch {parentProductNodeId} was not found.");
@@ -288,9 +345,9 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
                 return new GridBranchResponse(scenarioVersionId, parentProductNodeId, []);
             }
 
-            var timePeriods = await LoadTimePeriodsDirectAsync(connection, transaction, ct);
-            var stores = await LoadStoreMetadataDirectAsync(connection, transaction, ct);
-            var hierarchyMappings = await LoadHierarchyMappingsDirectAsync(connection, transaction, ct);
+            var timePeriods = metadata.TimePeriods;
+            var stores = metadata.Stores;
+            var hierarchyMappings = await GetHierarchyMappingsCachedDirectAsync(connection, transaction, ct);
 
             var relevantNodeIds = children
                 .Select(node => node.ProductNodeId)
@@ -312,13 +369,26 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
 
     private async Task<ProductNode?> FindProductNodeByPathDirectAsync(string[] path, CancellationToken cancellationToken)
     {
-        return await ExecuteDirectReadAsync(async (connection, transaction, ct) =>
+        var metadata = await GetMetadataDirectAsync(cancellationToken);
+        return metadata.ProductNodes.Values.FirstOrDefault(candidate =>
+            candidate.Path.Length == path.Length &&
+            candidate.Path.Zip(path, (left, right) => string.Equals(left, right, StringComparison.OrdinalIgnoreCase)).All(match => match));
+    }
+
+    private async Task<IReadOnlyList<HierarchyDepartmentRecord>> GetHierarchyMappingsCachedDirectAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        CancellationToken cancellationToken)
+    {
+        var cached = GetCachedHierarchyMappings();
+        if (cached is not null)
         {
-            var productNodes = await LoadProductNodesDirectAsync(connection, transaction, ct);
-            return productNodes.Values.FirstOrDefault(candidate =>
-                candidate.Path.Length == path.Length &&
-                candidate.Path.Zip(path, (left, right) => string.Equals(left, right, StringComparison.OrdinalIgnoreCase)).All(match => match));
-        }, cancellationToken);
+            return cached;
+        }
+
+        var mappings = await LoadHierarchyMappingsDirectAsync(connection, transaction, cancellationToken);
+        SetCachedHierarchyMappings(mappings);
+        return mappings;
     }
 
     private static async Task<Dictionary<long, ProductNode>> LoadProductNodesDirectAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction, CancellationToken cancellationToken)

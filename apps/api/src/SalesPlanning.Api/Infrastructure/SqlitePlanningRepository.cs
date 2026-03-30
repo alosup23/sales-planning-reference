@@ -1401,6 +1401,9 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
         }
     }
 
+    public Task RecordSaveCheckpointAsync(long scenarioVersionId, string userId, string mode, DateTimeOffset savedAt, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
+
     public async Task ResetAsync(CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);

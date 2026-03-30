@@ -128,6 +128,9 @@ public sealed class S3BackedSqlitePlanningRepository : IPlanningRepository
     public Task EnsureYearAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken) =>
         WithMutationAsync((ct) => _innerRepository.EnsureYearAsync(scenarioVersionId, fiscalYear, ct), cancellationToken);
 
+    public Task RecordSaveCheckpointAsync(long scenarioVersionId, string userId, string mode, DateTimeOffset savedAt, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
+
     public Task<IReadOnlyList<StoreNodeMetadata>> GetStoresAsync(CancellationToken cancellationToken) =>
         WithReadAsync(_innerRepository.GetStoresAsync, cancellationToken);
 
