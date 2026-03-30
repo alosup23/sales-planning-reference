@@ -332,8 +332,11 @@ Resources:
       EnableExecuteCommand: false
       HealthCheckGracePeriodSeconds: 60
       DeploymentConfiguration:
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
         MaximumPercent: 200
-        MinimumHealthyPercent: 0
+        MinimumHealthyPercent: 100
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED
