@@ -19,28 +19,31 @@ public sealed partial class PlanningService
         return new PlanningDepartmentScopeResponse(departments);
     }
 
-    public async Task<GridSliceResponse> GetGridViewRootAsync(PlanningGridViewRequest request, CancellationToken cancellationToken)
+    public async Task<GridSliceResponse> GetGridViewRootAsync(PlanningGridViewRequest request, string userId, CancellationToken cancellationToken)
     {
         if (string.Equals(request.View, "department", StringComparison.OrdinalIgnoreCase))
         {
-            return await BuildDepartmentRootSliceAsync(request, cancellationToken);
+            return await BuildDepartmentRootSliceAsync(request, userId, cancellationToken);
         }
 
-        return await BuildStoreRootSliceAsync(request, cancellationToken);
+        return await BuildStoreRootSliceAsync(request, userId, cancellationToken);
     }
 
-    public async Task<GridViewBlockResponse> GetGridViewChildrenAsync(PlanningGridViewRequest request, string parentViewRowId, CancellationToken cancellationToken)
+    public async Task<GridViewBlockResponse> GetGridViewChildrenAsync(PlanningGridViewRequest request, string parentViewRowId, string userId, CancellationToken cancellationToken)
     {
         var rows = string.Equals(request.View, "department", StringComparison.OrdinalIgnoreCase)
-            ? await BuildDepartmentChildrenAsync(request, parentViewRowId, cancellationToken)
-            : await BuildStoreChildrenAsync(request, parentViewRowId, cancellationToken);
+            ? await BuildDepartmentChildrenAsync(request, parentViewRowId, userId, cancellationToken)
+            : await BuildStoreChildrenAsync(request, parentViewRowId, userId, cancellationToken);
 
         return new GridViewBlockResponse(request.ScenarioVersionId, parentViewRowId, rows);
     }
 
-    private async Task<GridSliceResponse> BuildStoreRootSliceAsync(PlanningGridViewRequest request, CancellationToken cancellationToken)
+    private async Task<GridSliceResponse> BuildStoreRootSliceAsync(PlanningGridViewRequest request, string userId, CancellationToken cancellationToken)
     {
-        var canonical = await _repository.GetGridSliceAsync(request.ScenarioVersionId, request.SelectedStoreId, null, null, false, cancellationToken);
+        var canonical = await ApplyDraftOverlayAsync(
+            await _repository.GetGridSliceAsync(request.ScenarioVersionId, request.SelectedStoreId, null, null, false, cancellationToken),
+            userId,
+            cancellationToken);
         var storeRows = canonical.Rows
             .Select(row => DecorateCanonicalRow(row, "store", row.Path, row.Label, row.Level + 1, row.NodeKind))
             .Where(row => string.Equals(row.StructureRole, "store", StringComparison.OrdinalIgnoreCase))
@@ -53,11 +56,14 @@ public sealed partial class PlanningService
         return canonical with { Rows = rootRows };
     }
 
-    private async Task<IReadOnlyList<GridRowDto>> BuildStoreChildrenAsync(PlanningGridViewRequest request, string parentViewRowId, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<GridRowDto>> BuildStoreChildrenAsync(PlanningGridViewRequest request, string parentViewRowId, string userId, CancellationToken cancellationToken)
     {
         if (string.Equals(parentViewRowId, StoreRootViewRowId, StringComparison.OrdinalIgnoreCase))
         {
-            var canonical = await _repository.GetGridSliceAsync(request.ScenarioVersionId, request.SelectedStoreId, null, null, false, cancellationToken);
+            var canonical = await ApplyDraftOverlayAsync(
+                await _repository.GetGridSliceAsync(request.ScenarioVersionId, request.SelectedStoreId, null, null, false, cancellationToken),
+                userId,
+                cancellationToken);
             return canonical.Rows
                 .Select(row => DecorateCanonicalRow(row, "store", ["Store Total", .. row.Path], row.Label, row.Level + 1, row.NodeKind))
                 .Where(row => string.Equals(row.StructureRole, "store", StringComparison.OrdinalIgnoreCase))
@@ -65,7 +71,10 @@ public sealed partial class PlanningService
         }
 
         var parsed = ParseCanonicalNodeViewRowId(parentViewRowId);
-        var branch = await _repository.GetGridBranchRowsAsync(request.ScenarioVersionId, parsed.ProductNodeId, cancellationToken);
+        var branch = await ApplyDraftOverlayAsync(
+            await _repository.GetGridBranchRowsAsync(request.ScenarioVersionId, parsed.ProductNodeId, cancellationToken),
+            userId,
+            cancellationToken);
         var parentPath = ParsePathFromViewRowId(parentViewRowId);
         return branch.Rows
             .Select(row => DecorateCanonicalRow(
@@ -78,9 +87,9 @@ public sealed partial class PlanningService
             .ToList();
     }
 
-    private async Task<GridSliceResponse> BuildDepartmentRootSliceAsync(PlanningGridViewRequest request, CancellationToken cancellationToken)
+    private async Task<GridSliceResponse> BuildDepartmentRootSliceAsync(PlanningGridViewRequest request, string userId, CancellationToken cancellationToken)
     {
-        var canonical = await LoadDepartmentBootstrapSliceAsync(request.ScenarioVersionId, request.SelectedDepartmentLabel, cancellationToken);
+        var canonical = await LoadDepartmentBootstrapSliceAsync(request.ScenarioVersionId, request.SelectedDepartmentLabel, userId, cancellationToken);
         var departmentRows = BuildDepartmentAggregateRows(canonical, request.SelectedDepartmentLabel);
         var rootRows = departmentRows.Count == 0
             ? Array.Empty<GridRowDto>()
@@ -88,11 +97,11 @@ public sealed partial class PlanningService
         return canonical with { Rows = rootRows };
     }
 
-    private async Task<IReadOnlyList<GridRowDto>> BuildDepartmentChildrenAsync(PlanningGridViewRequest request, string parentViewRowId, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<GridRowDto>> BuildDepartmentChildrenAsync(PlanningGridViewRequest request, string parentViewRowId, string userId, CancellationToken cancellationToken)
     {
         if (string.Equals(parentViewRowId, DepartmentRootViewRowId, StringComparison.OrdinalIgnoreCase))
         {
-            var canonical = await LoadDepartmentBootstrapSliceAsync(request.ScenarioVersionId, request.SelectedDepartmentLabel, cancellationToken);
+            var canonical = await LoadDepartmentBootstrapSliceAsync(request.ScenarioVersionId, request.SelectedDepartmentLabel, userId, cancellationToken);
             return BuildDepartmentAggregateRows(canonical, request.SelectedDepartmentLabel);
         }
 
@@ -100,8 +109,8 @@ public sealed partial class PlanningService
         {
             var departmentLabel = Uri.UnescapeDataString(parentViewRowId["view:department:department:".Length..]);
             return string.Equals(request.DepartmentLayout, "department-class-store", StringComparison.OrdinalIgnoreCase)
-                ? await BuildDepartmentClassChildrenAsync(request.ScenarioVersionId, departmentLabel, request.SelectedDepartmentLabel, cancellationToken)
-                : await BuildDepartmentStoreChildrenAsync(request.ScenarioVersionId, departmentLabel, request.SelectedDepartmentLabel, cancellationToken);
+                ? await BuildDepartmentClassChildrenAsync(request.ScenarioVersionId, departmentLabel, request.SelectedDepartmentLabel, userId, cancellationToken)
+                : await BuildDepartmentStoreChildrenAsync(request.ScenarioVersionId, departmentLabel, request.SelectedDepartmentLabel, userId, cancellationToken);
         }
 
         if (parentViewRowId.StartsWith("view:department:class:", StringComparison.OrdinalIgnoreCase))
@@ -109,11 +118,14 @@ public sealed partial class PlanningService
             var payload = parentViewRowId["view:department:class:".Length..].Split(':', 2);
             var departmentLabel = Uri.UnescapeDataString(payload[0]);
             var classLabel = Uri.UnescapeDataString(payload[1]);
-            return await BuildDepartmentClassStoreChildrenAsync(request.ScenarioVersionId, departmentLabel, classLabel, request.SelectedDepartmentLabel, cancellationToken);
+            return await BuildDepartmentClassStoreChildrenAsync(request.ScenarioVersionId, departmentLabel, classLabel, request.SelectedDepartmentLabel, userId, cancellationToken);
         }
 
         var parsed = ParseCanonicalNodeViewRowId(parentViewRowId);
-        var branch = await _repository.GetGridBranchRowsAsync(request.ScenarioVersionId, parsed.ProductNodeId, cancellationToken);
+        var branch = await ApplyDraftOverlayAsync(
+            await _repository.GetGridBranchRowsAsync(request.ScenarioVersionId, parsed.ProductNodeId, cancellationToken),
+            userId,
+            cancellationToken);
         var parentPath = ParsePathFromViewRowId(parentViewRowId);
         return branch.Rows
             .Select(row => DecorateCanonicalRow(
@@ -126,10 +138,13 @@ public sealed partial class PlanningService
             .ToList();
     }
 
-    private async Task<GridSliceResponse> LoadDepartmentBootstrapSliceAsync(long scenarioVersionId, string? selectedDepartmentLabel, CancellationToken cancellationToken)
+    private async Task<GridSliceResponse> LoadDepartmentBootstrapSliceAsync(long scenarioVersionId, string? selectedDepartmentLabel, string userId, CancellationToken cancellationToken)
     {
         var storeRootIds = (await _repository.GetStoreRootProductNodeIdsAsync(cancellationToken)).Values.ToArray();
-        return await _repository.GetGridSliceAsync(scenarioVersionId, null, selectedDepartmentLabel, storeRootIds, false, cancellationToken);
+        return await ApplyDraftOverlayAsync(
+            await _repository.GetGridSliceAsync(scenarioVersionId, null, selectedDepartmentLabel, storeRootIds, false, cancellationToken),
+            userId,
+            cancellationToken);
     }
 
     private List<GridRowDto> BuildDepartmentAggregateRows(GridSliceResponse canonical, string? selectedDepartmentLabel)
@@ -154,9 +169,9 @@ public sealed partial class PlanningService
             .ToList();
     }
 
-    private async Task<IReadOnlyList<GridRowDto>> BuildDepartmentStoreChildrenAsync(long scenarioVersionId, string departmentLabel, string? selectedDepartmentLabel, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<GridRowDto>> BuildDepartmentStoreChildrenAsync(long scenarioVersionId, string departmentLabel, string? selectedDepartmentLabel, string userId, CancellationToken cancellationToken)
     {
-        var canonical = await LoadDepartmentBootstrapSliceAsync(scenarioVersionId, selectedDepartmentLabel, cancellationToken);
+        var canonical = await LoadDepartmentBootstrapSliceAsync(scenarioVersionId, selectedDepartmentLabel, userId, cancellationToken);
         return canonical.Rows
             .Where(row => string.Equals(row.NodeKind, "department", StringComparison.OrdinalIgnoreCase))
             .Where(row => string.Equals(row.Label, departmentLabel, StringComparison.OrdinalIgnoreCase))
@@ -171,9 +186,9 @@ public sealed partial class PlanningService
             .ToList();
     }
 
-    private async Task<IReadOnlyList<GridRowDto>> BuildDepartmentClassChildrenAsync(long scenarioVersionId, string departmentLabel, string? selectedDepartmentLabel, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<GridRowDto>> BuildDepartmentClassChildrenAsync(long scenarioVersionId, string departmentLabel, string? selectedDepartmentLabel, string userId, CancellationToken cancellationToken)
     {
-        var bootstrap = await LoadDepartmentBootstrapSliceAsync(scenarioVersionId, selectedDepartmentLabel, cancellationToken);
+        var bootstrap = await LoadDepartmentBootstrapSliceAsync(scenarioVersionId, selectedDepartmentLabel, userId, cancellationToken);
         var departmentNodes = bootstrap.Rows
             .Where(row => string.Equals(row.NodeKind, "department", StringComparison.OrdinalIgnoreCase))
             .Where(row => string.Equals(row.Label, departmentLabel, StringComparison.OrdinalIgnoreCase))
@@ -181,7 +196,10 @@ public sealed partial class PlanningService
             .Distinct()
             .ToArray();
 
-        var canonical = await _repository.GetGridSliceAsync(scenarioVersionId, null, departmentLabel, departmentNodes, false, cancellationToken);
+        var canonical = await ApplyDraftOverlayAsync(
+            await _repository.GetGridSliceAsync(scenarioVersionId, null, departmentLabel, departmentNodes, false, cancellationToken),
+            userId,
+            cancellationToken);
         return canonical.Rows
             .Where(row => string.Equals(row.NodeKind, "class", StringComparison.OrdinalIgnoreCase))
             .GroupBy(row => row.Label, StringComparer.OrdinalIgnoreCase)
@@ -198,9 +216,9 @@ public sealed partial class PlanningService
             .ToList();
     }
 
-    private async Task<IReadOnlyList<GridRowDto>> BuildDepartmentClassStoreChildrenAsync(long scenarioVersionId, string departmentLabel, string classLabel, string? selectedDepartmentLabel, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<GridRowDto>> BuildDepartmentClassStoreChildrenAsync(long scenarioVersionId, string departmentLabel, string classLabel, string? selectedDepartmentLabel, string userId, CancellationToken cancellationToken)
     {
-        var bootstrap = await LoadDepartmentBootstrapSliceAsync(scenarioVersionId, selectedDepartmentLabel, cancellationToken);
+        var bootstrap = await LoadDepartmentBootstrapSliceAsync(scenarioVersionId, selectedDepartmentLabel, userId, cancellationToken);
         var departmentNodes = bootstrap.Rows
             .Where(row => string.Equals(row.NodeKind, "department", StringComparison.OrdinalIgnoreCase))
             .Where(row => string.Equals(row.Label, departmentLabel, StringComparison.OrdinalIgnoreCase))
@@ -208,7 +226,10 @@ public sealed partial class PlanningService
             .Distinct()
             .ToArray();
 
-        var canonical = await _repository.GetGridSliceAsync(scenarioVersionId, null, departmentLabel, departmentNodes, false, cancellationToken);
+        var canonical = await ApplyDraftOverlayAsync(
+            await _repository.GetGridSliceAsync(scenarioVersionId, null, departmentLabel, departmentNodes, false, cancellationToken),
+            userId,
+            cancellationToken);
         return canonical.Rows
             .Where(row => string.Equals(row.NodeKind, "class", StringComparison.OrdinalIgnoreCase))
             .Where(row => string.Equals(row.Label, classLabel, StringComparison.OrdinalIgnoreCase))

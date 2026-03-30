@@ -83,7 +83,13 @@ public sealed class S3BackedSqlitePlanningRepository : IPlanningRepository
     public Task<IReadOnlyList<PlanningCell>> GetScenarioCellsAsync(long scenarioVersionId, CancellationToken cancellationToken) =>
         WithReadAsync((ct) => _innerRepository.GetScenarioCellsAsync(scenarioVersionId, ct), cancellationToken);
 
+    public Task<IReadOnlyList<PlanningCell>> GetDraftCellsAsync(long scenarioVersionId, string userId, IEnumerable<PlanningCellCoordinate> coordinates, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<PlanningCell>>([]);
+
     public Task UpsertCellsAsync(IEnumerable<PlanningCell> cells, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.UpsertCellsAsync(cells, ct), cancellationToken);
+
+    public Task UpsertDraftCellsAsync(long scenarioVersionId, string userId, IEnumerable<PlanningCell> cells, CancellationToken cancellationToken) =>
         WithMutationAsync((ct) => _innerRepository.UpsertCellsAsync(cells, ct), cancellationToken);
 
     public Task AppendAuditAsync(PlanningActionAudit audit, CancellationToken cancellationToken) =>
@@ -101,6 +107,12 @@ public sealed class S3BackedSqlitePlanningRepository : IPlanningRepository
     public Task AppendCommandBatchAsync(PlanningCommandBatch batch, CancellationToken cancellationToken) =>
         WithMutationAsync((ct) => _innerRepository.AppendCommandBatchAsync(batch, ct), cancellationToken);
 
+    public Task<long> GetNextDraftCommandBatchIdAsync(CancellationToken cancellationToken) =>
+        WithReadAsync(_innerRepository.GetNextCommandBatchIdAsync, cancellationToken);
+
+    public Task AppendDraftCommandBatchAsync(PlanningCommandBatch batch, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.AppendCommandBatchAsync(batch, ct), cancellationToken);
+
     public Task<PlanningUndoRedoAvailability> GetUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
         WithReadAsync((ct) => _innerRepository.GetUndoRedoAvailabilityAsync(scenarioVersionId, userId, limit, ct), cancellationToken);
 
@@ -108,6 +120,15 @@ public sealed class S3BackedSqlitePlanningRepository : IPlanningRepository
         WithMutationAsync((ct) => _innerRepository.UndoLatestCommandAsync(scenarioVersionId, userId, limit, ct), cancellationToken);
 
     public Task<PlanningCommandBatch?> RedoLatestCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.RedoLatestCommandAsync(scenarioVersionId, userId, limit, ct), cancellationToken);
+
+    public Task<PlanningUndoRedoAvailability> GetDraftUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
+        WithReadAsync((ct) => _innerRepository.GetUndoRedoAvailabilityAsync(scenarioVersionId, userId, limit, ct), cancellationToken);
+
+    public Task<PlanningCommandBatch?> UndoLatestDraftCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
+        WithMutationAsync((ct) => _innerRepository.UndoLatestCommandAsync(scenarioVersionId, userId, limit, ct), cancellationToken);
+
+    public Task<PlanningCommandBatch?> RedoLatestDraftCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
         WithMutationAsync((ct) => _innerRepository.RedoLatestCommandAsync(scenarioVersionId, userId, limit, ct), cancellationToken);
 
     public Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, string? selectedDepartmentLabel, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, CancellationToken cancellationToken) =>
@@ -127,6 +148,9 @@ public sealed class S3BackedSqlitePlanningRepository : IPlanningRepository
 
     public Task EnsureYearAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken) =>
         WithMutationAsync((ct) => _innerRepository.EnsureYearAsync(scenarioVersionId, fiscalYear, ct), cancellationToken);
+
+    public Task CommitDraftAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
 
     public Task RecordSaveCheckpointAsync(long scenarioVersionId, string userId, string mode, DateTimeOffset savedAt, CancellationToken cancellationToken) =>
         Task.CompletedTask;

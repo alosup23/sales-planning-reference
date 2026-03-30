@@ -51,14 +51,16 @@ public sealed partial class PlanningService : IPlanningService
         _asyncJobManager = asyncJobManager;
     }
 
-    public Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, string? selectedDepartmentLabel, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, CancellationToken cancellationToken)
+    public async Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, string? selectedDepartmentLabel, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, string userId, CancellationToken cancellationToken)
     {
-        return _repository.GetGridSliceAsync(scenarioVersionId, selectedStoreId, selectedDepartmentLabel, expandedProductNodeIds, expandAllBranches, cancellationToken);
+        var slice = await _repository.GetGridSliceAsync(scenarioVersionId, selectedStoreId, selectedDepartmentLabel, expandedProductNodeIds, expandAllBranches, cancellationToken);
+        return await ApplyDraftOverlayAsync(slice, userId, cancellationToken);
     }
 
-    public Task<GridBranchResponse> GetGridBranchRowsAsync(long scenarioVersionId, long parentProductNodeId, CancellationToken cancellationToken)
+    public async Task<GridBranchResponse> GetGridBranchRowsAsync(long scenarioVersionId, long parentProductNodeId, string userId, CancellationToken cancellationToken)
     {
-        return _repository.GetGridBranchRowsAsync(scenarioVersionId, parentProductNodeId, cancellationToken);
+        var branch = await _repository.GetGridBranchRowsAsync(scenarioVersionId, parentProductNodeId, cancellationToken);
+        return await ApplyDraftOverlayAsync(branch, userId, cancellationToken);
     }
 
     public Task<EditCellsResponse> ApplyEditsAsync(EditCellsRequest request, string userId, CancellationToken cancellationToken)
@@ -76,7 +78,7 @@ public sealed partial class PlanningService : IPlanningService
                     string.Equals(edit.EditMode, "input", StringComparison.OrdinalIgnoreCase),
                     metadata))
                 .ToList();
-            var originalCells = await LoadWorkingSetCellsAsync(request.ScenarioVersionId, metadata, editInstructions, ct);
+            var originalCells = await LoadWorkingSetCellsAsync(request.ScenarioVersionId, userId, metadata, editInstructions, ct);
             var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
 
             for (var index = 0; index < request.Cells.Count; index += 1)
@@ -106,9 +108,9 @@ public sealed partial class PlanningService : IPlanningService
             }
 
             RecalculateImpactedCells(originalCells, workingCells, metadata, request.ScenarioVersionId, editInstructions);
-            var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "manual-edit", ct);
+            var deltas = await PersistDraftChangesAsync(request.ScenarioVersionId, userId, originalCells, workingCells.Values, "manual-edit", ct);
             var actionId = await AppendAuditAsync("manual_edit", "manual", userId, request.Comment, deltas, ct);
-            await AppendCommandBatchAsync(
+            await AppendDraftCommandBatchAsync(
                 request.ScenarioVersionId,
                 userId,
                 "manual_edit",
@@ -120,7 +122,7 @@ public sealed partial class PlanningService : IPlanningService
                 },
                 deltas,
                 ct);
-            var availability = await _repository.GetUndoRedoAvailabilityAsync(request.ScenarioVersionId, userId, UndoRedoLimit, ct);
+            var availability = await GetWorkingUndoRedoAvailabilityAsync(request.ScenarioVersionId, userId, ct);
             return new EditCellsResponse(actionId, deltas.Count, "applied", BuildGridPatch(request.ScenarioVersionId, deltas), ToUndoRedoAvailabilityDto(availability));
         }, cancellationToken);
     }
@@ -134,7 +136,7 @@ public sealed partial class PlanningService : IPlanningService
                 .Distinct()
                 .ToList();
             var instruction = BuildSplashInstruction(request.ScenarioVersionId, request.MeasureId, request.SourceCell.TimePeriodId, scopeRoots, metadata, request.Method);
-            var originalCells = await LoadWorkingSetCellsAsync(request.ScenarioVersionId, metadata, [instruction], ct);
+            var originalCells = await LoadWorkingSetCellsAsync(request.ScenarioVersionId, userId, metadata, [instruction], ct);
             var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
 
             if (scopeRoots.Count == 1)
@@ -163,9 +165,9 @@ public sealed partial class PlanningService : IPlanningService
                 metadata);
 
             RecalculateImpactedCells(originalCells, workingCells, metadata, request.ScenarioVersionId, [instruction]);
-            var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "splash", ct);
+            var deltas = await PersistDraftChangesAsync(request.ScenarioVersionId, userId, originalCells, workingCells.Values, "splash", ct);
             var actionId = await AppendAuditAsync("splash", request.Method, userId, request.Comment, deltas, ct);
-            await AppendCommandBatchAsync(
+            await AppendDraftCommandBatchAsync(
                 request.ScenarioVersionId,
                 userId,
                 "splash",
@@ -181,7 +183,7 @@ public sealed partial class PlanningService : IPlanningService
                 },
                 deltas,
                 ct);
-            var availability = await _repository.GetUndoRedoAvailabilityAsync(request.ScenarioVersionId, userId, UndoRedoLimit, ct);
+            var availability = await GetWorkingUndoRedoAvailabilityAsync(request.ScenarioVersionId, userId, ct);
             return new SplashResponse(
                 actionId,
                 "applied",
@@ -196,8 +198,15 @@ public sealed partial class PlanningService : IPlanningService
     {
         return _repository.ExecuteAtomicAsync(async ct =>
         {
-            var scenarioCells = (await _repository.GetScenarioCellsAsync(request.ScenarioVersionId, ct))
-                .Where(cell => cell.Coordinate.MeasureId == request.MeasureId)
+            var coordinates = request.Coordinates
+                .Select(coordinate => new PlanningCellCoordinate(
+                    request.ScenarioVersionId,
+                    request.MeasureId,
+                    coordinate.StoreId,
+                    coordinate.ProductNodeId,
+                    coordinate.TimePeriodId))
+                .ToList();
+            var scenarioCells = (await LoadEffectiveCellsAsync(request.ScenarioVersionId, userId, coordinates, ct))
                 .ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
             var originalCells = new List<PlanningCell>();
             var targetedCells = new List<PlanningCell>();
@@ -223,9 +232,9 @@ public sealed partial class PlanningService : IPlanningService
                 targetedCells.Add(cell);
             }
 
-            var deltas = await PersistScenarioChangesAsync(originalCells, targetedCells, request.Locked ? "lock" : "unlock", ct);
+            var deltas = await PersistDraftChangesAsync(request.ScenarioVersionId, userId, originalCells, targetedCells, request.Locked ? "lock" : "unlock", ct);
             await AppendAuditAsync(request.Locked ? "lock" : "unlock", "lock", userId, request.Reason, deltas, ct);
-            await AppendCommandBatchAsync(
+            await AppendDraftCommandBatchAsync(
                 request.ScenarioVersionId,
                 userId,
                 request.Locked ? "lock" : "unlock",
@@ -238,7 +247,7 @@ public sealed partial class PlanningService : IPlanningService
                 },
                 deltas,
                 ct);
-            var availability = await _repository.GetUndoRedoAvailabilityAsync(request.ScenarioVersionId, userId, UndoRedoLimit, ct);
+            var availability = await GetWorkingUndoRedoAvailabilityAsync(request.ScenarioVersionId, userId, ct);
             return new LockCellsResponse(request.Coordinates.Count, request.Locked, ToUndoRedoAvailabilityDto(availability));
         }, cancellationToken);
     }
@@ -297,7 +306,7 @@ public sealed partial class PlanningService : IPlanningService
             await _repository.EnsureYearAsync(request.ScenarioVersionId, targetFiscalYear, ct);
             metadata = await _repository.GetMetadataAsync(ct);
 
-            var originalCells = await _repository.GetScenarioCellsAsync(request.ScenarioVersionId, ct);
+            var originalCells = await LoadEffectiveScenarioCellsAsync(request.ScenarioVersionId, userId, ct);
             var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
             var copiedCount = 0;
 
@@ -344,9 +353,9 @@ public sealed partial class PlanningService : IPlanningService
             }
 
             RecalculateAll(workingCells, metadata, request.ScenarioVersionId);
-            var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "generate-next-year", ct);
+            var deltas = await PersistDraftChangesAsync(request.ScenarioVersionId, userId, originalCells, workingCells.Values, "generate-next-year", ct);
             await AppendAuditAsync("generate_next_year", "copy-inputs", userId, $"Generated FY{targetFiscalYear % 100:00} from FY{sourceFiscalYear % 100:00}", deltas, ct);
-            await AppendCommandBatchAsync(
+            await AppendDraftCommandBatchAsync(
                 request.ScenarioVersionId,
                 userId,
                 "generate_next_year",
@@ -386,7 +395,7 @@ public sealed partial class PlanningService : IPlanningService
         return await BuildHierarchyMappingResponseAsync(cancellationToken);
     }
 
-    public async Task<PlanningInsightResponse> GetPlanningInsightsAsync(long scenarioVersionId, long storeId, long productNodeId, long yearTimePeriodId, CancellationToken cancellationToken)
+    public async Task<PlanningInsightResponse> GetPlanningInsightsAsync(long scenarioVersionId, long storeId, long productNodeId, long yearTimePeriodId, string userId, CancellationToken cancellationToken)
     {
         var metadata = await _repository.GetMetadataAsync(cancellationToken);
         var targetNode = metadata.ProductNodes[productNodeId];
@@ -413,7 +422,7 @@ public sealed partial class PlanningService : IPlanningService
 
         var cells = insightCoordinates.Length == 0
             ? Array.Empty<PlanningCell>()
-            : await _repository.GetCellsAsync(insightCoordinates, cancellationToken);
+            : await LoadEffectiveCellsAsync(scenarioVersionId, userId, insightCoordinates, cancellationToken);
         var cellLookup = cells.ToDictionary(cell => cell.Coordinate.Key, cell => cell);
 
         var monthlyRevenue = monthPeriods.Select(period => scopedLeafNodes.Sum(node =>
@@ -489,7 +498,7 @@ public sealed partial class PlanningService : IPlanningService
                     scopeRoots,
                     metadata,
                     request.SourceCell.TimePeriodId % 100 == 0 ? "seasonality_profile" : "existing_plan");
-            var originalCells = await LoadWorkingSetCellsAsync(request.ScenarioVersionId, metadata, [instruction], ct);
+            var originalCells = await LoadWorkingSetCellsAsync(request.ScenarioVersionId, userId, metadata, [instruction], ct);
             var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
 
             var growthFactor = PlanningMath.NormalizeGrowthFactor(request.GrowthFactor);
@@ -517,9 +526,9 @@ public sealed partial class PlanningService : IPlanningService
             ResetGrowthFactors(workingCells.Values, request.MeasureId);
 
             RecalculateImpactedCells(originalCells, workingCells, metadata, request.ScenarioVersionId, [instruction]);
-            var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "growth-factor", ct);
+            var deltas = await PersistDraftChangesAsync(request.ScenarioVersionId, userId, originalCells, workingCells.Values, "growth-factor", ct);
             var actionId = await AppendAuditAsync("growth_factor", "growth-factor", userId, request.Comment, deltas, ct);
-            await AppendCommandBatchAsync(
+            await AppendDraftCommandBatchAsync(
                 request.ScenarioVersionId,
                 userId,
                 "growth_factor",
@@ -534,7 +543,7 @@ public sealed partial class PlanningService : IPlanningService
                 },
                 deltas,
                 ct);
-            var availability = await _repository.GetUndoRedoAvailabilityAsync(request.ScenarioVersionId, userId, UndoRedoLimit, ct);
+            var availability = await GetWorkingUndoRedoAvailabilityAsync(request.ScenarioVersionId, userId, ct);
             return new ApplyGrowthFactorResponse(
                 actionId,
                 "applied",
@@ -548,6 +557,7 @@ public sealed partial class PlanningService : IPlanningService
     public async Task<SaveScenarioResponse> SaveScenarioAsync(SaveScenarioRequest request, string userId, CancellationToken cancellationToken)
     {
         var savedAt = DateTimeOffset.UtcNow;
+        await _repository.CommitDraftAsync(request.ScenarioVersionId, userId, cancellationToken);
         await _repository.RecordSaveCheckpointAsync(request.ScenarioVersionId, userId, request.Mode, savedAt, cancellationToken);
         await AppendAuditAsync("save", request.Mode, userId, $"Scenario {request.ScenarioVersionId} save checkpoint", [], cancellationToken);
         return new SaveScenarioResponse("saved", request.Mode, savedAt);
@@ -555,7 +565,7 @@ public sealed partial class PlanningService : IPlanningService
 
     public async Task<UndoRedoAvailabilityDto> GetUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken)
     {
-        var availability = await _repository.GetUndoRedoAvailabilityAsync(scenarioVersionId, userId, UndoRedoLimit, cancellationToken);
+        var availability = await GetWorkingUndoRedoAvailabilityAsync(scenarioVersionId, userId, cancellationToken);
         return ToUndoRedoAvailabilityDto(availability);
     }
 
@@ -563,13 +573,16 @@ public sealed partial class PlanningService : IPlanningService
     {
         return _repository.ExecuteAtomicAsync(async ct =>
         {
-            var batch = await _repository.UndoLatestCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
+            var draftAvailability = await _repository.GetDraftUndoRedoAvailabilityAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
+            var batch = draftAvailability.CanUndo
+                ? await _repository.UndoLatestDraftCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct)
+                : await _repository.UndoLatestCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
             if (batch is not null)
             {
                 await AppendAuditAsync("undo", "undo", userId, $"Undo {batch.CommandKind}", InvertCommandDeltas(batch.Deltas), ct);
             }
 
-            var availability = await _repository.GetUndoRedoAvailabilityAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
+            var availability = await GetWorkingUndoRedoAvailabilityAsync(scenarioVersionId, userId, ct);
             return new UndoPlanningActionResponse(batch is null ? "no-op" : "applied", ToUndoRedoAvailabilityDto(availability));
         }, cancellationToken);
     }
@@ -578,13 +591,16 @@ public sealed partial class PlanningService : IPlanningService
     {
         return _repository.ExecuteAtomicAsync(async ct =>
         {
-            var batch = await _repository.RedoLatestCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
+            var draftAvailability = await _repository.GetDraftUndoRedoAvailabilityAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
+            var batch = draftAvailability.CanRedo
+                ? await _repository.RedoLatestDraftCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct)
+                : await _repository.RedoLatestCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
             if (batch is not null)
             {
                 await AppendAuditAsync("redo", "redo", userId, $"Redo {batch.CommandKind}", batch.Deltas, ct);
             }
 
-            var availability = await _repository.GetUndoRedoAvailabilityAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
+            var availability = await GetWorkingUndoRedoAvailabilityAsync(scenarioVersionId, userId, ct);
             return new RedoPlanningActionResponse(batch is null ? "no-op" : "applied", ToUndoRedoAvailabilityDto(availability));
         }, cancellationToken);
     }
@@ -1821,6 +1837,45 @@ public sealed partial class PlanningService : IPlanningService
         }
 
         await _repository.UpsertCellsAsync(changedCells, cancellationToken);
+        return deltas;
+    }
+
+    private async Task<IReadOnlyList<PlanningCommandCellDelta>> PersistDraftChangesAsync(
+        long scenarioVersionId,
+        string userId,
+        IReadOnlyList<PlanningCell> originalCells,
+        IEnumerable<PlanningCell> workingCells,
+        string changeKind,
+        CancellationToken cancellationToken)
+    {
+        var originalByKey = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell);
+        var changedCells = new List<PlanningCell>();
+        var deltas = new List<PlanningCommandCellDelta>();
+
+        foreach (var cell in workingCells)
+        {
+            if (!originalByKey.TryGetValue(cell.Coordinate.Key, out var original))
+            {
+                changedCells.Add(cell.Clone());
+                continue;
+            }
+
+            if (!HasMaterialChange(original, cell))
+            {
+                continue;
+            }
+
+            var updated = cell.Clone();
+            updated.RowVersion = original.RowVersion + 1;
+            changedCells.Add(updated);
+            deltas.Add(new PlanningCommandCellDelta(
+                updated.Coordinate,
+                PlanningCellState.FromCell(original),
+                PlanningCellState.FromCell(updated),
+                changeKind));
+        }
+
+        await _repository.UpsertDraftCellsAsync(scenarioVersionId, userId, changedCells, cancellationToken);
         return deltas;
     }
 

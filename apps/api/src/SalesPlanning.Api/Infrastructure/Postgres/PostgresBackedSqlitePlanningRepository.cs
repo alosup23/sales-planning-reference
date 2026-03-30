@@ -248,11 +248,22 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             ? WithReadAsync(ct => _innerRepository.GetScenarioCellsAsync(scenarioVersionId, ct), cancellationToken)
             : GetScenarioCellsDirectAsync(scenarioVersionId, cancellationToken);
 
+    public Task<IReadOnlyList<PlanningCell>> GetDraftCellsAsync(long scenarioVersionId, string userId, IEnumerable<PlanningCellCoordinate> coordinates, CancellationToken cancellationToken) =>
+        GetDraftCellsDirectAsync(scenarioVersionId, userId, coordinates, cancellationToken);
+
     public async Task UpsertCellsAsync(IEnumerable<PlanningCell> cells, CancellationToken cancellationToken)
     {
         var materialized = cells.Select(cell => cell.Clone()).ToList();
         await ExecuteDirectMutationAsync(
             (connection, transaction, ct) => UpsertPlanningCellsAsync(connection, transaction, materialized, ct),
+            cancellationToken);
+    }
+
+    public async Task UpsertDraftCellsAsync(long scenarioVersionId, string userId, IEnumerable<PlanningCell> cells, CancellationToken cancellationToken)
+    {
+        var materialized = cells.Select(cell => cell.Clone()).ToList();
+        await ExecuteDirectNonVersionedMutationAsync(
+            (connection, transaction, ct) => UpsertDraftPlanningCellsAsync(connection, transaction, scenarioVersionId, userId, materialized, ct),
             cancellationToken);
     }
 
@@ -279,6 +290,16 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             cancellationToken);
     }
 
+    public Task<long> GetNextDraftCommandBatchIdAsync(CancellationToken cancellationToken) =>
+        GetNextDraftCommandBatchIdDirectAsync(cancellationToken);
+
+    public async Task AppendDraftCommandBatchAsync(PlanningCommandBatch batch, CancellationToken cancellationToken)
+    {
+        await ExecuteDirectNonVersionedMutationAsync(
+            (connection, transaction, ct) => AppendDraftCommandBatchDirectAsync(connection, transaction, batch, ct),
+            cancellationToken);
+    }
+
     public Task<PlanningUndoRedoAvailability> GetUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
         GetUndoRedoAvailabilityDirectAsync(scenarioVersionId, userId, limit, cancellationToken);
 
@@ -290,6 +311,19 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
     public Task<PlanningCommandBatch?> RedoLatestCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
         ExecuteDirectMutationAsync(
             (connection, transaction, ct) => RedoLatestCommandDirectAsync(connection, transaction, scenarioVersionId, userId, limit, ct),
+            cancellationToken);
+
+    public Task<PlanningUndoRedoAvailability> GetDraftUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
+        GetDraftUndoRedoAvailabilityDirectAsync(scenarioVersionId, userId, limit, cancellationToken);
+
+    public Task<PlanningCommandBatch?> UndoLatestDraftCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
+        ExecuteDirectNonVersionedMutationAsync(
+            (connection, transaction, ct) => UndoLatestDraftCommandDirectAsync(connection, transaction, scenarioVersionId, userId, limit, ct),
+            cancellationToken);
+
+    public Task<PlanningCommandBatch?> RedoLatestDraftCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
+        ExecuteDirectNonVersionedMutationAsync(
+            (connection, transaction, ct) => RedoLatestDraftCommandDirectAsync(connection, transaction, scenarioVersionId, userId, limit, ct),
             cancellationToken);
 
     public Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, string? selectedDepartmentLabel, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, CancellationToken cancellationToken) =>
@@ -324,6 +358,11 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         await EnsureYearDirectAsync(scenarioVersionId, fiscalYear, cancellationToken);
         InvalidateReadCaches(TimePeriodMutationTables);
     }
+
+    public Task CommitDraftAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken) =>
+        ExecuteDirectMutationAsync(
+            (connection, transaction, ct) => CommitDraftDirectAsync(connection, transaction, scenarioVersionId, userId, ct),
+            cancellationToken);
 
     public Task RecordSaveCheckpointAsync(long scenarioVersionId, string userId, string mode, DateTimeOffset savedAt, CancellationToken cancellationToken) =>
         RecordSaveCheckpointDirectAsync(scenarioVersionId, userId, mode, savedAt, cancellationToken);
@@ -800,6 +839,22 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await action(connection, transaction, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    private async Task<T> ExecuteDirectNonVersionedMutationAsync<T>(Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task<T>> action, CancellationToken cancellationToken)
+    {
+        if (_atomicDepth.Value > 0)
+        {
+            var current = await GetOrCreateDirectAtomicContextAsync(cancellationToken);
+            return await action(current.Connection, current.Transaction, cancellationToken);
+        }
+
+        await EnsureDatabaseReadyAsync(cancellationToken);
+        await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var result = await action(connection, transaction, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return result;
     }
 
     private async Task<T> ExecuteDirectMutationAsync<T>(Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task<T>> action, CancellationToken cancellationToken)

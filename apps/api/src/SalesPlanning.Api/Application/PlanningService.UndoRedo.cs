@@ -75,6 +75,49 @@ public sealed partial class PlanningService
         return batch.CommandBatchId;
     }
 
+    private async Task<long> AppendDraftCommandBatchAsync(
+        long scenarioVersionId,
+        string userId,
+        string commandKind,
+        object? commandScope,
+        IReadOnlyList<PlanningCommandCellDelta> deltas,
+        CancellationToken cancellationToken)
+    {
+        if (deltas.Count == 0)
+        {
+            return 0;
+        }
+
+        var batch = new PlanningCommandBatch(
+            await _repository.GetNextDraftCommandBatchIdAsync(cancellationToken),
+            scenarioVersionId,
+            userId,
+            commandKind,
+            commandScope is null ? null : JsonSerializer.Serialize(commandScope),
+            false,
+            null,
+            DateTimeOffset.UtcNow,
+            null,
+            deltas);
+
+        await _repository.AppendDraftCommandBatchAsync(batch, cancellationToken);
+        return batch.CommandBatchId;
+    }
+
+    private async Task<PlanningUndoRedoAvailability> GetWorkingUndoRedoAvailabilityAsync(
+        long scenarioVersionId,
+        string userId,
+        CancellationToken cancellationToken)
+    {
+        var draftAvailability = await _repository.GetDraftUndoRedoAvailabilityAsync(scenarioVersionId, userId, UndoRedoLimit, cancellationToken);
+        if (draftAvailability.CanUndo || draftAvailability.CanRedo)
+        {
+            return draftAvailability;
+        }
+
+        return await _repository.GetUndoRedoAvailabilityAsync(scenarioVersionId, userId, UndoRedoLimit, cancellationToken);
+    }
+
     private static IReadOnlyList<PlanningCommandCellDelta> InvertCommandDeltas(IReadOnlyList<PlanningCommandCellDelta> deltas)
     {
         return deltas

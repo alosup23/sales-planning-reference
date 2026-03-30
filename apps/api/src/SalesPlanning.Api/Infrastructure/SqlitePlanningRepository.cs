@@ -113,6 +113,9 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
             .ToList();
     }
 
+    public Task<IReadOnlyList<PlanningCell>> GetDraftCellsAsync(long scenarioVersionId, string userId, IEnumerable<PlanningCellCoordinate> coordinates, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<PlanningCell>>([]);
+
     public async Task UpsertCellsAsync(IEnumerable<PlanningCell> cells, CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
@@ -133,6 +136,9 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
             _gate.Release();
         }
     }
+
+    public Task UpsertDraftCellsAsync(long scenarioVersionId, string userId, IEnumerable<PlanningCell> cells, CancellationToken cancellationToken) =>
+        UpsertCellsAsync(cells, cancellationToken);
 
     public async Task AppendAuditAsync(PlanningActionAudit audit, CancellationToken cancellationToken)
     {
@@ -1402,6 +1408,24 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
     }
 
     public Task RecordSaveCheckpointAsync(long scenarioVersionId, string userId, string mode, DateTimeOffset savedAt, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
+
+    public Task<long> GetNextDraftCommandBatchIdAsync(CancellationToken cancellationToken) =>
+        GetNextCommandBatchIdAsync(cancellationToken);
+
+    public Task AppendDraftCommandBatchAsync(PlanningCommandBatch batch, CancellationToken cancellationToken) =>
+        AppendCommandBatchAsync(batch, cancellationToken);
+
+    public Task<PlanningUndoRedoAvailability> GetDraftUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
+        GetUndoRedoAvailabilityAsync(scenarioVersionId, userId, limit, cancellationToken);
+
+    public Task<PlanningCommandBatch?> UndoLatestDraftCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
+        UndoLatestCommandAsync(scenarioVersionId, userId, limit, cancellationToken);
+
+    public Task<PlanningCommandBatch?> RedoLatestDraftCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
+        RedoLatestCommandAsync(scenarioVersionId, userId, limit, cancellationToken);
+
+    public Task CommitDraftAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken) =>
         Task.CompletedTask;
 
     public async Task ResetAsync(CancellationToken cancellationToken)

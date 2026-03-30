@@ -22,12 +22,13 @@ public sealed partial class PlanningService
 
     private async Task<IReadOnlyList<PlanningCell>> LoadWorkingSetCellsAsync(
         long scenarioVersionId,
+        string userId,
         PlanningMetadataSnapshot metadata,
         IReadOnlyCollection<PlanningMutationInstruction> instructions,
         CancellationToken cancellationToken)
     {
         var coordinates = BuildWorkingSetCoordinates(scenarioVersionId, metadata, instructions);
-        return await _repository.GetCellsAsync(coordinates, cancellationToken);
+        return await LoadEffectiveCellsAsync(scenarioVersionId, userId, coordinates, cancellationToken);
     }
 
     private static PlanningMutationInstruction BuildEditInstruction(

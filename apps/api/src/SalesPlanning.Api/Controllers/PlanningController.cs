@@ -32,7 +32,7 @@ public sealed class PlanningController : ControllerBase
             .Distinct()
             .ToArray();
 
-        return _planningService.GetGridSliceAsync(scenarioVersionId, selectedStoreId, selectedDepartmentLabel, expandedNodes, expandAllBranches, cancellationToken);
+        return _planningService.GetGridSliceAsync(scenarioVersionId, selectedStoreId, selectedDepartmentLabel, expandedNodes, expandAllBranches, GetRequiredUserId(), cancellationToken);
     }
 
     [HttpGet("grid-view-root")]
@@ -47,6 +47,7 @@ public sealed class PlanningController : ControllerBase
     {
         return _planningService.GetGridViewRootAsync(
             new PlanningGridViewRequest(scenarioVersionId, view, selectedStoreId, selectedDepartmentLabel, departmentLayout, expandAllBranches),
+            GetRequiredUserId(),
             cancellationToken);
     }
 
@@ -64,6 +65,7 @@ public sealed class PlanningController : ControllerBase
         return _planningService.GetGridViewChildrenAsync(
             new PlanningGridViewRequest(scenarioVersionId, view, selectedStoreId, selectedDepartmentLabel, departmentLayout, expandAllBranches),
             parentViewRowId,
+            GetRequiredUserId(),
             cancellationToken);
     }
 
@@ -73,7 +75,7 @@ public sealed class PlanningController : ControllerBase
         [FromQuery] long parentProductNodeId,
         CancellationToken cancellationToken = default)
     {
-        return _planningService.GetGridBranchRowsAsync(scenarioVersionId, parentProductNodeId, cancellationToken);
+        return _planningService.GetGridBranchRowsAsync(scenarioVersionId, parentProductNodeId, GetRequiredUserId(), cancellationToken);
     }
 
     [HttpPost("cell-edits")]
@@ -161,7 +163,7 @@ public sealed class PlanningController : ControllerBase
         [FromQuery] long yearTimePeriodId,
         CancellationToken cancellationToken)
     {
-        return _planningService.GetPlanningInsightsAsync(scenarioVersionId, storeId, productNodeId, yearTimePeriodId, cancellationToken);
+        return _planningService.GetPlanningInsightsAsync(scenarioVersionId, storeId, productNodeId, yearTimePeriodId, GetRequiredUserId(), cancellationToken);
     }
 
     [HttpPost("growth-factors/apply")]

@@ -4,10 +4,10 @@ namespace SalesPlanning.Api.Application;
 
 public interface IPlanningService
 {
-    Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, string? selectedDepartmentLabel, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, CancellationToken cancellationToken);
-    Task<GridBranchResponse> GetGridBranchRowsAsync(long scenarioVersionId, long parentProductNodeId, CancellationToken cancellationToken);
-    Task<GridSliceResponse> GetGridViewRootAsync(PlanningGridViewRequest request, CancellationToken cancellationToken);
-    Task<GridViewBlockResponse> GetGridViewChildrenAsync(PlanningGridViewRequest request, string parentViewRowId, CancellationToken cancellationToken);
+    Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, string? selectedDepartmentLabel, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, string userId, CancellationToken cancellationToken);
+    Task<GridBranchResponse> GetGridBranchRowsAsync(long scenarioVersionId, long parentProductNodeId, string userId, CancellationToken cancellationToken);
+    Task<GridSliceResponse> GetGridViewRootAsync(PlanningGridViewRequest request, string userId, CancellationToken cancellationToken);
+    Task<GridViewBlockResponse> GetGridViewChildrenAsync(PlanningGridViewRequest request, string parentViewRowId, string userId, CancellationToken cancellationToken);
     Task<PlanningDepartmentScopeResponse> GetPlanningDepartmentScopesAsync(CancellationToken cancellationToken);
     Task<EditCellsResponse> ApplyEditsAsync(EditCellsRequest request, string userId, CancellationToken cancellationToken);
     Task<SplashResponse> ApplySplashAsync(SplashRequest request, string userId, CancellationToken cancellationToken);
@@ -21,7 +21,7 @@ public interface IPlanningService
     Task<HierarchyMappingResponse> AddHierarchyDepartmentAsync(AddHierarchyDepartmentRequest request, CancellationToken cancellationToken);
     Task<HierarchyMappingResponse> AddHierarchyClassAsync(AddHierarchyClassRequest request, CancellationToken cancellationToken);
     Task<HierarchyMappingResponse> AddHierarchySubclassAsync(AddHierarchySubclassRequest request, CancellationToken cancellationToken);
-    Task<PlanningInsightResponse> GetPlanningInsightsAsync(long scenarioVersionId, long storeId, long productNodeId, long yearTimePeriodId, CancellationToken cancellationToken);
+    Task<PlanningInsightResponse> GetPlanningInsightsAsync(long scenarioVersionId, long storeId, long productNodeId, long yearTimePeriodId, string userId, CancellationToken cancellationToken);
     Task<ApplyGrowthFactorResponse> ApplyGrowthFactorAsync(ApplyGrowthFactorRequest request, string userId, CancellationToken cancellationToken);
     Task<SaveScenarioResponse> SaveScenarioAsync(SaveScenarioRequest request, string userId, CancellationToken cancellationToken);
     Task<UndoRedoAvailabilityDto> GetUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken);
