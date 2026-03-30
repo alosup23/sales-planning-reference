@@ -268,6 +268,8 @@ export function PlanningGrid({
       const buildMeasureColumn = (period: GridPeriod, measure: GridMeasure): ColDef<GridRowView> => {
         const isYearTotal = period.grain === "year";
         const measureHeaderWidth = Math.max(measure.displayAsPercent ? 108 : 112, measure.label.length * 8 + 32);
+        const yearTotalWidth = Math.max(measureHeaderWidth, measure.displayAsPercent ? 118 : 144);
+        const monthMeasureWidth = Math.max(measure.displayAsPercent ? 92 : 100, measure.label.length * 7 + 28);
         const isLeafMonthEditable = (row: GridRowView | undefined) =>
           Boolean(
             measure.editableAtLeaf &&
@@ -292,8 +294,8 @@ export function PlanningGrid({
         editable: (params) => !showGrowthFactors && (isLeafMonthEditable(params.data) || isTopDownEditable(params.data)),
         valueGetter: (params) => params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.value ?? 0,
         valueFormatter: (params) => formatValue(params, measure),
-        initialWidth: columnWidthStateRef.current.get(`${period.timePeriodId}:${measure.measureId}`) ?? (isYearTotal ? measureHeaderWidth : (measure.displayAsPercent ? 92 : 100)),
-        minWidth: isYearTotal ? measureHeaderWidth : (measure.displayAsPercent ? 92 : 100),
+        initialWidth: columnWidthStateRef.current.get(`${period.timePeriodId}:${measure.measureId}`) ?? (isYearTotal ? yearTotalWidth : monthMeasureWidth),
+        minWidth: isYearTotal ? yearTotalWidth : monthMeasureWidth,
         cellStyle: (params): CellStyle => ({
           backgroundColor: getMeasureBandColor(params.data, period.timePeriodId, yearIndexByTimePeriodId),
           textAlign: "right",

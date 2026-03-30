@@ -261,8 +261,7 @@ export default function App() {
       return;
     }
 
-    const firstActiveStore = planningStoreScopeQuery.data.stores.find((store) => store.isActive) ?? planningStoreScopeQuery.data.stores[0];
-    setSelectedPlanningStoreId(firstActiveStore.storeId);
+    setSelectedPlanningStoreId("all");
   }, [selectedPlanningStoreId, planningStoreScopeQuery.data]);
 
   useEffect(() => {
@@ -1300,14 +1299,9 @@ export default function App() {
   };
 
   const handleScopeRowClick = (row: GridRow) => {
-    if (activeView === "planning-store" && row.structureRole === "store" && row.level === 1) {
-      if (row.storeId !== selectedPlanningStoreId || !expandAllBranches) {
-        setSelectedPlanningStoreId(row.storeId);
-        setExpandAllBranches(true);
-      }
+    if (activeView === "planning-store" && row.structureRole === "store") {
       return;
     }
-
   };
 
   const handleExpandAllBranches = () => {
