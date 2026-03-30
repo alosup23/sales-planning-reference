@@ -38,12 +38,8 @@ export function SignedInUserMenu() {
   const account = instance.getActiveAccount() ?? accounts[0] ?? null;
   const [menuOpen, setMenuOpen] = useState(false);
 
-  if (!account) {
-    return null;
-  }
-
   const initials = useMemo(() => {
-    const source = (account.name ?? account.username ?? "U").trim();
+    const source = (account?.name ?? account?.username ?? "U").trim();
     const parts = source.split(/\s+/).filter(Boolean);
     if (parts.length === 0) {
       return "U";
@@ -54,10 +50,10 @@ export function SignedInUserMenu() {
     }
 
     return `${parts[0][0] ?? ""}${parts[1][0] ?? ""}`.toUpperCase();
-  }, [account.name, account.username]);
+  }, [account?.name, account?.username]);
 
   useEffect(() => {
-    if (!menuOpen) {
+    if (!menuOpen || !account) {
       return;
     }
 
@@ -72,7 +68,11 @@ export function SignedInUserMenu() {
 
     window.addEventListener("pointerdown", handlePointerDown);
     return () => window.removeEventListener("pointerdown", handlePointerDown);
-  }, [menuOpen]);
+  }, [account, menuOpen]);
+
+  if (!account) {
+    return null;
+  }
 
   return (
     <div className="auth-user-menu">
