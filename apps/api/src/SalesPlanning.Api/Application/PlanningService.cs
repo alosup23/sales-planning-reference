@@ -42,11 +42,13 @@ public sealed partial class PlanningService : IPlanningService
     private const int RequiredProductProfileImportHeaderCount = 25;
     private readonly IPlanningRepository _repository;
     private readonly ISplashAllocator _splashAllocator;
+    private readonly IPlanningAsyncJobManager? _asyncJobManager;
 
-    public PlanningService(IPlanningRepository repository, ISplashAllocator splashAllocator)
+    public PlanningService(IPlanningRepository repository, ISplashAllocator splashAllocator, IPlanningAsyncJobManager? asyncJobManager = null)
     {
         _repository = repository;
         _splashAllocator = splashAllocator;
+        _asyncJobManager = asyncJobManager;
     }
 
     public Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, string? selectedDepartmentLabel, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, CancellationToken cancellationToken)

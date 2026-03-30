@@ -2,7 +2,9 @@ import type {
   AddRowRequest,
   AddRowResponse,
   ApplyGrowthFactorResponse,
+  AsyncJobStatus,
   EditCellsResponse,
+  GridViewBlockResponse,
   InventoryProfile,
   InventoryProfileImportResponse,
   InventoryProfileResponse,
@@ -18,6 +20,7 @@ import type {
   ImportWorkbookResponse,
   LockCellsResponse,
   LockCellsRequest,
+  PlanningDepartmentScopeResponse,
   PlanningStoreScopeResponse,
   PlanningInsightResponse,
   PricingPolicy,
@@ -36,10 +39,12 @@ import type {
   SeasonalityEventProfileImportResponse,
   SeasonalityEventProfileResponse,
   RedoPlanningActionResponse,
+  ReconciliationReportResponse,
   StoreProfile,
   StoreProfileImportResponse,
   StoreProfileOptionsResponse,
   StoreProfileResponse,
+  StartAsyncJobResponse,
   SplashResponse,
   SplashRequest,
   UpsertInventoryProfileRequest,
@@ -140,6 +145,35 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   }
 }
 
+async function fetchBlob(url: string, init?: RequestInit): Promise<{ blob: Blob; fileName: string | null; contentType: string | null }> {
+  const headers = new Headers(init?.headers ?? {});
+  if (authEnabled) {
+    try {
+      const token = await getAccessToken();
+      if (token) {
+        headers.set("Authorization", `Bearer ${token}`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Session expired. Sign in again.";
+      throw new ApiRequestError(message, 401, "auth");
+    }
+  }
+
+  const response = await fetch(url, {
+    ...init,
+    headers,
+  });
+  if (!response.ok) {
+    throw new ApiRequestError(`${response.status} ${response.statusText}`, response.status);
+  }
+
+  return {
+    blob: await response.blob(),
+    fileName: extractFileName(response.headers.get("content-disposition")),
+    contentType: response.headers.get("content-type"),
+  };
+}
+
 export async function getGridSlice(
   options?: {
     selectedStoreId?: number | null;
@@ -184,6 +218,66 @@ export async function getGridBranchRows(scenarioVersionId: number, parentProduct
 
 export async function getPlanningStoreScopes(): Promise<PlanningStoreScopeResponse> {
   return await fetchJson<PlanningStoreScopeResponse>(`${API_BASE_URL}/planning-store-scopes`);
+}
+
+export async function getPlanningDepartmentScopes(): Promise<PlanningDepartmentScopeResponse> {
+  return await fetchJson<PlanningDepartmentScopeResponse>(`${API_BASE_URL}/planning-department-scopes`);
+}
+
+export async function getGridViewRoot(options: {
+  view: "store" | "department";
+  selectedStoreId?: number | null;
+  selectedDepartmentLabel?: string | null;
+  departmentLayout?: string | null;
+  expandAllBranches?: boolean;
+}): Promise<GridSliceResponse> {
+  const params = new URLSearchParams({
+    scenarioVersionId: "1",
+    view: options.view,
+  });
+  if (options.selectedStoreId) {
+    params.set("selectedStoreId", String(options.selectedStoreId));
+  }
+  if (options.selectedDepartmentLabel) {
+    params.set("selectedDepartmentLabel", options.selectedDepartmentLabel);
+  }
+  if (options.departmentLayout) {
+    params.set("departmentLayout", options.departmentLayout);
+  }
+  if (options.expandAllBranches) {
+    params.set("expandAllBranches", "true");
+  }
+
+  return await fetchJson<GridSliceResponse>(`${API_BASE_URL}/grid-view-root?${params.toString()}`);
+}
+
+export async function getGridViewChildren(options: {
+  parentViewRowId: string;
+  view: "store" | "department";
+  selectedStoreId?: number | null;
+  selectedDepartmentLabel?: string | null;
+  departmentLayout?: string | null;
+  expandAllBranches?: boolean;
+}): Promise<GridViewBlockResponse> {
+  const params = new URLSearchParams({
+    scenarioVersionId: "1",
+    view: options.view,
+    parentViewRowId: options.parentViewRowId,
+  });
+  if (options.selectedStoreId) {
+    params.set("selectedStoreId", String(options.selectedStoreId));
+  }
+  if (options.selectedDepartmentLabel) {
+    params.set("selectedDepartmentLabel", options.selectedDepartmentLabel);
+  }
+  if (options.departmentLayout) {
+    params.set("departmentLayout", options.departmentLayout);
+  }
+  if (options.expandAllBranches) {
+    params.set("expandAllBranches", "true");
+  }
+
+  return await fetchJson<GridViewBlockResponse>(`${API_BASE_URL}/grid-view-children?${params.toString()}`);
 }
 
 export async function postEdit(request: EditCellsRequest): Promise<EditCellsResponse> {
@@ -282,6 +376,103 @@ export async function postWorkbookImport(scenarioVersionId: number, file: File):
     method: "POST",
     body: form,
   });
+}
+
+async function createAsyncJob(path: string, body?: BodyInit): Promise<string> {
+  const response = await fetchJson<StartAsyncJobResponse>(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    body,
+  });
+  return response.jobId;
+}
+
+export async function getAsyncJobStatus(jobId: string): Promise<AsyncJobStatus> {
+  return await fetchJson<AsyncJobStatus>(`${API_BASE_URL}/jobs/${jobId}`);
+}
+
+export async function queueWorkbookImportJob(scenarioVersionId: number, file: File): Promise<string> {
+  const form = new FormData();
+  form.append("scenarioVersionId", String(scenarioVersionId));
+  form.append("file", file);
+  return await createAsyncJob("/jobs/imports/workbook", form);
+}
+
+export async function queueWorkbookExportJob(scenarioVersionId = 1): Promise<string> {
+  return await createAsyncJob(`/jobs/exports/workbook?scenarioVersionId=${scenarioVersionId}`);
+}
+
+export async function queueStoreProfileImportJob(file: File): Promise<string> {
+  const form = new FormData();
+  form.append("file", file);
+  return await createAsyncJob("/jobs/imports/store-profiles", form);
+}
+
+export async function queueStoreProfileExportJob(): Promise<string> {
+  return await createAsyncJob("/jobs/exports/store-profiles");
+}
+
+export async function queueProductProfileImportJob(file: File): Promise<string> {
+  const form = new FormData();
+  form.append("file", file);
+  return await createAsyncJob("/jobs/imports/product-profiles", form);
+}
+
+export async function queueProductProfileExportJob(): Promise<string> {
+  return await createAsyncJob("/jobs/exports/product-profiles");
+}
+
+export async function queueInventoryProfileImportJob(file: File): Promise<string> {
+  const form = new FormData();
+  form.append("file", file);
+  return await createAsyncJob("/jobs/imports/inventory-profiles", form);
+}
+
+export async function queueInventoryProfileExportJob(): Promise<string> {
+  return await createAsyncJob("/jobs/exports/inventory-profiles");
+}
+
+export async function queuePricingPolicyImportJob(file: File): Promise<string> {
+  const form = new FormData();
+  form.append("file", file);
+  return await createAsyncJob("/jobs/imports/pricing-policies", form);
+}
+
+export async function queuePricingPolicyExportJob(): Promise<string> {
+  return await createAsyncJob("/jobs/exports/pricing-policies");
+}
+
+export async function queueSeasonalityEventImportJob(file: File): Promise<string> {
+  const form = new FormData();
+  form.append("file", file);
+  return await createAsyncJob("/jobs/imports/seasonality-event-profiles", form);
+}
+
+export async function queueSeasonalityEventExportJob(): Promise<string> {
+  return await createAsyncJob("/jobs/exports/seasonality-event-profiles");
+}
+
+export async function queueVendorSupplyImportJob(file: File): Promise<string> {
+  const form = new FormData();
+  form.append("file", file);
+  return await createAsyncJob("/jobs/imports/vendor-supply-profiles", form);
+}
+
+export async function queueVendorSupplyExportJob(): Promise<string> {
+  return await createAsyncJob("/jobs/exports/vendor-supply-profiles");
+}
+
+export async function queueReconciliationJob(scenarioVersionId = 1): Promise<string> {
+  return await createAsyncJob(`/jobs/reconciliation?scenarioVersionId=${scenarioVersionId}`);
+}
+
+export async function downloadAsyncJobResult(jobId: string): Promise<void> {
+  const { blob, fileName } = await fetchBlob(`${API_BASE_URL}/jobs/${jobId}/download`);
+  triggerDownload(blob, fileName ?? "async-job-result");
+}
+
+export async function getReconciliationReport(jobId: string): Promise<ReconciliationReportResponse> {
+  const { blob } = await fetchBlob(`${API_BASE_URL}/jobs/${jobId}/download`);
+  return JSON.parse(await blob.text()) as ReconciliationReportResponse;
 }
 
 export async function postSave(request: SaveScenarioRequest): Promise<SaveScenarioResponse> {

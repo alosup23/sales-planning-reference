@@ -77,6 +77,9 @@ builder.Services.AddSingleton<IPlanningRepository>(serviceProvider =>
     return new S3BackedSqlitePlanningRepository(s3Client, logger, bucketName, objectKey, planningDbPath);
 });
 builder.Services.AddSingleton<ISplashAllocator, SplashAllocator>();
+builder.Services.AddSingleton<PlanningAsyncJobManager>();
+builder.Services.AddSingleton<IPlanningAsyncJobManager>(serviceProvider => serviceProvider.GetRequiredService<PlanningAsyncJobManager>());
+builder.Services.AddHostedService(serviceProvider => serviceProvider.GetRequiredService<PlanningAsyncJobManager>());
 builder.Services.AddSingleton<IPlanningService, PlanningService>();
 
 if (authEnabled)

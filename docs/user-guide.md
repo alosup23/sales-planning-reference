@@ -145,8 +145,15 @@ Lock branches or rows once they are approved to avoid accidental overwrite.
 ### Step 10: Export and review
 
 - export planning workbooks or master-data files
+- watch the status card for background job progress and completion
 - review totals, exceptions, and audit output
 - complete sign-off or the next approval step outside the Phase 1 system if required
+
+### Step 11: Run reconciliation before major review or sign-off
+
+- use `Run Reconciliation` after significant imports or planning changes
+- download the reconciliation report if mismatches are reported
+- resolve data issues before approval
 
 ## 6. Planning Views
 
@@ -324,12 +331,21 @@ Use for:
 
 - natural key update-or-insert behavior
 - optional Phase 2-ready fields accepted when present
+- imports run as async background jobs with progress shown in the status card
 - exception workbook returned for invalid rows
+- reconciliation runs automatically after import completion
 
 ## 16.3 Export behavior
 
 - export includes the extended Phase 1 plus Phase 2-ready schema
 - export preserves the canonical import column names and order
+- exports run as async background jobs with progress shown in the status card
+
+## 16.4 Reconciliation behavior
+
+- reconciliation runs as an async background job
+- the status card shows progress and completion
+- the downloadable report lists checked cells and mismatch counts
 
 ## 17. Recommended Daily Working Pattern
 
@@ -338,8 +354,9 @@ Use for:
 3. Make leaf edits in store view.
 4. Review department totals in department view.
 5. Use splash only when the business target should flow downward.
-6. Save after each logical planning block.
-7. Export for external review where required.
+6. Run reconciliation after major imports or before review checkpoints.
+7. Save after each logical planning block.
+8. Export for external review where required.
 
 ## 18. Troubleshooting
 
@@ -363,8 +380,8 @@ If a splash result is smaller than expected:
 
 ## 19. Current UAT Limitations To Be Aware Of
 
-- import and export are still synchronous operations
 - some large full-hierarchy requests are intentionally constrained
+- async job status is currently held inside the active UAT API task and is not yet externally durable
 - CloudFront-to-ALB origin traffic is not yet HTTPS-only
 - some performance optimizations planned for production are not yet complete
 

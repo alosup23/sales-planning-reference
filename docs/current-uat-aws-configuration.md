@@ -39,6 +39,7 @@ This document records the final deployed Phase 1 UAT AWS runtime, the current li
 - `Amazon ECS Fargate`
 - `1` running task in UAT
 - application image hosted in `Amazon ECR`
+- in-process async job manager for import, export, and reconciliation progress
 - ALB listener with:
   - default `403`
   - forward only when the CloudFront origin header is present
@@ -147,6 +148,6 @@ Important note:
 - add Route 53 hosted zone and ACM certificate
 - move CloudFront to HTTPS-only origin traffic to the ALB
 - consider moving ECS tasks into private subnets with the required NAT or endpoint strategy
-- add async workbook job execution
-- add reconciliation jobs and richer operational observability
+- externalize async job state for production durability
+- add scheduled reconciliation orchestration and richer operational observability
 - remove the stopped rollback DB when it is no longer needed

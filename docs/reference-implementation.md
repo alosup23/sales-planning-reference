@@ -46,15 +46,17 @@ The React app is organized around:
 
 The current grid already supports:
 
-- tree rows for `Store -> Department -> Class -> Subclass`
+- server-side tree rows for `Store -> Department -> Class -> Subclass`
 - alternate department-first projections
 - grouped `Year -> Month` columns
 - aggregate row banding
 - lock, splash, growth-factor, workbook, and undo/redo flows
+- async job progress for workbook and master-data import/export
+- manual reconciliation job execution with downloadable reports
 
 Important current limitation:
 
-- the frontend still uses the client-side row model instead of the target server-side row model, and some refresh paths are still broader than the final target
+- the server-side row model and server-composed department view are now live, but some planning recalculation paths are still broader than the final delta-only target and the async job manager is not yet externally durable
 
 ## Target Direction
 
@@ -75,8 +77,8 @@ The source-of-truth target design is now documented in:
 
 The next implementation waves should focus on:
 
-1. delta-based recalculation instead of broader scenario-wide recalculation
-2. AG Grid Server-Side Row Model with lazy branch loading
-3. async admin jobs for imports, exports, and year generation
-4. ALB HTTPS origin linkage and tighter private networking for ECS
-5. production-grade observability, reconciliation jobs, and Phase 2 AI service boundaries
+1. delta-based recalculation instead of broader working-set recalculation
+2. durable async job persistence and scheduled reconciliation orchestration
+3. ALB HTTPS origin linkage and tighter private networking for ECS
+4. production-grade observability and alerting
+5. Phase 2 AI service boundaries and recommendation workflows

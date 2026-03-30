@@ -69,6 +69,16 @@ export type GridBranchResponse = {
   rows: GridRow[];
 };
 
+export type GridViewBlockResponse = {
+  scenarioVersionId: number;
+  parentViewRowId: string;
+  rows: GridRow[];
+};
+
+export type PlanningDepartmentScopeResponse = {
+  departments: string[];
+};
+
 export type GridCellPatch = {
   storeId: number;
   productNodeId: number;
@@ -196,6 +206,58 @@ export type SaveScenarioResponse = {
   status: string;
   mode: string;
   savedAt: string;
+};
+
+export type AsyncJobSummary = {
+  rowsProcessed?: number | null;
+  cellsUpdated?: number | null;
+  rowsCreated?: number | null;
+  recordsAdded?: number | null;
+  recordsUpdated?: number | null;
+  mismatchCount?: number | null;
+  checkedCellCount?: number | null;
+  resultMessage?: string | null;
+};
+
+export type AsyncJobStatus = {
+  jobId: string;
+  category: string;
+  operation: string;
+  status: string;
+  progressPercent: number;
+  progressMessage: string;
+  createdAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  errorMessage?: string | null;
+  summary?: AsyncJobSummary | null;
+  hasDownload: boolean;
+  downloadFileName?: string | null;
+  downloadContentType?: string | null;
+};
+
+export type StartAsyncJobResponse = {
+  jobId: string;
+};
+
+export type ReconciliationMismatch = {
+  dimension: string;
+  storeId: number;
+  productNodeId: number;
+  timePeriodId: number;
+  measureId: number;
+  expectedValue: number;
+  actualValue: number;
+  difference: number;
+  message: string;
+};
+
+export type ReconciliationReportResponse = {
+  scenarioVersionId: number;
+  checkedCellCount: number;
+  mismatchCount: number;
+  mismatches: ReconciliationMismatch[];
+  status: string;
 };
 
 export type EditCellsResponse = {

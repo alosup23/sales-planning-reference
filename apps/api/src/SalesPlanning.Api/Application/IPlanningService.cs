@@ -6,6 +6,9 @@ public interface IPlanningService
 {
     Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, string? selectedDepartmentLabel, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, CancellationToken cancellationToken);
     Task<GridBranchResponse> GetGridBranchRowsAsync(long scenarioVersionId, long parentProductNodeId, CancellationToken cancellationToken);
+    Task<GridSliceResponse> GetGridViewRootAsync(PlanningGridViewRequest request, CancellationToken cancellationToken);
+    Task<GridViewBlockResponse> GetGridViewChildrenAsync(PlanningGridViewRequest request, string parentViewRowId, CancellationToken cancellationToken);
+    Task<PlanningDepartmentScopeResponse> GetPlanningDepartmentScopesAsync(CancellationToken cancellationToken);
     Task<EditCellsResponse> ApplyEditsAsync(EditCellsRequest request, string userId, CancellationToken cancellationToken);
     Task<SplashResponse> ApplySplashAsync(SplashRequest request, string userId, CancellationToken cancellationToken);
     Task<LockCellsResponse> ApplyLockAsync(LockCellsRequest request, string userId, CancellationToken cancellationToken);
@@ -72,5 +75,23 @@ public interface IPlanningService
     Task<(byte[] Content, string FileName)> ExportVendorSupplyProfilesAsync(CancellationToken cancellationToken);
     Task<ImportWorkbookResponse> ImportWorkbookAsync(long scenarioVersionId, Stream workbookStream, string fileName, string userId, CancellationToken cancellationToken);
     Task<(byte[] Content, string FileName)> ExportWorkbookAsync(long scenarioVersionId, CancellationToken cancellationToken);
+    Task<AsyncJobStatusResponse> StartWorkbookImportJobAsync(long scenarioVersionId, byte[] workbookBytes, string fileName, string userId, CancellationToken cancellationToken);
+    Task<AsyncJobStatusResponse> StartWorkbookExportJobAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken);
+    Task<AsyncJobStatusResponse> StartStoreProfileImportJobAsync(byte[] workbookBytes, string fileName, string userId, CancellationToken cancellationToken);
+    Task<AsyncJobStatusResponse> StartStoreProfileExportJobAsync(string userId, CancellationToken cancellationToken);
+    Task<AsyncJobStatusResponse> StartProductProfileImportJobAsync(byte[] workbookBytes, string fileName, string userId, CancellationToken cancellationToken);
+    Task<AsyncJobStatusResponse> StartProductProfileExportJobAsync(string userId, CancellationToken cancellationToken);
+    Task<AsyncJobStatusResponse> StartInventoryProfileImportJobAsync(byte[] workbookBytes, string fileName, string userId, CancellationToken cancellationToken);
+    Task<AsyncJobStatusResponse> StartInventoryProfileExportJobAsync(string userId, CancellationToken cancellationToken);
+    Task<AsyncJobStatusResponse> StartPricingPolicyImportJobAsync(byte[] workbookBytes, string fileName, string userId, CancellationToken cancellationToken);
+    Task<AsyncJobStatusResponse> StartPricingPolicyExportJobAsync(string userId, CancellationToken cancellationToken);
+    Task<AsyncJobStatusResponse> StartSeasonalityEventImportJobAsync(byte[] workbookBytes, string fileName, string userId, CancellationToken cancellationToken);
+    Task<AsyncJobStatusResponse> StartSeasonalityEventExportJobAsync(string userId, CancellationToken cancellationToken);
+    Task<AsyncJobStatusResponse> StartVendorSupplyImportJobAsync(byte[] workbookBytes, string fileName, string userId, CancellationToken cancellationToken);
+    Task<AsyncJobStatusResponse> StartVendorSupplyExportJobAsync(string userId, CancellationToken cancellationToken);
+    Task<AsyncJobStatusResponse> StartReconciliationJobAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken);
+    Task<AsyncJobStatusResponse> GetAsyncJobStatusAsync(string jobId, CancellationToken cancellationToken);
+    Task<(byte[] Content, string FileName, string ContentType)> DownloadAsyncJobResultAsync(string jobId, CancellationToken cancellationToken);
+    Task<ReconciliationReportResponse> RunReconciliationAsync(long scenarioVersionId, CancellationToken cancellationToken);
     Task ResetAsync(CancellationToken cancellationToken);
 }

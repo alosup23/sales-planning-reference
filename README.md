@@ -56,6 +56,8 @@ Current live implementation stack:
 - Store Profile maintenance with CRUD, inactivation, controlled option values, and Branch Profile import/export
 - Product Profile, Inventory Profile, Pricing Policy, Seasonality & Events, and Vendor Supply maintenance
 - Undo / redo up to `30` actions
+- Server-composed department view and AG Grid Server-Side Row Model
+- Async import / export / reconciliation job flows with progress reporting
 - CloudFront WAF and origin-protected ECS API runtime
 - RDS PostgreSQL private-subnet operating model for the live UAT database
 - Playwright browser smoke and interaction coverage for planning and hierarchy maintenance flows
@@ -65,9 +67,8 @@ Current live implementation stack:
 
 - Real-time collaboration notifications
 - Approval workflows
-- Full AG Grid server-side row model
-- Async workbook job orchestration
 - ALB HTTPS origin link from CloudFront
+- Durable external async job persistence and scheduled reconciliation orchestration
 - Phase 2 merchandising AI recommendation workflows
 
 ## Local Setup

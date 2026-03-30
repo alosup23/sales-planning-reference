@@ -4,7 +4,6 @@ import {
   type CellContextMenuEvent,
   type CellEditRequestEvent,
   type CellFocusedEvent,
-  ClientSideRowModelModule,
   type CellStyle,
   type ColumnGroupOpenedEvent,
   type ColumnResizedEvent,
@@ -14,19 +13,21 @@ import {
   ModuleRegistry,
   type ColDef,
   type ColGroupDef,
+  type IServerSideDatasource,
+  type IServerSideGetRowsParams,
   type RowClickedEvent,
   type RowGroupOpenedEvent,
   type SelectionChangedEvent,
   type ValueFormatterParams,
 } from "ag-grid-community";
-import "ag-grid-enterprise";
+import { ServerSideRowModelModule } from "ag-grid-enterprise";
 import { AgGridReact } from "ag-grid-react";
 import type { AddRowResponse, GridMeasure, GridPeriod, GridRow, GridSliceResponse, UndoRedoAvailability } from "../lib/types";
 import "ag-grid-community/styles/ag-grid.css";
 import "ag-grid-community/styles/ag-theme-quartz.css";
 
 ModuleRegistry.registerModules([
-  ClientSideRowModelModule,
+  ServerSideRowModelModule,
   CommunityFeaturesModule,
 ]);
 
@@ -45,21 +46,20 @@ type PlanningGridProps = {
   onAddRow: (level: "store" | "department" | "class" | "subclass", parentRow: GridRow | null) => Promise<void>;
   onDeleteRow: (row: GridRow | null) => Promise<void>;
   onImportWorkbook: (file: File) => Promise<void>;
-  onEnsureBranchLoaded: (row: GridRow) => void;
-  canRowExpand?: (row: GridRow) => boolean;
+  loadChildRows: (parentViewRowId: string) => Promise<GridRow[]>;
+  onLoadError?: (message: string) => void;
   onExpandAllBranches: () => void;
   onCollapseAllBranches: () => void;
   expandAllBranches: boolean;
   onScopeRowClick?: (row: GridRow) => void;
   sheetLabel: string;
   expansionStateKey?: string;
+  refreshToken?: number;
   pendingRevealRow: AddRowResponse | null;
   onRevealHandled: () => void;
 };
 
-type GridRowView = GridRow & {
-  __path: string[];
-};
+type GridRowView = GridRow;
 
 type RowKey = {
   id: string;
@@ -103,14 +103,15 @@ export function PlanningGrid({
   onAddRow,
   onDeleteRow,
   onImportWorkbook,
-  onEnsureBranchLoaded,
-  canRowExpand,
+  loadChildRows,
+  onLoadError,
   onExpandAllBranches,
   onCollapseAllBranches,
   expandAllBranches,
   onScopeRowClick,
   sheetLabel,
   expansionStateKey,
+  refreshToken,
   pendingRevealRow,
   onRevealHandled,
 }: PlanningGridProps) {
@@ -119,17 +120,19 @@ export function PlanningGrid({
   const [selectedCell, setSelectedCell] = useState<SelectedCellState | null>(null);
   const [compactMode, setCompactMode] = useState(false);
   const [showGrowthFactors, setShowGrowthFactors] = useState(false);
+  const [rowCacheVersion, setRowCacheVersion] = useState(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const gridRef = useRef<AgGridReact<GridRowView> | null>(null);
   const expandedRowStateRef = useRef<Map<string, boolean>>(new Map());
   const yearGroupStateRef = useRef<Map<string, boolean>>(new Map());
   const columnWidthStateRef = useRef<Map<string, number>>(new Map());
-  const hasAppliedInitialExpansionRef = useRef(false);
+  const rowCacheRef = useRef<Map<string, GridRowView>>(new Map());
 
   useEffect(() => {
-    hasAppliedInitialExpansionRef.current = false;
     expandedRowStateRef.current.clear();
-  }, [sheetLabel, expansionStateKey]);
+    rowCacheRef.current.clear();
+    setRowCacheVersion((current) => current + 1);
+  }, [sheetLabel, expansionStateKey, refreshToken]);
 
   const yearPeriods = useMemo(
     () => data.periods.filter((period) => period.grain === "year"),
@@ -149,22 +152,35 @@ export function PlanningGrid({
     return indexByPeriod;
   }, [data.periods, yearPeriods]);
 
-  const rowData = useMemo<GridRowView[]>(
-    () => data.rows.map((row) => ({ ...row, __path: row.path })),
+  const rootRows = useMemo<GridRowView[]>(
+    () => data.rows.map((row) => ({ ...row })),
     [data.rows],
   );
 
-  const rowLookup = useMemo(() => {
-    const lookup = new Map<string, GridRowView>();
-    rowData.forEach((row) => {
-      lookup.set(getRowKey(row), row);
+  const registerRows = (rows: GridRowView[]) => {
+    let didChange = false;
+    rows.forEach((row) => {
+      const rowKey = getRowKey(row);
+      const existing = rowCacheRef.current.get(rowKey);
+      if (!existing || existing !== row) {
+        rowCacheRef.current.set(rowKey, row);
+        didChange = true;
+      }
     });
-    return lookup;
-  }, [rowData]);
 
-  const selectedRow = selectedRowKey ? rowLookup.get(selectedRowKey.id) ?? null : null;
-  const contextRow = contextMenu ? rowLookup.get(contextMenu.rowKey.id) ?? null : null;
-  const selectedCellRow = selectedCell ? rowLookup.get(selectedCell.rowKey) ?? null : null;
+    if (didChange) {
+      setRowCacheVersion((current) => current + 1);
+    }
+  };
+
+  useEffect(() => {
+    rowCacheRef.current.clear();
+    registerRows(rootRows);
+  }, [rootRows, refreshToken]);
+
+  const selectedRow = selectedRowKey ? rowCacheRef.current.get(selectedRowKey.id) ?? null : null;
+  const contextRow = contextMenu ? rowCacheRef.current.get(contextMenu.rowKey.id) ?? null : null;
+  const selectedCellRow = selectedCell ? rowCacheRef.current.get(selectedCell.rowKey) ?? null : null;
   const canAddDepartment = selectedRow?.structureRole === "store" && Boolean(selectedRow?.bindingProductNodeId);
   const canAddClass = selectedRow?.structureRole === "department" && Boolean(selectedRow?.bindingProductNodeId);
   const canAddSubclass = selectedRow?.structureRole === "class" && Boolean(selectedRow?.bindingProductNodeId);
@@ -276,31 +292,55 @@ export function PlanningGrid({
     };
   }, [contextMenu]);
 
+  const serverSideDatasource = useMemo<IServerSideDatasource>(
+    () => ({
+      getRows(params: IServerSideGetRowsParams<GridRowView>) {
+        void (async () => {
+          try {
+            const route = params.request.groupKeys;
+            const rows = route.length === 0
+              ? rootRows
+              : await loadChildRows(route[route.length - 1]!);
+
+            registerRows(rows);
+            params.success({
+              rowData: rows,
+              rowCount: rows.length,
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "Unable to load planning rows.";
+            onLoadError?.(message);
+            params.fail();
+          }
+        })();
+      },
+    }),
+    [loadChildRows, onLoadError, rootRows],
+  );
+
   useEffect(() => {
     const api = gridRef.current?.api;
     if (!api) {
       return;
     }
 
-    api.forEachNode((node) => {
-      if (!node.group || !node.data) {
-        return;
-      }
+    api.setGridOption("serverSideDatasource", serverSideDatasource);
+    api.refreshServerSide({ purge: true });
+  }, [refreshToken, serverSideDatasource]);
 
-      const rowKey = getRowKey(node.data);
-      const rememberedState = expandedRowStateRef.current.get(rowKey);
-      const nextExpanded = expandAllBranches
-        ? true
-        : rememberedState ?? (!hasAppliedInitialExpansionRef.current && (node.level ?? 0) < 1);
+  useEffect(() => {
+    const api = gridRef.current?.api;
+    if (!api) {
+      return;
+    }
 
-      if (nextExpanded !== undefined) {
-        node.setExpanded(nextExpanded);
-        expandedRowStateRef.current.set(rowKey, nextExpanded);
-      }
-    });
+    if (expandAllBranches) {
+      api.expandAll();
+      return;
+    }
 
-    hasAppliedInitialExpansionRef.current = true;
-  }, [expandAllBranches, rowData]);
+    api.collapseAll();
+  }, [expandAllBranches, refreshToken]);
 
   useEffect(() => {
     const api = gridRef.current?.api;
@@ -333,7 +373,7 @@ export function PlanningGrid({
       window.clearTimeout(restoreTimeoutId);
       window.clearTimeout(delayedRestoreTimeoutId);
     };
-  }, [columnDefs, rowData, yearPeriods]);
+  }, [columnDefs, rootRows, yearPeriods]);
 
   useEffect(() => {
     if (!pendingRevealRow) {
@@ -345,25 +385,24 @@ export function PlanningGrid({
       return;
     }
 
-    const targetRow = rowData.find((row) => row.bindingProductNodeId === pendingRevealRow.productNodeId && row.bindingStoreId === pendingRevealRow.storeId)
-      ?? rowData.find((row) => row.productNodeId === pendingRevealRow.productNodeId && row.storeId === pendingRevealRow.storeId);
+    const cachedRows = [...rowCacheRef.current.values()];
+    const targetRow = cachedRows.find((row) => row.bindingProductNodeId === pendingRevealRow.productNodeId && row.bindingStoreId === pendingRevealRow.storeId)
+      ?? cachedRows.find((row) => row.productNodeId === pendingRevealRow.productNodeId && row.storeId === pendingRevealRow.storeId);
 
     if (!targetRow) {
       return;
     }
 
-    for (let depth = 1; depth < targetRow.__path.length; depth += 1) {
-      const ancestor = rowData.find((row) =>
-        row.__path.length === depth &&
-        row.__path.every((segment, index) => segment === targetRow.__path[index]));
+    for (let depth = 1; depth < targetRow.path.length; depth += 1) {
+      const ancestor = cachedRows.find((row) =>
+        row.path.length === depth &&
+        row.path.every((segment, index) => segment === targetRow.path[index]));
 
-      if (!ancestor) {
-        continue;
+      if (ancestor) {
+        const ancestorKey = getRowKey(ancestor);
+        expandedRowStateRef.current.set(ancestorKey, true);
+        api.getRowNode(ancestorKey)?.setExpanded(true);
       }
-
-      const ancestorKey = getRowKey(ancestor);
-      expandedRowStateRef.current.set(ancestorKey, true);
-      api.getRowNode(ancestorKey)?.setExpanded(true);
     }
 
     const rowKey = getRowKey(targetRow);
@@ -374,7 +413,7 @@ export function PlanningGrid({
       api.ensureNodeVisible(rowNode, "middle");
     }
     onRevealHandled();
-  }, [onRevealHandled, pendingRevealRow, rowData]);
+  }, [onRevealHandled, pendingRevealRow, refreshToken, rowCacheVersion]);
 
   const handleCellContextMenu = (event: CellContextMenuEvent<GridRowView>) => {
     event.event?.preventDefault();
@@ -520,7 +559,6 @@ export function PlanningGrid({
       return;
     }
 
-    onEnsureBranchLoaded(row);
     expandedRowStateRef.current.set(getRowKey(row), true);
     gridRef.current?.api.getRowNode(getRowKey(row))?.setExpanded(true);
   };
@@ -541,13 +579,23 @@ export function PlanningGrid({
       onCollapseAllBranches();
     }
 
-    gridRef.current?.api.forEachNode((node) => {
+    const api = gridRef.current?.api;
+    if (!api) {
+      return;
+    }
+
+    if (expanded) {
+      api.expandAll();
+    } else {
+      api.collapseAll();
+    }
+
+    api.forEachNode((node) => {
       if (!node.group || !node.data) {
         return;
       }
 
       expandedRowStateRef.current.set(getRowKey(node.data), expanded);
-      node.setExpanded(expanded);
     });
   };
 
@@ -746,15 +794,20 @@ export function PlanningGrid({
       <div className="ag-theme-quartz planning-grid">
         <AgGridReact<GridRowView>
           ref={gridRef}
-          rowData={rowData}
+          rowModelType="serverSide"
+          serverSideDatasource={serverSideDatasource}
           columnDefs={columnDefs}
           defaultColDef={defaultColDef}
           getRowClass={(params) => getRowClasses(params.data)}
           treeData
           animateRows
-          getDataPath={(dataRow) => dataRow.__path}
-          groupDefaultExpanded={1}
+          isServerSideGroup={(dataRow) => Boolean(dataRow && !dataRow.isLeaf)}
+          getServerSideGroupKey={(dataRow) => getRowKey(dataRow)}
           getRowId={(params) => getRowKey(params.data)}
+          isServerSideGroupOpenByDefault={(params) => {
+            const row = params.rowNode.data as GridRowView | undefined;
+            return row ? (expandedRowStateRef.current.get(getRowKey(row)) ?? false) : false;
+          }}
           suppressAggFuncInHeader
           enableCellTextSelection
           cellSelection
@@ -783,12 +836,9 @@ export function PlanningGrid({
             }),
             cellRenderer: HierarchyCellRenderer,
             cellRendererParams: {
-              onEnsureBranchLoaded,
-              canRowExpand,
               onToggleExpandedState: (row: GridRowView, expanded: boolean) => {
                 expandedRowStateRef.current.set(getRowKey(row), expanded);
               },
-              isRowExpanded: (row: GridRowView) => expandedRowStateRef.current.get(getRowKey(row)) ?? false,
             },
           }}
         />
@@ -964,17 +1014,13 @@ type GrowthCellRendererProps = {
 };
 
 type HierarchyCellRendererProps = ICellRendererParams<GridRowView> & {
-  onEnsureBranchLoaded: (row: GridRowView) => void;
-  canRowExpand?: (row: GridRowView) => boolean;
   onToggleExpandedState: (row: GridRowView, expanded: boolean) => void;
-  isRowExpanded?: (row: GridRowView) => boolean;
 };
 
 function HierarchyCellRenderer(props: HierarchyCellRendererProps) {
-  const { data, node, onEnsureBranchLoaded, canRowExpand, onToggleExpandedState, isRowExpanded, value } = props;
-  const isGrouped = Boolean(node.group && data);
-  const canExpand = Boolean(data && (isGrouped || canRowExpand?.(data) === true));
-  const expanded = Boolean((isGrouped ? node.expanded : false) || (data && !isGrouped && isRowExpanded?.(data)));
+  const { data, node, onToggleExpandedState, value } = props;
+  const canExpand = Boolean(data && !data.isLeaf);
+  const expanded = Boolean(node.expanded);
   const depth = Math.max(node.level ?? 0, 0);
 
   const handleToggle = (event: ReactMouseEvent<HTMLButtonElement>) => {
@@ -986,12 +1032,7 @@ function HierarchyCellRenderer(props: HierarchyCellRendererProps) {
     }
 
     const nextExpanded = !expanded;
-    if (nextExpanded) {
-      onEnsureBranchLoaded(data);
-    }
-    if (isGrouped) {
-      node.setExpanded(nextExpanded);
-    }
+    node.setExpanded(nextExpanded);
     onToggleExpandedState(data, nextExpanded);
     node.setSelected(true, true);
   };

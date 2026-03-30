@@ -35,6 +35,38 @@ public sealed class PlanningController : ControllerBase
         return _planningService.GetGridSliceAsync(scenarioVersionId, selectedStoreId, selectedDepartmentLabel, expandedNodes, expandAllBranches, cancellationToken);
     }
 
+    [HttpGet("grid-view-root")]
+    public Task<GridSliceResponse> GetGridViewRoot(
+        [FromQuery] long scenarioVersionId = 1,
+        [FromQuery] string view = "store",
+        [FromQuery] long? selectedStoreId = null,
+        [FromQuery] string? selectedDepartmentLabel = null,
+        [FromQuery] string? departmentLayout = null,
+        [FromQuery] bool expandAllBranches = false,
+        CancellationToken cancellationToken = default)
+    {
+        return _planningService.GetGridViewRootAsync(
+            new PlanningGridViewRequest(scenarioVersionId, view, selectedStoreId, selectedDepartmentLabel, departmentLayout, expandAllBranches),
+            cancellationToken);
+    }
+
+    [HttpGet("grid-view-children")]
+    public Task<GridViewBlockResponse> GetGridViewChildren(
+        [FromQuery] long scenarioVersionId = 1,
+        [FromQuery] string view = "store",
+        [FromQuery] long? selectedStoreId = null,
+        [FromQuery] string? selectedDepartmentLabel = null,
+        [FromQuery] string? departmentLayout = null,
+        [FromQuery] bool expandAllBranches = false,
+        [FromQuery] string parentViewRowId = "",
+        CancellationToken cancellationToken = default)
+    {
+        return _planningService.GetGridViewChildrenAsync(
+            new PlanningGridViewRequest(scenarioVersionId, view, selectedStoreId, selectedDepartmentLabel, departmentLayout, expandAllBranches),
+            parentViewRowId,
+            cancellationToken);
+    }
+
     [HttpGet("grid-branches")]
     public Task<GridBranchResponse> GetGridBranch(
         [FromQuery] long scenarioVersionId,
@@ -168,6 +200,12 @@ public sealed class PlanningController : ControllerBase
         return _planningService.GetPlanningStoreScopesAsync(cancellationToken);
     }
 
+    [HttpGet("planning-department-scopes")]
+    public Task<PlanningDepartmentScopeResponse> GetPlanningDepartmentScopes(CancellationToken cancellationToken)
+    {
+        return _planningService.GetPlanningDepartmentScopesAsync(cancellationToken);
+    }
+
     [HttpGet("store-profiles")]
     public Task<StoreProfileResponse> GetStoreProfiles(CancellationToken cancellationToken)
     {
@@ -220,11 +258,29 @@ public sealed class PlanningController : ControllerBase
         return await _planningService.ImportStoreProfilesAsync(stream, file.FileName, cancellationToken);
     }
 
+    [HttpPost("jobs/imports/store-profiles")]
+    [RequestSizeLimit(10_000_000)]
+    public async Task<StartAsyncJobResponse> QueueStoreProfileImportJob([FromForm] IFormFile file, CancellationToken cancellationToken)
+    {
+        await using var stream = file.OpenReadStream();
+        using var memory = new MemoryStream();
+        await stream.CopyToAsync(memory, cancellationToken);
+        var job = await _planningService.StartStoreProfileImportJobAsync(memory.ToArray(), file.FileName, GetRequiredUserId(), cancellationToken);
+        return new StartAsyncJobResponse(job.JobId);
+    }
+
     [HttpGet("exports/store-profiles")]
     public async Task<IActionResult> ExportStoreProfiles(CancellationToken cancellationToken = default)
     {
         var result = await _planningService.ExportStoreProfilesAsync(cancellationToken);
         return File(result.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", result.FileName);
+    }
+
+    [HttpPost("jobs/exports/store-profiles")]
+    public async Task<StartAsyncJobResponse> QueueStoreProfileExportJob(CancellationToken cancellationToken = default)
+    {
+        var job = await _planningService.StartStoreProfileExportJobAsync(GetRequiredUserId(), cancellationToken);
+        return new StartAsyncJobResponse(job.JobId);
     }
 
     [HttpGet("product-profiles")]
@@ -321,11 +377,29 @@ public sealed class PlanningController : ControllerBase
         return await _planningService.ImportInventoryProfilesAsync(stream, file.FileName, cancellationToken);
     }
 
+    [HttpPost("jobs/imports/inventory-profiles")]
+    [RequestSizeLimit(10_000_000)]
+    public async Task<StartAsyncJobResponse> QueueInventoryProfileImportJob([FromForm] IFormFile file, CancellationToken cancellationToken)
+    {
+        await using var stream = file.OpenReadStream();
+        using var memory = new MemoryStream();
+        await stream.CopyToAsync(memory, cancellationToken);
+        var job = await _planningService.StartInventoryProfileImportJobAsync(memory.ToArray(), file.FileName, GetRequiredUserId(), cancellationToken);
+        return new StartAsyncJobResponse(job.JobId);
+    }
+
     [HttpGet("exports/inventory-profiles")]
     public async Task<IActionResult> ExportInventoryProfiles(CancellationToken cancellationToken = default)
     {
         var result = await _planningService.ExportInventoryProfilesAsync(cancellationToken);
         return File(result.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", result.FileName);
+    }
+
+    [HttpPost("jobs/exports/inventory-profiles")]
+    public async Task<StartAsyncJobResponse> QueueInventoryProfileExportJob(CancellationToken cancellationToken = default)
+    {
+        var job = await _planningService.StartInventoryProfileExportJobAsync(GetRequiredUserId(), cancellationToken);
+        return new StartAsyncJobResponse(job.JobId);
     }
 
     [HttpGet("pricing-policies")]
@@ -364,11 +438,29 @@ public sealed class PlanningController : ControllerBase
         return await _planningService.ImportPricingPoliciesAsync(stream, file.FileName, cancellationToken);
     }
 
+    [HttpPost("jobs/imports/pricing-policies")]
+    [RequestSizeLimit(10_000_000)]
+    public async Task<StartAsyncJobResponse> QueuePricingPolicyImportJob([FromForm] IFormFile file, CancellationToken cancellationToken)
+    {
+        await using var stream = file.OpenReadStream();
+        using var memory = new MemoryStream();
+        await stream.CopyToAsync(memory, cancellationToken);
+        var job = await _planningService.StartPricingPolicyImportJobAsync(memory.ToArray(), file.FileName, GetRequiredUserId(), cancellationToken);
+        return new StartAsyncJobResponse(job.JobId);
+    }
+
     [HttpGet("exports/pricing-policies")]
     public async Task<IActionResult> ExportPricingPolicies(CancellationToken cancellationToken = default)
     {
         var result = await _planningService.ExportPricingPoliciesAsync(cancellationToken);
         return File(result.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", result.FileName);
+    }
+
+    [HttpPost("jobs/exports/pricing-policies")]
+    public async Task<StartAsyncJobResponse> QueuePricingPolicyExportJob(CancellationToken cancellationToken = default)
+    {
+        var job = await _planningService.StartPricingPolicyExportJobAsync(GetRequiredUserId(), cancellationToken);
+        return new StartAsyncJobResponse(job.JobId);
     }
 
     [HttpGet("seasonality-event-profiles")]
@@ -407,11 +499,29 @@ public sealed class PlanningController : ControllerBase
         return await _planningService.ImportSeasonalityEventProfilesAsync(stream, file.FileName, cancellationToken);
     }
 
+    [HttpPost("jobs/imports/seasonality-event-profiles")]
+    [RequestSizeLimit(10_000_000)]
+    public async Task<StartAsyncJobResponse> QueueSeasonalityEventImportJob([FromForm] IFormFile file, CancellationToken cancellationToken)
+    {
+        await using var stream = file.OpenReadStream();
+        using var memory = new MemoryStream();
+        await stream.CopyToAsync(memory, cancellationToken);
+        var job = await _planningService.StartSeasonalityEventImportJobAsync(memory.ToArray(), file.FileName, GetRequiredUserId(), cancellationToken);
+        return new StartAsyncJobResponse(job.JobId);
+    }
+
     [HttpGet("exports/seasonality-event-profiles")]
     public async Task<IActionResult> ExportSeasonalityEventProfiles(CancellationToken cancellationToken = default)
     {
         var result = await _planningService.ExportSeasonalityEventProfilesAsync(cancellationToken);
         return File(result.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", result.FileName);
+    }
+
+    [HttpPost("jobs/exports/seasonality-event-profiles")]
+    public async Task<StartAsyncJobResponse> QueueSeasonalityEventExportJob(CancellationToken cancellationToken = default)
+    {
+        var job = await _planningService.StartSeasonalityEventExportJobAsync(GetRequiredUserId(), cancellationToken);
+        return new StartAsyncJobResponse(job.JobId);
     }
 
     [HttpGet("vendor-supply-profiles")]
@@ -450,11 +560,29 @@ public sealed class PlanningController : ControllerBase
         return await _planningService.ImportVendorSupplyProfilesAsync(stream, file.FileName, cancellationToken);
     }
 
+    [HttpPost("jobs/imports/vendor-supply-profiles")]
+    [RequestSizeLimit(10_000_000)]
+    public async Task<StartAsyncJobResponse> QueueVendorSupplyImportJob([FromForm] IFormFile file, CancellationToken cancellationToken)
+    {
+        await using var stream = file.OpenReadStream();
+        using var memory = new MemoryStream();
+        await stream.CopyToAsync(memory, cancellationToken);
+        var job = await _planningService.StartVendorSupplyImportJobAsync(memory.ToArray(), file.FileName, GetRequiredUserId(), cancellationToken);
+        return new StartAsyncJobResponse(job.JobId);
+    }
+
     [HttpGet("exports/vendor-supply-profiles")]
     public async Task<IActionResult> ExportVendorSupplyProfiles(CancellationToken cancellationToken = default)
     {
         var result = await _planningService.ExportVendorSupplyProfilesAsync(cancellationToken);
         return File(result.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", result.FileName);
+    }
+
+    [HttpPost("jobs/exports/vendor-supply-profiles")]
+    public async Task<StartAsyncJobResponse> QueueVendorSupplyExportJob(CancellationToken cancellationToken = default)
+    {
+        var job = await _planningService.StartVendorSupplyExportJobAsync(GetRequiredUserId(), cancellationToken);
+        return new StartAsyncJobResponse(job.JobId);
     }
 
     [HttpPost("product-hierarchy/delete")]
@@ -473,11 +601,29 @@ public sealed class PlanningController : ControllerBase
         return await _planningService.ImportProductProfilesAsync(stream, file.FileName, cancellationToken);
     }
 
+    [HttpPost("jobs/imports/product-profiles")]
+    [RequestSizeLimit(30_000_000)]
+    public async Task<StartAsyncJobResponse> QueueProductProfileImportJob([FromForm] IFormFile file, CancellationToken cancellationToken)
+    {
+        await using var stream = file.OpenReadStream();
+        using var memory = new MemoryStream();
+        await stream.CopyToAsync(memory, cancellationToken);
+        var job = await _planningService.StartProductProfileImportJobAsync(memory.ToArray(), file.FileName, GetRequiredUserId(), cancellationToken);
+        return new StartAsyncJobResponse(job.JobId);
+    }
+
     [HttpGet("exports/product-profiles")]
     public async Task<IActionResult> ExportProductProfiles(CancellationToken cancellationToken = default)
     {
         var result = await _planningService.ExportProductProfilesAsync(cancellationToken);
         return File(result.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", result.FileName);
+    }
+
+    [HttpPost("jobs/exports/product-profiles")]
+    public async Task<StartAsyncJobResponse> QueueProductProfileExportJob(CancellationToken cancellationToken = default)
+    {
+        var job = await _planningService.StartProductProfileExportJobAsync(GetRequiredUserId(), cancellationToken);
+        return new StartAsyncJobResponse(job.JobId);
     }
 
     [HttpPost("imports/workbook")]
@@ -496,11 +642,49 @@ public sealed class PlanningController : ControllerBase
             cancellationToken);
     }
 
+    [HttpPost("jobs/imports/workbook")]
+    [RequestSizeLimit(10_000_000)]
+    public async Task<StartAsyncJobResponse> QueueWorkbookImportJob([FromForm] long scenarioVersionId, [FromForm] IFormFile file, CancellationToken cancellationToken)
+    {
+        await using var stream = file.OpenReadStream();
+        using var memory = new MemoryStream();
+        await stream.CopyToAsync(memory, cancellationToken);
+        var job = await _planningService.StartWorkbookImportJobAsync(scenarioVersionId, memory.ToArray(), file.FileName, GetRequiredUserId(), cancellationToken);
+        return new StartAsyncJobResponse(job.JobId);
+    }
+
     [HttpGet("exports/workbook")]
     public async Task<IActionResult> ExportWorkbook([FromQuery] long scenarioVersionId = 1, CancellationToken cancellationToken = default)
     {
         var result = await _planningService.ExportWorkbookAsync(scenarioVersionId, cancellationToken);
         return File(result.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", result.FileName);
+    }
+
+    [HttpPost("jobs/exports/workbook")]
+    public async Task<StartAsyncJobResponse> QueueWorkbookExportJob([FromQuery] long scenarioVersionId = 1, CancellationToken cancellationToken = default)
+    {
+        var job = await _planningService.StartWorkbookExportJobAsync(scenarioVersionId, GetRequiredUserId(), cancellationToken);
+        return new StartAsyncJobResponse(job.JobId);
+    }
+
+    [HttpPost("jobs/reconciliation")]
+    public async Task<StartAsyncJobResponse> QueueReconciliationJob([FromQuery] long scenarioVersionId = 1, CancellationToken cancellationToken = default)
+    {
+        var job = await _planningService.StartReconciliationJobAsync(scenarioVersionId, GetRequiredUserId(), cancellationToken);
+        return new StartAsyncJobResponse(job.JobId);
+    }
+
+    [HttpGet("jobs/{jobId}")]
+    public Task<AsyncJobStatusResponse> GetAsyncJobStatus([FromRoute] string jobId, CancellationToken cancellationToken = default)
+    {
+        return _planningService.GetAsyncJobStatusAsync(jobId, cancellationToken);
+    }
+
+    [HttpGet("jobs/{jobId}/download")]
+    public async Task<IActionResult> DownloadAsyncJobResult([FromRoute] string jobId, CancellationToken cancellationToken = default)
+    {
+        var result = await _planningService.DownloadAsyncJobResultAsync(jobId, cancellationToken);
+        return File(result.Content, result.ContentType, result.FileName);
     }
 
     [HttpPost("test/reset")]

@@ -14,6 +14,9 @@ This document lists the current Phase 1 UAT API endpoints and describes the main
 ## 2. Core Planning Query Endpoints
 
 - `GET /api/v1/planning-store-scopes`
+- `GET /api/v1/planning-department-scopes`
+- `GET /api/v1/grid-view-root`
+- `GET /api/v1/grid-view-children`
 - `GET /api/v1/grid-slices`
 - `GET /api/v1/grid-branches`
 - `GET /api/v1/audit`
@@ -77,7 +80,27 @@ This document lists the current Phase 1 UAT API endpoints and describes the main
 - `POST /api/v1/vendor-supply-profiles/delete`
 - `POST /api/v1/vendor-supply-profiles/inactivate`
 
-## 6. Import And Export Endpoints
+## 6. Async Job And Reconciliation Endpoints
+
+- `POST /api/v1/jobs/imports/workbook`
+- `POST /api/v1/jobs/exports/workbook`
+- `POST /api/v1/jobs/imports/store-profiles`
+- `POST /api/v1/jobs/exports/store-profiles`
+- `POST /api/v1/jobs/imports/product-profiles`
+- `POST /api/v1/jobs/exports/product-profiles`
+- `POST /api/v1/jobs/imports/inventory-profiles`
+- `POST /api/v1/jobs/exports/inventory-profiles`
+- `POST /api/v1/jobs/imports/pricing-policies`
+- `POST /api/v1/jobs/exports/pricing-policies`
+- `POST /api/v1/jobs/imports/seasonality-event-profiles`
+- `POST /api/v1/jobs/exports/seasonality-event-profiles`
+- `POST /api/v1/jobs/imports/vendor-supply-profiles`
+- `POST /api/v1/jobs/exports/vendor-supply-profiles`
+- `POST /api/v1/jobs/reconciliation`
+- `GET /api/v1/jobs/{jobId}`
+- `GET /api/v1/jobs/{jobId}/download`
+
+## 7. Legacy Direct Import And Export Endpoints
 
 ### 6.1 Master-data imports
 
@@ -102,7 +125,7 @@ This document lists the current Phase 1 UAT API endpoints and describes the main
 - `POST /api/v1/imports/workbook`
 - `GET /api/v1/exports/workbook`
 
-## 7. Main Transaction Flows
+## 8. Main Transaction Flows
 
 ### 7.1 Sign-in and startup
 
@@ -113,21 +136,21 @@ This document lists the current Phase 1 UAT API endpoints and describes the main
    - active slice for the current planning view
 4. Grid renders only the scoped planning data needed for the starting view.
 
-### 7.2 Store-view branch expansion
+### 8.2 Store-view branch expansion
 
 1. User opens `Planning - by Store`.
-2. App loads the scoped root slice.
-3. When the user expands a store, department, or class node, the app requests `grid-branches`.
-4. Returned rows are merged into the current grid in place.
+2. App loads the scoped server-composed root view from `grid-view-root`.
+3. AG Grid SSRM requests child blocks from `grid-view-children` when a node is expanded.
+4. Returned rows are streamed into the grid as server-side blocks instead of being merged into a client-owned slice.
 
-### 7.3 Department-view branch expansion
+### 8.3 Department-view branch expansion
 
 1. User opens `Planning - by Department`.
 2. App starts with departments collapsed.
 3. Expansion follows the selected department layout:
    - `Department -> Store -> Class -> Subclass`
    - `Department -> Class -> Store -> Subclass`
-4. Child rows are loaded on demand and merged into the current grid.
+4. Department rows are composed on the server and child rows are loaded on demand through `grid-view-children`.
 
 ### 7.4 Bottom-up leaf edit
 
@@ -168,25 +191,37 @@ This document lists the current Phase 1 UAT API endpoints and describes the main
 4. Server returns the changed patches and updated depth state.
 5. Grid applies the returned changes.
 
-### 7.8 Import
+### 8.8 Async Import
 
 1. User opens a maintenance workspace.
 2. User selects the relevant workbook.
-3. App sends the file to the matching import endpoint.
-4. Server validates workbook structure and business rows.
-5. If there are errors, the import returns an exception workbook.
-6. If valid, the rows are inserted or updated by natural business key.
+3. App queues the file through the matching async job endpoint.
+4. App polls `GET /jobs/{jobId}` and shows live progress text in the status card.
+5. Server validates workbook structure and business rows.
+6. If there are errors, the async job exposes an exception workbook download.
+7. If valid, the rows are inserted or updated by natural business key and reconciliation is run automatically.
 
-### 7.9 Export
+### 8.9 Async Export
 
 1. User opens a maintenance workspace or planning workspace.
 2. User clicks export.
-3. Server builds the workbook in the current canonical format.
-4. Browser downloads the generated file.
+3. App queues the export job.
+4. App polls the job status until completion.
+5. Browser downloads the generated file when it is ready.
 
-## 8. Current Behavior Notes
+### 8.10 Reconciliation
+
+1. User clicks `Run Reconciliation`.
+2. App queues `POST /api/v1/jobs/reconciliation`.
+3. Server checks additive product and time rollups against the canonical model.
+4. App shows progress in the status card.
+5. On completion, the reconciliation report is downloadable as JSON.
+
+## 9. Current Behavior Notes
 
 - API authorization is active.
 - `undo` and `redo` depth is capped at `30`.
-- Import and export are still synchronous request-response operations in Phase 1.
+- Department view is server-composed.
+- AG Grid now runs on Server-Side Row Model.
+- Import, export, and reconciliation are async job flows with progress reporting.
 - The current UAT runtime is optimized for scoped planning interactions, not unlimited full-hierarchy expansion.

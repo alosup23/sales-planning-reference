@@ -1,18 +1,13 @@
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiRequestError,
-  downloadInventoryProfileExport,
-  downloadProductProfileExport,
-  downloadPricingPolicyExport,
-  downloadSeasonalityEventProfileExport,
-  downloadStoreProfileExport,
-  downloadVendorSupplyProfileExport,
-  downloadBase64Workbook,
-  downloadWorkbookExport,
-  getGridSlice,
-  getGridBranchRows,
+  downloadAsyncJobResult,
+  getAsyncJobStatus,
+  getGridViewChildren,
+  getGridViewRoot,
   getHierarchyMappings,
+  getPlanningDepartmentScopes,
   getInventoryProfiles,
   getPlanningStoreScopes,
   getUndoRedoAvailability,
@@ -46,30 +41,38 @@ import {
   postLock,
   postProductHierarchy,
   postProductProfile,
-  postProductProfileImport,
   postProductProfileOption,
   postInactivateProductProfile,
   postInactivateSeasonalityEventProfile,
   postInactivatePricingPolicy,
   postSave,
   postSeasonalityEventProfile,
-  postSeasonalityEventProfileImport,
   postSplash,
   postUndo,
   postRedo,
   postInventoryProfile,
-  postInventoryProfileImport,
   postPricingPolicy,
-  postPricingPolicyImport,
   postStoreProfile,
-  postStoreProfileImport,
   postStoreProfileOption,
   postDeleteStoreProfileOption,
   postInactivateStoreProfile,
   postInactivateVendorSupplyProfile,
   postVendorSupplyProfile,
-  postVendorSupplyProfileImport,
-  postWorkbookImport,
+  queueInventoryProfileExportJob,
+  queueInventoryProfileImportJob,
+  queuePricingPolicyExportJob,
+  queuePricingPolicyImportJob,
+  queueProductProfileExportJob,
+  queueProductProfileImportJob,
+  queueReconciliationJob,
+  queueSeasonalityEventExportJob,
+  queueSeasonalityEventImportJob,
+  queueStoreProfileExportJob,
+  queueStoreProfileImportJob,
+  queueVendorSupplyExportJob,
+  queueVendorSupplyImportJob,
+  queueWorkbookExportJob,
+  queueWorkbookImportJob,
 } from "./lib/api";
 import { SignedInUserMenu } from "./components/AuthShell";
 import { HierarchyMaintenanceSheet } from "./components/HierarchyMaintenanceSheet";
@@ -80,9 +83,9 @@ import { SeasonalityEventMaintenanceSheet } from "./components/SeasonalityEventM
 import { StoreProfileMaintenanceSheet } from "./components/StoreProfileMaintenanceSheet";
 import { VendorSupplyProfileMaintenanceSheet } from "./components/VendorSupplyProfileMaintenanceSheet";
 import { authEnabled } from "./lib/auth";
-import { applyPlanningGridPatch, mergeGridRowsIntoSlice } from "./lib/gridPatch";
 import type {
   AddRowResponse,
+  AsyncJobStatus,
   GridCell,
   GridMeasure,
   PlanningGridPatch,
@@ -90,6 +93,7 @@ import type {
   GridSliceResponse,
   InventoryProfile,
   PlanningStoreScope,
+  PlanningDepartmentScopeResponse,
   PlanningInsightResponse,
   PricingPolicy,
   ProductHierarchyCatalog,
@@ -148,11 +152,11 @@ export default function App() {
   const [vendorPageNumber, setVendorPageNumber] = useState(1);
   const [selectedPlanningStoreId, setSelectedPlanningStoreId] = useState<PlanningStoreScopeSelection>(null);
   const [selectedDepartmentLabel, setSelectedDepartmentLabel] = useState<string | null>(null);
-  const [departmentScopeOptions, setDepartmentScopeOptions] = useState<string[]>([]);
-  const [expandedBranchNodeIds, setExpandedBranchNodeIds] = useState<number[]>([]);
+  const [activeAsyncJob, setActiveAsyncJob] = useState<AsyncJobStatus | null>(null);
+  const [planningGridRefreshToken, setPlanningGridRefreshToken] = useState(0);
   const [expandAllBranches, setExpandAllBranches] = useState(false);
-  const loadingBranchNodeIdsRef = useRef<Set<number>>(new Set());
   const planningStoreScopesQueryKey = ["planning-store-scopes"] as const;
+  const planningDepartmentScopesQueryKey = ["planning-department-scopes"] as const;
   const undoRedoQueryKey = ["undo-redo-availability", 1] as const;
   const planningViewActive = activeView === "planning-store" || activeView === "planning-department";
   const planningStoreScopeQuery = useQuery({
@@ -161,26 +165,14 @@ export default function App() {
     enabled: planningViewActive,
   });
   const effectivePlanningStoreId = selectedPlanningStoreId === "all" ? null : selectedPlanningStoreId;
-  const planningScopeCacheKey = activeView === "planning-store"
-    ? selectedPlanningStoreId ?? "__pending__"
-    : "__all-stores__";
-  const bootstrapDepartmentExpansionKey = activeView === "planning-department" && !selectedDepartmentLabel && !expandAllBranches
-    ? (planningStoreScopeQuery.data?.stores.map((store) => store.rootProductNodeId).join(",") ?? "__loading__")
-    : "__none__";
-  const requestedExpandedBranchNodeIds = useMemo(() => {
-    if (activeView !== "planning-department" || selectedDepartmentLabel || expandAllBranches) {
-      return expandedBranchNodeIds;
-    }
-
-    const storeRootIds = planningStoreScopeQuery.data?.stores
-      .map((store) => store.rootProductNodeId)
-      .filter((productNodeId) => Number.isFinite(productNodeId) && productNodeId > 0) ?? [];
-    return [...new Set([...storeRootIds, ...expandedBranchNodeIds])].sort((left, right) => left - right);
-  }, [activeView, expandAllBranches, expandedBranchNodeIds, planningStoreScopeQuery.data, selectedDepartmentLabel]);
-  const gridExpansionToken = "branch-cache";
+  const departmentScopeQuery = useQuery({
+    queryKey: planningDepartmentScopesQueryKey,
+    queryFn: getPlanningDepartmentScopes,
+    enabled: activeView === "planning-department",
+  });
   const gridSliceQueryKey = useMemo(
-    () => ["grid-slice", 1, activeView, planningScopeCacheKey, selectedDepartmentLabel, bootstrapDepartmentExpansionKey, gridExpansionToken, expandAllBranches ? "all" : "branch"] as const,
-    [activeView, bootstrapDepartmentExpansionKey, expandAllBranches, gridExpansionToken, planningScopeCacheKey, selectedDepartmentLabel],
+    () => ["grid-view-root", 1, activeView, selectedPlanningStoreId ?? "__pending__", selectedDepartmentLabel, departmentLayout] as const,
+    [activeView, departmentLayout, selectedDepartmentLabel, selectedPlanningStoreId],
   );
 
   useEffect(() => {
@@ -189,10 +181,11 @@ export default function App() {
 
   const gridQuery = useQuery({
     queryKey: gridSliceQueryKey,
-    queryFn: () => getGridSlice({
+    queryFn: () => getGridViewRoot({
+      view: activeView === "planning-department" ? "department" : "store",
       selectedStoreId: activeView === "planning-store" ? effectivePlanningStoreId : null,
       selectedDepartmentLabel: activeView === "planning-department" ? selectedDepartmentLabel : null,
-      expandedProductNodeIds: activeView === "planning-store" || activeView === "planning-department" ? requestedExpandedBranchNodeIds : [],
+      departmentLayout: activeView === "planning-department" ? departmentLayout : null,
       expandAllBranches,
     }),
     enabled: activeView === "planning-store" ? selectedPlanningStoreId !== null : activeView === "planning-department",
@@ -269,13 +262,6 @@ export default function App() {
   }, [selectedPlanningStoreId, planningStoreScopeQuery.data]);
 
   useEffect(() => {
-    loadingBranchNodeIdsRef.current.clear();
-    setExpandedBranchNodeIds([]);
-  }, [selectedPlanningStoreId, selectedDepartmentLabel]);
-
-  useEffect(() => {
-    loadingBranchNodeIdsRef.current.clear();
-    setExpandedBranchNodeIds([]);
     setExpandAllBranches(false);
   }, [activeView, departmentLayout]);
 
@@ -288,32 +274,6 @@ export default function App() {
     setSelectedYearId(firstYear?.timePeriodId ?? null);
   }, [gridQuery.data, selectedYearId]);
 
-  const applyPatchToVisiblePlanningSlice = (patch?: PlanningGridPatch | null) => {
-    if (!patch) {
-      return false;
-    }
-
-    let didChange = false;
-    queryClient.setQueryData<GridSliceResponse | undefined>(gridSliceQueryKey, (current) => {
-      const next = applyPlanningGridPatch(current, patch);
-      didChange = didChange || next !== current;
-      return next;
-    });
-
-    return didChange;
-  };
-
-  const mergeRowsIntoVisiblePlanningSlice = (rows: GridRow[]) => {
-    let didChange = false;
-    queryClient.setQueryData<GridSliceResponse | undefined>(gridSliceQueryKey, (current) => {
-      const next = mergeGridRowsIntoSlice(current, rows);
-      didChange = next !== current;
-      return next;
-    });
-
-    return didChange;
-  };
-
   const syncUndoRedoAvailability = (availability?: UndoRedoAvailability | null) => {
     if (!availability) {
       return;
@@ -323,11 +283,11 @@ export default function App() {
   };
 
   const invalidatePlanningSliceCaches = async () => {
-    await queryClient.invalidateQueries({ queryKey: ["grid-slice", 1], refetchType: "none" });
+    await queryClient.invalidateQueries({ queryKey: ["grid-view-root", 1], refetchType: "none" });
   };
 
   const clearInactivePlanningSliceCaches = () => {
-    queryClient.removeQueries({ queryKey: ["grid-slice", 1], type: "inactive" });
+    queryClient.removeQueries({ queryKey: ["grid-view-root", 1], type: "inactive" });
   };
 
   const refreshPlanningQueries = async ({
@@ -350,7 +310,7 @@ export default function App() {
     }
 
     if (includeInactiveGrid) {
-      tasks.push(queryClient.refetchQueries({ queryKey: ["grid-slice", 1], type: "inactive" }));
+      tasks.push(queryClient.refetchQueries({ queryKey: ["grid-view-root", 1], type: "inactive" }));
     }
 
     if (includeStoreScopes) {
@@ -379,21 +339,21 @@ export default function App() {
     },
   ) => {
     syncUndoRedoAvailability(result.availability);
-    const patched = !(options?.forceGridRefresh ?? false) && applyPatchToVisiblePlanningSlice(result.patch);
     await invalidatePlanningSliceCaches();
     clearInactivePlanningSliceCaches();
+    setPlanningGridRefreshToken((current) => current + 1);
 
     await refreshPlanningQueries({
       includeStoreScopes: options?.includeStoreScopes ?? false,
       includeUndoRedo: !result.availability,
       includeInsights: true,
-      includeGrid: !patched,
+      includeGrid: true,
     });
   };
 
   const refresh = async () => {
     await Promise.all([
-      queryClient.refetchQueries({ queryKey: ["grid-slice", 1], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["grid-view-root", 1], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["planning-store-scopes"], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["undo-redo-availability", 1], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["hierarchy-mappings"], type: "active" }),
@@ -407,6 +367,48 @@ export default function App() {
       queryClient.refetchQueries({ queryKey: ["seasonality-event-profiles"], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["vendor-supply-profiles"], type: "active" }),
     ]);
+  };
+
+  const waitForAsyncJob = async (
+    jobId: string,
+    options?: {
+      includeStoreScopes?: boolean;
+      includePlanningGrid?: boolean;
+      includeMaintenanceRefresh?: boolean;
+      autoDownloadResult?: boolean;
+    },
+  ) => {
+    let latestStatus: AsyncJobStatus | null = null;
+
+    while (true) {
+      latestStatus = await getAsyncJobStatus(jobId);
+      setActiveAsyncJob(latestStatus);
+
+      if (latestStatus.status === "completed") {
+        if (options?.autoDownloadResult && latestStatus.hasDownload) {
+          await downloadAsyncJobResult(jobId);
+        } else if (latestStatus.downloadFileName?.toLowerCase().endsWith(".xlsx") && latestStatus.hasDownload) {
+          await downloadAsyncJobResult(jobId);
+        }
+
+        if (options?.includePlanningGrid) {
+          setPlanningGridRefreshToken((current) => current + 1);
+          await invalidatePlanningSliceCaches();
+        }
+
+        if (options?.includeStoreScopes || options?.includeMaintenanceRefresh || options?.includePlanningGrid) {
+          await refresh();
+        }
+
+        return latestStatus;
+      }
+
+      if (latestStatus.status === "failed") {
+        throw new Error(latestStatus.errorMessage ?? "The background job failed.");
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, 1200));
+    }
   };
 
   const editMutation = useMutation({
@@ -480,22 +482,30 @@ export default function App() {
   });
 
   const importMutation = useMutation({
-    mutationFn: ({ file, scenarioVersionId }: { file: File; scenarioVersionId: number }) => postWorkbookImport(scenarioVersionId, file),
-    onSuccess: async (result) => {
+    mutationFn: ({ file, scenarioVersionId }: { file: File; scenarioVersionId: number }) => queueWorkbookImportJob(scenarioVersionId, file),
+    onSuccess: async (jobId) => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      if (result.exceptionWorkbookBase64 && result.exceptionFileName) {
-        downloadBase64Workbook(result.exceptionWorkbookBase64, result.exceptionFileName);
-      }
-
-      await refreshPlanningQueries({ includeStoreScopes: true });
+      await waitForAsyncJob(jobId, { includeStoreScopes: true, includePlanningGrid: true });
     },
     onError: (error: Error) => setLastError(error.message),
   });
 
   const exportMutation = useMutation({
-    mutationFn: downloadWorkbookExport,
-    onSuccess: () => setLastError(null),
+    mutationFn: () => queueWorkbookExportJob(1),
+    onSuccess: async (jobId) => {
+      setLastError(null);
+      await waitForAsyncJob(jobId, { autoDownloadResult: true });
+    },
+    onError: (error: Error) => setLastError(error.message),
+  });
+
+  const reconciliationMutation = useMutation({
+    mutationFn: () => queueReconciliationJob(1),
+    onSuccess: async (jobId) => {
+      setLastError(null);
+      await waitForAsyncJob(jobId, { autoDownloadResult: true });
+    },
     onError: (error: Error) => setLastError(error.message),
   });
 
@@ -602,22 +612,21 @@ export default function App() {
   });
 
   const storeProfileImportMutation = useMutation({
-    mutationFn: postStoreProfileImport,
-    onSuccess: async (result) => {
+    mutationFn: queueStoreProfileImportJob,
+    onSuccess: async (jobId) => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      if (result.exceptionWorkbookBase64 && result.exceptionFileName) {
-        downloadBase64Workbook(result.exceptionWorkbookBase64, result.exceptionFileName);
-      }
-
-      await refresh();
+      await waitForAsyncJob(jobId, { includeStoreScopes: true, includeMaintenanceRefresh: true, includePlanningGrid: true });
     },
     onError: (error: Error) => setLastError(error.message),
   });
 
   const storeProfileExportMutation = useMutation({
-    mutationFn: downloadStoreProfileExport,
-    onSuccess: () => setLastError(null),
+    mutationFn: queueStoreProfileExportJob,
+    onSuccess: async (jobId) => {
+      setLastError(null);
+      await waitForAsyncJob(jobId, { autoDownloadResult: true });
+    },
     onError: (error: Error) => setLastError(error.message),
   });
 
@@ -672,22 +681,21 @@ export default function App() {
   });
 
   const productProfileImportMutation = useMutation({
-    mutationFn: postProductProfileImport,
-    onSuccess: async (result) => {
+    mutationFn: queueProductProfileImportJob,
+    onSuccess: async (jobId) => {
       setLastError(null);
       setHasUnsavedChanges(true);
-      if (result.exceptionWorkbookBase64 && result.exceptionFileName) {
-        downloadBase64Workbook(result.exceptionWorkbookBase64, result.exceptionFileName);
-      }
-
-      await refresh();
+      await waitForAsyncJob(jobId, { includeMaintenanceRefresh: true, includePlanningGrid: true });
     },
     onError: (error: Error) => setLastError(error.message),
   });
 
   const productProfileExportMutation = useMutation({
-    mutationFn: downloadProductProfileExport,
-    onSuccess: () => setLastError(null),
+    mutationFn: queueProductProfileExportJob,
+    onSuccess: async (jobId) => {
+      setLastError(null);
+      await waitForAsyncJob(jobId, { autoDownloadResult: true });
+    },
     onError: (error: Error) => setLastError(error.message),
   });
 
@@ -759,21 +767,20 @@ export default function App() {
   });
 
   const inventoryProfileImportMutation = useMutation({
-    mutationFn: postInventoryProfileImport,
-    onSuccess: async (result) => {
+    mutationFn: queueInventoryProfileImportJob,
+    onSuccess: async (jobId) => {
       setLastError(null);
-      if (result.exceptionWorkbookBase64 && result.exceptionFileName) {
-        downloadBase64Workbook(result.exceptionWorkbookBase64, result.exceptionFileName);
-      }
-
-      await refresh();
+      await waitForAsyncJob(jobId, { includeMaintenanceRefresh: true, includePlanningGrid: true });
     },
     onError: (error: Error) => setLastError(error.message),
   });
 
   const inventoryProfileExportMutation = useMutation({
-    mutationFn: downloadInventoryProfileExport,
-    onSuccess: () => setLastError(null),
+    mutationFn: queueInventoryProfileExportJob,
+    onSuccess: async (jobId) => {
+      setLastError(null);
+      await waitForAsyncJob(jobId, { autoDownloadResult: true });
+    },
     onError: (error: Error) => setLastError(error.message),
   });
 
@@ -805,21 +812,20 @@ export default function App() {
   });
 
   const pricingPolicyImportMutation = useMutation({
-    mutationFn: postPricingPolicyImport,
-    onSuccess: async (result) => {
+    mutationFn: queuePricingPolicyImportJob,
+    onSuccess: async (jobId) => {
       setLastError(null);
-      if (result.exceptionWorkbookBase64 && result.exceptionFileName) {
-        downloadBase64Workbook(result.exceptionWorkbookBase64, result.exceptionFileName);
-      }
-
-      await refresh();
+      await waitForAsyncJob(jobId, { includeMaintenanceRefresh: true, includePlanningGrid: true });
     },
     onError: (error: Error) => setLastError(error.message),
   });
 
   const pricingPolicyExportMutation = useMutation({
-    mutationFn: downloadPricingPolicyExport,
-    onSuccess: () => setLastError(null),
+    mutationFn: queuePricingPolicyExportJob,
+    onSuccess: async (jobId) => {
+      setLastError(null);
+      await waitForAsyncJob(jobId, { autoDownloadResult: true });
+    },
     onError: (error: Error) => setLastError(error.message),
   });
 
@@ -851,21 +857,20 @@ export default function App() {
   });
 
   const seasonalityEventImportMutation = useMutation({
-    mutationFn: postSeasonalityEventProfileImport,
-    onSuccess: async (result) => {
+    mutationFn: queueSeasonalityEventImportJob,
+    onSuccess: async (jobId) => {
       setLastError(null);
-      if (result.exceptionWorkbookBase64 && result.exceptionFileName) {
-        downloadBase64Workbook(result.exceptionWorkbookBase64, result.exceptionFileName);
-      }
-
-      await refresh();
+      await waitForAsyncJob(jobId, { includeMaintenanceRefresh: true, includePlanningGrid: true });
     },
     onError: (error: Error) => setLastError(error.message),
   });
 
   const seasonalityEventExportMutation = useMutation({
-    mutationFn: downloadSeasonalityEventProfileExport,
-    onSuccess: () => setLastError(null),
+    mutationFn: queueSeasonalityEventExportJob,
+    onSuccess: async (jobId) => {
+      setLastError(null);
+      await waitForAsyncJob(jobId, { autoDownloadResult: true });
+    },
     onError: (error: Error) => setLastError(error.message),
   });
 
@@ -897,21 +902,20 @@ export default function App() {
   });
 
   const vendorSupplyImportMutation = useMutation({
-    mutationFn: postVendorSupplyProfileImport,
-    onSuccess: async (result) => {
+    mutationFn: queueVendorSupplyImportJob,
+    onSuccess: async (jobId) => {
       setLastError(null);
-      if (result.exceptionWorkbookBase64 && result.exceptionFileName) {
-        downloadBase64Workbook(result.exceptionWorkbookBase64, result.exceptionFileName);
-      }
-
-      await refresh();
+      await waitForAsyncJob(jobId, { includeMaintenanceRefresh: true, includePlanningGrid: true });
     },
     onError: (error: Error) => setLastError(error.message),
   });
 
   const vendorSupplyExportMutation = useMutation({
-    mutationFn: downloadVendorSupplyProfileExport,
-    onSuccess: () => setLastError(null),
+    mutationFn: queueVendorSupplyExportJob,
+    onSuccess: async (jobId) => {
+      setLastError(null);
+      await waitForAsyncJob(jobId, { autoDownloadResult: true });
+    },
     onError: (error: Error) => setLastError(error.message),
   });
 
@@ -938,6 +942,7 @@ export default function App() {
     importMutation.isPending ||
     exportMutation.isPending ||
     growthFactorMutation.isPending ||
+    reconciliationMutation.isPending ||
     saveMutation.isPending ||
     addHierarchyDepartmentMutation.isPending ||
     addHierarchyClassMutation.isPending ||
@@ -982,6 +987,7 @@ export default function App() {
   const statusText = useMemo(() => {
     const planningViewActive = activeView === "planning-store" || activeView === "planning-department";
     if ((planningViewActive && (planningStoreScopeQuery.isLoading || gridQuery.isLoading || gridQuery.isFetching))
+      || (activeView === "planning-department" && departmentScopeQuery.isLoading)
       || (activeView === "store-profile" && storeProfileQuery.isLoading)
       || (activeView === "hierarchy" && hierarchyQuery.isLoading)
       || (activeView === "store-profile" && storeProfileOptionsQuery.isLoading)
@@ -993,12 +999,17 @@ export default function App() {
       return "Loading planning slice...";
     }
 
+    if (activeAsyncJob && activeAsyncJob.status !== "completed") {
+      return `${activeAsyncJob.operation.split("-").join(" ")}: ${activeAsyncJob.progressMessage} (${activeAsyncJob.progressPercent}%)`;
+    }
+
     if (isMutating) {
       return "Applying changes...";
     }
 
     const activeError =
       (planningViewActive ? planningStoreScopeQuery.error : null) ??
+      (activeView === "planning-department" ? departmentScopeQuery.error : null) ??
       (planningViewActive ? gridQuery.error : null) ??
       (activeView === "store-profile" ? storeProfileQuery.error : null) ??
       (activeView === "hierarchy" ? hierarchyQuery.error : null) ??
@@ -1045,6 +1056,14 @@ export default function App() {
       return `All changes saved. Last checkpoint ${new Date(lastSavedAt).toLocaleTimeString()}.`;
     }
 
+    if (activeAsyncJob?.status === "completed") {
+      if (activeAsyncJob.operation === "reconciliation" && activeAsyncJob.summary) {
+        return `Reconciliation completed. ${activeAsyncJob.summary.mismatchCount ?? 0} mismatches across ${activeAsyncJob.summary.checkedCellCount ?? 0} checked cells.`;
+      }
+
+      return `${activeAsyncJob.operation.split("-").join(" ")} completed.`;
+    }
+
     return activeView === "hierarchy"
       ? "Department / Class maintenance sheet ready."
       : activeView === "store-profile"
@@ -1060,48 +1079,15 @@ export default function App() {
                 : activeView === "vendor-supply"
                   ? "Vendor supply maintenance ready."
       : "Multi-year planning grid ready.";
-  }, [activeView, gridQuery.error, gridQuery.isFetching, gridQuery.isLoading, hasUnsavedChanges, hierarchyQuery.error, hierarchyQuery.isLoading, inventoryProfileQuery.error, inventoryProfileQuery.isLoading, isMutating, lastError, lastSavedAt, planningStoreScopeQuery.error, planningStoreScopeQuery.isLoading, pricingPolicyQuery.error, pricingPolicyQuery.isLoading, productHierarchyQuery.error, productHierarchyQuery.isLoading, productProfileOptionsQuery.error, productProfileOptionsQuery.isLoading, productProfileQuery.error, productProfileQuery.isLoading, seasonalityEventQuery.error, seasonalityEventQuery.isLoading, storeProfileOptionsQuery.error, storeProfileOptionsQuery.isLoading, storeProfileQuery.error, storeProfileQuery.isLoading, vendorSupplyQuery.error, vendorSupplyQuery.isLoading]);
+  }, [activeAsyncJob, activeView, departmentScopeQuery.error, departmentScopeQuery.isLoading, gridQuery.error, gridQuery.isFetching, gridQuery.isLoading, hasUnsavedChanges, hierarchyQuery.error, hierarchyQuery.isLoading, inventoryProfileQuery.error, inventoryProfileQuery.isLoading, isMutating, lastError, lastSavedAt, planningStoreScopeQuery.error, planningStoreScopeQuery.isLoading, pricingPolicyQuery.error, pricingPolicyQuery.isLoading, productHierarchyQuery.error, productHierarchyQuery.isLoading, productProfileOptionsQuery.error, productProfileOptionsQuery.isLoading, productProfileQuery.error, productProfileQuery.isLoading, seasonalityEventQuery.error, seasonalityEventQuery.isLoading, storeProfileOptionsQuery.error, storeProfileOptionsQuery.isLoading, storeProfileQuery.error, storeProfileQuery.isLoading, vendorSupplyQuery.error, vendorSupplyQuery.isLoading]);
 
-  const storeViewData = useMemo(
-    () => (gridQuery.data ? buildStoreView(gridQuery.data) : null),
-    [gridQuery.data],
-  );
-  const departmentViewData = useMemo(
-    () => (gridQuery.data ? buildDepartmentView(gridQuery.data, departmentLayout) : null),
-    [departmentLayout, gridQuery.data],
-  );
-  const activeGridData = activeView === "planning-department" ? departmentViewData : storeViewData;
-
-  useEffect(() => {
-    if (!departmentViewData) {
-      return;
-    }
-
-    const labels = departmentViewData.rows
-      .filter((row) => row.structureRole === "department" && row.level === 1)
-      .map((row) => row.label)
-      .filter((label, index, values) => values.indexOf(label) === index)
-      .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
-
-    if (labels.length === 0) {
-      return;
-    }
-
-    setDepartmentScopeOptions((current) => {
-      if (current.length === labels.length && current.every((value, index) => value === labels[index])) {
-        return current;
-      }
-
-      return labels;
-    });
-  }, [departmentViewData]);
+  const activeGridData = gridQuery.data ?? null;
 
   const planningReady = (activeView !== "planning-store" && activeView !== "planning-department")
     || (!!planningStoreScopeQuery.data
+      && (activeView !== "planning-department" || !!departmentScopeQuery.data)
       && (activeView !== "planning-store" || selectedPlanningStoreId !== null)
-      && !!gridQuery.data
-      && !!storeViewData
-      && !!departmentViewData);
+      && !!gridQuery.data);
   const hierarchyReady = activeView !== "hierarchy" || !!hierarchyQuery.data;
   const storeProfileReady = activeView !== "store-profile" || (!!storeProfileQuery.data && !!storeProfileOptionsQuery.data);
   const productMaintenanceReady = activeView !== "product-profile" || (productProfileQuery.data && productProfileOptionsQuery.data && productHierarchyQuery.data);
@@ -1242,14 +1228,14 @@ export default function App() {
     let clusterLabel: string | null = null;
     let regionLabel: string | null = null;
     if (level === "store") {
-      const stores = (storeViewData ?? activeGridData)?.rows.filter((row) => row.structureRole === "store") ?? [];
-      const defaultStore = stores[0]?.label ?? "";
+      const stores = planningStoreScopeQuery.data?.stores ?? [];
+      const defaultStore = stores[0]?.branchName ?? "";
       const copyFromLabel = window.prompt("Copy hierarchy and data from store", defaultStore);
       if (!copyFromLabel) {
         return;
       }
 
-      const sourceStore = stores.find((store) => store.label.toLowerCase() === copyFromLabel.trim().toLowerCase());
+      const sourceStore = stores.find((store) => store.branchName.toLowerCase() === copyFromLabel.trim().toLowerCase());
       if (!sourceStore) {
         setLastError(`Store '${copyFromLabel}' was not found to copy from.`);
         return;
@@ -1289,86 +1275,17 @@ export default function App() {
 
   };
 
-  const ensureBranchLoaded = (row: GridRow) => {
-    if (row.isLeaf || row.structureRole === "virtual") {
-      return;
-    }
-
-    if (expandAllBranches) {
-      return;
-    }
-
-    const aggregateExpansionNodeIds = activeView === "planning-department" && row.level > 0 && !row.bindingProductNodeId
-      ? [...new Set(
-        row.splashRoots
-          ?.map((scopeRoot) => scopeRoot.productNodeId)
-          .filter((productNodeId): productNodeId is number => Number.isFinite(productNodeId) && productNodeId > 0) ?? [],
-      )].sort((left, right) => left - right)
-      : [];
-
-    if (aggregateExpansionNodeIds.length > 0) {
-      const branchNodeId = row.productNodeId;
-      const allAggregateBranchesLoaded = aggregateExpansionNodeIds.every((productNodeId) => requestedExpandedBranchNodeIds.includes(productNodeId));
-      if (allAggregateBranchesLoaded || loadingBranchNodeIdsRef.current.has(branchNodeId)) {
-        return;
-      }
-
-      const nextExpandedNodeIds = [...new Set([...requestedExpandedBranchNodeIds, ...aggregateExpansionNodeIds])].sort((left, right) => left - right);
-      loadingBranchNodeIdsRef.current.add(branchNodeId);
-      void getGridSlice({
-        selectedDepartmentLabel,
-        expandedProductNodeIds: nextExpandedNodeIds,
-        expandAllBranches,
-      })
-        .then((result) => {
-          queryClient.setQueryData<GridSliceResponse | undefined>(gridSliceQueryKey, result);
-          setExpandedBranchNodeIds(nextExpandedNodeIds);
-          setLastError(null);
-        })
-        .catch((error: unknown) => {
-          setLastError(error instanceof Error ? error.message : "Unable to load branch details.");
-        })
-        .finally(() => {
-          loadingBranchNodeIdsRef.current.delete(branchNodeId);
-        });
-      return;
-    }
-
-    const branchAlreadyLoaded = (activeGridData?.rows ?? []).some((candidate) =>
-      candidate.level === row.level + 1
-      && row.path.every((segment, index) => candidate.path[index] === segment));
-
-    if (branchAlreadyLoaded || !planningData) {
-      return;
-    }
-
-    if (!row.bindingProductNodeId) {
-      return;
-    }
-
-    const branchNodeId = row.bindingProductNodeId;
-
-    if (expandedBranchNodeIds.includes(branchNodeId) || loadingBranchNodeIdsRef.current.has(branchNodeId)) {
-      return;
-    }
-
-    loadingBranchNodeIdsRef.current.add(branchNodeId);
-    void getGridBranchRows(planningData.scenarioVersionId, branchNodeId)
-      .then((result) => {
-        mergeRowsIntoVisiblePlanningSlice(result.rows);
-        setExpandedBranchNodeIds((current) => (
-          current.includes(branchNodeId)
-            ? current
-            : [...current, branchNodeId].sort((left, right) => left - right)
-        ));
-        setLastError(null);
-      })
-      .catch((error: unknown) => {
-        setLastError(error instanceof Error ? error.message : "Unable to load branch details.");
-      })
-      .finally(() => {
-        loadingBranchNodeIdsRef.current.delete(branchNodeId);
-      });
+  const loadPlanningChildRows = async (parentViewRowId: string): Promise<GridRow[]> => {
+    const result = await getGridViewChildren({
+      parentViewRowId,
+      view: activeView === "planning-department" ? "department" : "store",
+      selectedStoreId: activeView === "planning-store" ? effectivePlanningStoreId : null,
+      selectedDepartmentLabel: activeView === "planning-department" ? selectedDepartmentLabel : null,
+      departmentLayout: activeView === "planning-department" ? departmentLayout : null,
+      expandAllBranches,
+    });
+    setLastError(null);
+    return result.rows;
   };
 
   const handleExpandAllBranches = () => {
@@ -1377,28 +1294,6 @@ export default function App() {
 
   const handleCollapseAllBranches = () => {
     setExpandAllBranches(false);
-    setExpandedBranchNodeIds([]);
-  };
-
-  const canExpandPlanningRow = (row: GridRow) => {
-    if (row.isLeaf) {
-      return false;
-    }
-
-    if (activeView === "planning-department" && row.structureRole === "department") {
-      return true;
-    }
-
-    if (
-      activeView === "planning-department"
-      && row.structureRole !== "store"
-      && !row.bindingProductNodeId
-      && (row.splashRoots?.length ?? 0) > 0
-    ) {
-      return true;
-    }
-
-    return Boolean(row.bindingProductNodeId);
   };
 
   const handleDeleteRow = async (row: GridRow | null) => {
@@ -1823,7 +1718,7 @@ export default function App() {
             <span>Department Scope</span>
             <select value={selectedDepartmentLabel ?? ""} onChange={(event) => setSelectedDepartmentLabel(event.target.value || null)}>
               <option value="">All Departments</option>
-              {departmentScopeOptions.map((label) => (
+              {(departmentScopeQuery.data?.departments ?? []).map((label) => (
                 <option key={label} value={label}>
                   {label}
                 </option>
@@ -1859,6 +1754,9 @@ export default function App() {
         </button>
         <button type="button" className="secondary-button" onClick={() => void handleGenerateNextYear(selectedYearId)}>
           Generate Next Year
+        </button>
+        <button type="button" className="secondary-button" onClick={() => void reconciliationMutation.mutateAsync()}>
+          Run Reconciliation
         </button>
         <button
           type="button"
@@ -2022,14 +1920,15 @@ export default function App() {
               onAddRow={handleAddRow}
               onDeleteRow={handleDeleteRow}
               onImportWorkbook={handleImportWorkbook}
-              onEnsureBranchLoaded={ensureBranchLoaded}
-              canRowExpand={canExpandPlanningRow}
+              loadChildRows={loadPlanningChildRows}
+              onLoadError={setLastError}
               onExpandAllBranches={handleExpandAllBranches}
               onCollapseAllBranches={handleCollapseAllBranches}
               expandAllBranches={expandAllBranches}
               onScopeRowClick={handleScopeRowClick}
               sheetLabel={activeView === "planning-store" ? "Planning - by Store" : "Planning - by Department"}
               expansionStateKey={activeView === "planning-department" ? departmentLayout : activeView}
+              refreshToken={planningGridRefreshToken}
               pendingRevealRow={pendingRevealRow}
               onRevealHandled={() => setPendingRevealRow(null)}
             />
