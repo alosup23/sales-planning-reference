@@ -254,6 +254,9 @@ export default function App() {
     queryKey: ["planning-insights", insightScope?.storeId, insightScope?.productNodeId, insightScope?.yearTimePeriodId],
     queryFn: () => getPlanningInsights(insightScope!.storeId, insightScope!.productNodeId, insightScope!.yearTimePeriodId),
     enabled: Boolean(insightScope),
+    refetchOnWindowFocus: false,
+    retry: false,
+    staleTime: 60_000,
   });
 
   useEffect(() => {
@@ -366,9 +369,13 @@ export default function App() {
     await refreshPlanningQueries({
       includeStoreScopes: false,
       includeUndoRedo: !result.availability,
-      includeInsights: true,
+      includeInsights: false,
       includeGrid: !result.patch,
     });
+
+    void queryClient
+      .refetchQueries({ queryKey: ["planning-insights"], type: "active" })
+      .catch(() => undefined);
   };
 
   const refresh = async () => {

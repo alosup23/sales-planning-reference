@@ -267,9 +267,9 @@ export function PlanningGrid({
   const columnDefs = useMemo<(ColDef<GridRowView> | ColGroupDef<GridRowView>)[]>(() => {
       const buildMeasureColumn = (period: GridPeriod, measure: GridMeasure): ColDef<GridRowView> => {
         const isYearTotal = period.grain === "year";
-        const measureHeaderWidth = Math.max(measure.displayAsPercent ? 108 : 112, measure.label.length * 8 + 32);
-        const yearTotalWidth = Math.max(measureHeaderWidth, measure.displayAsPercent ? 126 : 156);
-        const monthMeasureWidth = Math.max(measure.displayAsPercent ? 104 : 122, measure.label.length * 7 + 36);
+        const measureHeaderWidth = Math.max(measure.displayAsPercent ? 116 : 124, measure.label.length * 8 + 40);
+        const yearTotalWidth = Math.max(measureHeaderWidth, measure.displayAsPercent ? 136 : 172);
+        const monthMeasureWidth = Math.max(measure.displayAsPercent ? 116 : 138, measure.label.length * 8 + 42);
         const isLeafMonthEditable = (row: GridRowView | undefined) =>
           Boolean(
             measure.editableAtLeaf &&
