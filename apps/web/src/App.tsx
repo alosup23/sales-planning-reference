@@ -1098,8 +1098,22 @@ export default function App() {
     return (
       <main className="app-shell">
         <section className="hero">
-          <h1>Sales Budget & Planning</h1>
-          <p>{statusText}</p>
+          <div>
+            <div className="eyebrow">Enterprise planning skeleton</div>
+            <h1>Sales Budget & Planning</h1>
+            <p>
+              Excel-like planning with store-first and department-first sheets backed by the same live planning data.
+            </p>
+          </div>
+          <div className="hero-sidecar">
+            {authEnabled ? <SignedInUserMenu /> : null}
+            <div className={`status-card${lastError ? " status-card-error" : ""}`} aria-live="polite">
+              {statusText}
+            </div>
+          </div>
+        </section>
+        <section className="planning-shell planning-shell-loading" aria-live="polite">
+          Preparing planning workspace...
         </section>
       </main>
     );
