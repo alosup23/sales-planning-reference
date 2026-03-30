@@ -105,7 +105,7 @@ public sealed partial class PlanningService : IPlanningService
                 }
             }
 
-            RecalculateImpactedCells(workingCells, metadata, request.ScenarioVersionId, editInstructions);
+            RecalculateImpactedCells(originalCells, workingCells, metadata, request.ScenarioVersionId, editInstructions);
             var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "manual-edit", ct);
             var actionId = await AppendAuditAsync("manual_edit", "manual", userId, request.Comment, deltas, ct);
             await AppendCommandBatchAsync(
@@ -162,7 +162,7 @@ public sealed partial class PlanningService : IPlanningService
                 workingCells,
                 metadata);
 
-            RecalculateImpactedCells(workingCells, metadata, request.ScenarioVersionId, [instruction]);
+            RecalculateImpactedCells(originalCells, workingCells, metadata, request.ScenarioVersionId, [instruction]);
             var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "splash", ct);
             var actionId = await AppendAuditAsync("splash", request.Method, userId, request.Comment, deltas, ct);
             await AppendCommandBatchAsync(
@@ -516,7 +516,7 @@ public sealed partial class PlanningService : IPlanningService
 
             ResetGrowthFactors(workingCells.Values, request.MeasureId);
 
-            RecalculateImpactedCells(workingCells, metadata, request.ScenarioVersionId, [instruction]);
+            RecalculateImpactedCells(originalCells, workingCells, metadata, request.ScenarioVersionId, [instruction]);
             var deltas = await PersistScenarioChangesAsync(originalCells, workingCells.Values, "growth-factor", ct);
             var actionId = await AppendAuditAsync("growth_factor", "growth-factor", userId, request.Comment, deltas, ct);
             await AppendCommandBatchAsync(

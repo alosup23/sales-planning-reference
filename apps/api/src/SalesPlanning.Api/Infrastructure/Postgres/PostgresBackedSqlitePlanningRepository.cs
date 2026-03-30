@@ -13,6 +13,7 @@ namespace SalesPlanning.Api.Infrastructure.Postgres;
 public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRepository
 {
     private const int BulkWriteChunkSize = 500;
+    private const int PlanningCellWriteChunkSize = 200;
     private static readonly string[] StoreMutationTables = ["store_metadata", "store_profile_options", "product_nodes", "planning_cells"];
     private static readonly string[] HierarchyTables =
     [
@@ -1100,6 +1101,14 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             return;
         }
 
+        var orderedCells = cellList
+            .OrderBy(cell => cell.Coordinate.ScenarioVersionId)
+            .ThenBy(cell => cell.Coordinate.MeasureId)
+            .ThenBy(cell => cell.Coordinate.StoreId)
+            .ThenBy(cell => cell.Coordinate.ProductNodeId)
+            .ThenBy(cell => cell.Coordinate.TimePeriodId)
+            .ToList();
+
         const string sql = """
             insert into planning_cells (
                 scenario_version_id,
@@ -1184,7 +1193,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
                 cell_kind = excluded.cell_kind;
             """;
 
-        foreach (var cellChunk in cellList.Chunk(BulkWriteChunkSize))
+        foreach (var cellChunk in orderedCells.Chunk(PlanningCellWriteChunkSize))
         {
             await using var command = new NpgsqlCommand(sql, postgres, transaction)
             {

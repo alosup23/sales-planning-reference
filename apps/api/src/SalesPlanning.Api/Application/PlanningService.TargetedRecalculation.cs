@@ -10,6 +10,7 @@ public sealed partial class PlanningService
         long MeasureId,
         long SourceTimePeriodId,
         bool IsDirectLeafEdit,
+        bool UseProductDeltaRollup,
         string Method,
         IReadOnlyList<SplashScopeRootDto> ScopeRoots,
         IReadOnlyList<long> TargetLeafProductIds,
@@ -113,9 +114,15 @@ public sealed partial class PlanningService
             .Distinct()
             .ToList();
 
+        var useProductDeltaRollup = targetLeafProductIds.Count == 1
+            && scopeRoots.Count == 1
+            && scopeRoots[0].ProductNodeId == targetLeafProductIds[0];
+
         var loadedProductNodeIds = targetLeafProductIds
             .Concat(aggregateProductNodeIds)
-            .Concat(aggregateProductNodeIds.SelectMany(productNodeId => GetDirectChildProductIds(productNodeId, metadata)))
+            .Concat(useProductDeltaRollup
+                ? []
+                : aggregateProductNodeIds.SelectMany(productNodeId => GetDirectChildProductIds(productNodeId, metadata)))
             .Distinct()
             .ToList();
         var loadedTimePeriodIds = targetLeafTimeIds
@@ -129,6 +136,7 @@ public sealed partial class PlanningService
             measureId,
             sourceTimePeriodId,
             isDirectLeafEdit,
+            useProductDeltaRollup,
             method,
             scopeRoots,
             targetLeafProductIds,
@@ -149,6 +157,15 @@ public sealed partial class PlanningService
             .Distinct()
             .OrderBy(id => id)
             .ToList();
+        if (instructions.Any(instruction => !instruction.UseProductDeltaRollup))
+        {
+            productNodeIds = productNodeIds
+                .Concat(instructions.SelectMany(instruction => instruction.AggregateProductNodeIds)
+                    .SelectMany(productNodeId => GetDirectChildProductIds(productNodeId, metadata)))
+                .Distinct()
+                .OrderBy(id => id)
+                .ToList();
+        }
         var timePeriodIds = instructions
             .SelectMany(instruction => instruction.LoadedTimePeriodIds)
             .Distinct()
@@ -172,11 +189,13 @@ public sealed partial class PlanningService
     }
 
     private static void RecalculateImpactedCells(
+        IReadOnlyList<PlanningCell> originalCells,
         IDictionary<string, PlanningCell> workingCells,
         PlanningMetadataSnapshot metadata,
         long scenarioVersionId,
         IReadOnlyCollection<PlanningMutationInstruction> instructions)
     {
+        var originalByKey = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell);
         var targetLeafProductIds = instructions
             .SelectMany(instruction => instruction.TargetLeafProductIds)
             .Distinct()
@@ -206,11 +225,105 @@ public sealed partial class PlanningService
             .OrderByDescending(productNodeId => metadata.ProductNodes[productNodeId].Level)
             .ToList();
 
+        if (instructions.All(instruction => instruction.UseProductDeltaRollup))
+        {
+            RecalculateAggregateProductsByDelta(originalByKey, workingCells, metadata, scenarioVersionId, instructions, aggregateProductNodeIds);
+            return;
+        }
+
         foreach (var productNodeId in aggregateProductNodeIds)
         {
             foreach (var timePeriodId in impactedTimeIds)
             {
                 RecalculateAggregateProductTime(workingCells, metadata, scenarioVersionId, productNodeId, timePeriodId);
+            }
+        }
+    }
+
+    private static void RecalculateAggregateProductsByDelta(
+        IReadOnlyDictionary<string, PlanningCell> originalCells,
+        IDictionary<string, PlanningCell> workingCells,
+        PlanningMetadataSnapshot metadata,
+        long scenarioVersionId,
+        IReadOnlyCollection<PlanningMutationInstruction> instructions,
+        IReadOnlyList<long> aggregateProductNodeIds)
+    {
+        var deltaByCoordinate = new Dictionary<string, decimal>(StringComparer.Ordinal);
+
+        foreach (var instruction in instructions)
+        {
+            var leafProductId = instruction.TargetLeafProductIds[0];
+            var impactedTimeIds = instruction.TargetLeafTimeIds
+                .Concat(instruction.AggregateTimePeriodIds)
+                .Distinct()
+                .ToList();
+
+            foreach (var timePeriodId in impactedTimeIds)
+            {
+                foreach (var measureId in new[] { PlanningMeasures.SalesRevenue, PlanningMeasures.SoldQuantity, PlanningMeasures.TotalCosts, PlanningMeasures.GrossProfit })
+                {
+                    var leafCoordinate = new PlanningCellCoordinate(
+                        scenarioVersionId,
+                        measureId,
+                        metadata.ProductNodes[leafProductId].StoreId,
+                        leafProductId,
+                        timePeriodId);
+
+                    if (!originalCells.TryGetValue(leafCoordinate.Key, out var originalLeafCell)
+                        || !workingCells.TryGetValue(leafCoordinate.Key, out var updatedLeafCell))
+                    {
+                        continue;
+                    }
+
+                    var delta = updatedLeafCell.EffectiveValue - originalLeafCell.EffectiveValue;
+                    if (delta == 0m)
+                    {
+                        continue;
+                    }
+
+                    foreach (var ancestorProductNodeId in instruction.AggregateProductNodeIds)
+                    {
+                        var ancestorCoordinate = new PlanningCellCoordinate(
+                            scenarioVersionId,
+                            measureId,
+                            metadata.ProductNodes[ancestorProductNodeId].StoreId,
+                            ancestorProductNodeId,
+                            timePeriodId);
+
+                        deltaByCoordinate[ancestorCoordinate.Key] = deltaByCoordinate.TryGetValue(ancestorCoordinate.Key, out var existingDelta)
+                            ? existingDelta + delta
+                            : delta;
+                    }
+                }
+            }
+        }
+
+        foreach (var productNodeId in aggregateProductNodeIds)
+        {
+            foreach (var timePeriodId in instructions
+                .SelectMany(instruction => instruction.TargetLeafTimeIds.Concat(instruction.AggregateTimePeriodIds))
+                .Distinct()
+                .OrderBy(timeId => metadata.TimePeriods[timeId].SortOrder))
+            {
+                var storeId = metadata.ProductNodes[productNodeId].StoreId;
+                foreach (var measureId in new[] { PlanningMeasures.SalesRevenue, PlanningMeasures.SoldQuantity, PlanningMeasures.TotalCosts, PlanningMeasures.GrossProfit })
+                {
+                    var coordinate = new PlanningCellCoordinate(scenarioVersionId, measureId, storeId, productNodeId, timePeriodId);
+                    if (!originalCells.TryGetValue(coordinate.Key, out var originalCell))
+                    {
+                        continue;
+                    }
+
+                    if (!workingCells.TryGetValue(coordinate.Key, out var workingCell))
+                    {
+                        continue;
+                    }
+
+                    var delta = deltaByCoordinate.GetValueOrDefault(coordinate.Key, 0m);
+                    SetAggregateValue(workingCell, originalCell.EffectiveValue + delta);
+                }
+
+                RecalculateDerivedRatesForCoordinate(workingCells, scenarioVersionId, storeId, productNodeId, timePeriodId, isLeafMonth: false);
             }
         }
     }
