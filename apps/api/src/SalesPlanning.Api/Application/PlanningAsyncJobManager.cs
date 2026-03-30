@@ -196,22 +196,41 @@ public sealed class PlanningAsyncJobManager : BackgroundService, IPlanningAsyncJ
     {
         while (!stoppingToken.IsCancellationRequested)
         {
-            var claimed = await TryClaimNextDurableJobAsync(stoppingToken);
-            if (claimed is null)
+            try
             {
+                var claimed = await TryClaimNextDurableJobAsync(stoppingToken);
+                if (claimed is null)
+                {
+                    try
+                    {
+                        await _durableSignal.WaitAsync(TimeSpan.FromSeconds(5), stoppingToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+
+                    continue;
+                }
+
+                await ProcessDurableJobAsync(claimed, stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogError(exception, "Durable async job loop failed. Retrying.");
                 try
                 {
-                    await _durableSignal.WaitAsync(TimeSpan.FromSeconds(5), stoppingToken);
+                    await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                 {
                     break;
                 }
-
-                continue;
             }
-
-            await ProcessDurableJobAsync(claimed, stoppingToken);
         }
     }
 
@@ -618,23 +637,23 @@ public sealed class PlanningAsyncJobManager : BackgroundService, IPlanningAsyncJ
             transaction);
 
         command.Parameters.AddWithValue("@workerId", _workerId);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
+        DurablePlanningAsyncJob? job = null;
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
-            await transaction.CommitAsync(cancellationToken);
-            return null;
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                job = new DurablePlanningAsyncJob(
+                    reader.GetString(0),
+                    new PlanningAsyncJobRequest(
+                        reader.GetString(1),
+                        reader.GetString(2),
+                        reader.GetString(3),
+                        reader.GetString(4),
+                        reader.IsDBNull(5) ? null : (byte[])reader.GetValue(5),
+                        reader.IsDBNull(6) ? null : reader.GetString(6)),
+                    reader.GetFieldValue<DateTimeOffset>(7));
+            }
         }
-
-        var job = new DurablePlanningAsyncJob(
-            reader.GetString(0),
-            new PlanningAsyncJobRequest(
-                reader.GetString(1),
-                reader.GetString(2),
-                reader.GetString(3),
-                reader.GetString(4),
-                reader.IsDBNull(5) ? null : (byte[])reader.GetValue(5),
-                reader.IsDBNull(6) ? null : reader.GetString(6)),
-            reader.GetFieldValue<DateTimeOffset>(7));
 
         await transaction.CommitAsync(cancellationToken);
         return job;
