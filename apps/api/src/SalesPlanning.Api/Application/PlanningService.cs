@@ -389,7 +389,6 @@ public sealed partial class PlanningService : IPlanningService
     public async Task<PlanningInsightResponse> GetPlanningInsightsAsync(long scenarioVersionId, long storeId, long productNodeId, long yearTimePeriodId, CancellationToken cancellationToken)
     {
         var metadata = await _repository.GetMetadataAsync(cancellationToken);
-        var cells = await _repository.GetScenarioCellsAsync(scenarioVersionId, cancellationToken);
         var targetNode = metadata.ProductNodes[productNodeId];
         var monthPeriods = metadata.TimePeriods.Values
             .Where(period => period.ParentTimePeriodId == yearTimePeriodId)
@@ -399,16 +398,34 @@ public sealed partial class PlanningService : IPlanningService
             .Where(node => node.StoreId == storeId && node.IsLeaf && IsDescendantProduct(node.ProductNodeId, productNodeId, metadata))
             .ToList();
 
+        var insightCoordinates = scopedLeafNodes
+            .SelectMany(node =>
+                monthPeriods.SelectMany(period => new[]
+                {
+                    new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SalesRevenue, node.StoreId, node.ProductNodeId, period.TimePeriodId),
+                    new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SoldQuantity, node.StoreId, node.ProductNodeId, period.TimePeriodId),
+                })
+                .Concat([
+                    new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.UnitCost, node.StoreId, node.ProductNodeId, yearTimePeriodId),
+                ]))
+            .DistinctBy(coordinate => coordinate.Key)
+            .ToArray();
+
+        var cells = insightCoordinates.Length == 0
+            ? Array.Empty<PlanningCell>()
+            : await _repository.GetCellsAsync(insightCoordinates, cancellationToken);
+        var cellLookup = cells.ToDictionary(cell => cell.Coordinate.Key, cell => cell);
+
         var monthlyRevenue = monthPeriods.Select(period => scopedLeafNodes.Sum(node =>
-            cells.FirstOrDefault(cell => cell.Coordinate.Key == new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SalesRevenue, node.StoreId, node.ProductNodeId, period.TimePeriodId).Key)?.EffectiveValue ?? 0m)).ToList();
+            cellLookup.GetValueOrDefault(new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SalesRevenue, node.StoreId, node.ProductNodeId, period.TimePeriodId).Key)?.EffectiveValue ?? 0m)).ToList();
         var monthlyQuantity = monthPeriods.Select(period => scopedLeafNodes.Sum(node =>
-            cells.FirstOrDefault(cell => cell.Coordinate.Key == new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SoldQuantity, node.StoreId, node.ProductNodeId, period.TimePeriodId).Key)?.EffectiveValue ?? 0m)).ToList();
+            cellLookup.GetValueOrDefault(new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.SoldQuantity, node.StoreId, node.ProductNodeId, period.TimePeriodId).Key)?.EffectiveValue ?? 0m)).ToList();
         var yearlyRevenue = monthlyRevenue.Sum();
         var yearlyQuantity = monthlyQuantity.Sum();
         var asp = yearlyQuantity > 0m ? PlanningMath.NormalizeAsp(yearlyRevenue / yearlyQuantity) : 1.00m;
         var unitCost = scopedLeafNodes.Count == 0
             ? 0m
-            : scopedLeafNodes.Average(node => cells.FirstOrDefault(cell => cell.Coordinate.Key == new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.UnitCost, node.StoreId, node.ProductNodeId, yearTimePeriodId).Key)?.EffectiveValue ?? 0m);
+            : scopedLeafNodes.Average(node => cellLookup.GetValueOrDefault(new PlanningCellCoordinate(scenarioVersionId, PlanningMeasures.UnitCost, node.StoreId, node.ProductNodeId, yearTimePeriodId).Key)?.EffectiveValue ?? 0m);
         var currentGrossProfitPercent = PlanningMath.CalculateGrossProfitPercent(asp, unitCost);
         var seasonalityStrength = monthlyRevenue.Count == 0 || monthlyRevenue.Average() <= 0m
             ? 0m

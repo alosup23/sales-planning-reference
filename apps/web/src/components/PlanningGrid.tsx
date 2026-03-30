@@ -268,8 +268,8 @@ export function PlanningGrid({
       const buildMeasureColumn = (period: GridPeriod, measure: GridMeasure): ColDef<GridRowView> => {
         const isYearTotal = period.grain === "year";
         const measureHeaderWidth = Math.max(measure.displayAsPercent ? 108 : 112, measure.label.length * 8 + 32);
-        const yearTotalWidth = Math.max(measureHeaderWidth, measure.displayAsPercent ? 118 : 144);
-        const monthMeasureWidth = Math.max(measure.displayAsPercent ? 92 : 100, measure.label.length * 7 + 28);
+        const yearTotalWidth = Math.max(measureHeaderWidth, measure.displayAsPercent ? 126 : 156);
+        const monthMeasureWidth = Math.max(measure.displayAsPercent ? 104 : 122, measure.label.length * 7 + 36);
         const isLeafMonthEditable = (row: GridRowView | undefined) =>
           Boolean(
             measure.editableAtLeaf &&
