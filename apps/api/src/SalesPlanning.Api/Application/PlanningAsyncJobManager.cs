@@ -17,8 +17,10 @@ public sealed class PlanningAsyncJobManager : BackgroundService, IPlanningAsyncJ
     private readonly string? _connectionString;
     private readonly string _workerId = $"{Environment.MachineName}:{Guid.NewGuid():N}";
     private readonly SemaphoreSlim _durableSignal = new(0);
+    private readonly SemaphoreSlim _schemaInitLock = new(1, 1);
     private readonly Channel<string> _inMemoryChannel = Channel.CreateUnbounded<string>();
     private readonly ConcurrentDictionary<string, InMemoryPlanningAsyncJobState> _inMemoryJobs = new(StringComparer.OrdinalIgnoreCase);
+    private volatile bool _durableSchemaReady;
 
     public PlanningAsyncJobManager(IServiceScopeFactory scopeFactory, ILogger<PlanningAsyncJobManager> logger, string? connectionString = null)
     {
@@ -31,6 +33,7 @@ public sealed class PlanningAsyncJobManager : BackgroundService, IPlanningAsyncJ
     {
         if (UseDurableStore)
         {
+            await EnsureDurableSchemaAsync(cancellationToken);
             var response = await InsertDurableJobAsync(request, cancellationToken);
             _durableSignal.Release();
             return response;
@@ -61,20 +64,33 @@ public sealed class PlanningAsyncJobManager : BackgroundService, IPlanningAsyncJ
         return ToResponse(state);
     }
 
-    public Task<AsyncJobStatusResponse> GetStatusAsync(string jobId, CancellationToken cancellationToken) =>
-        UseDurableStore
-            ? GetDurableStatusAsync(jobId, cancellationToken)
-            : Task.FromResult(GetInMemoryStatus(jobId));
+    public async Task<AsyncJobStatusResponse> GetStatusAsync(string jobId, CancellationToken cancellationToken)
+    {
+        if (UseDurableStore)
+        {
+            await EnsureDurableSchemaAsync(cancellationToken);
+            return await GetDurableStatusAsync(jobId, cancellationToken);
+        }
 
-    public Task<(byte[] Content, string FileName, string ContentType)> DownloadResultAsync(string jobId, CancellationToken cancellationToken) =>
-        UseDurableStore
-            ? DownloadDurableResultAsync(jobId, cancellationToken)
-            : Task.FromResult(DownloadInMemoryResult(jobId));
+        return GetInMemoryStatus(jobId);
+    }
+
+    public async Task<(byte[] Content, string FileName, string ContentType)> DownloadResultAsync(string jobId, CancellationToken cancellationToken)
+    {
+        if (UseDurableStore)
+        {
+            await EnsureDurableSchemaAsync(cancellationToken);
+            return await DownloadDurableResultAsync(jobId, cancellationToken);
+        }
+
+        return DownloadInMemoryResult(jobId);
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (UseDurableStore)
         {
+            await EnsureDurableSchemaAsync(stoppingToken);
             await RecoverDurableJobsAsync(stoppingToken);
             await ExecuteDurableLoopAsync(stoppingToken);
             return;
@@ -84,6 +100,97 @@ public sealed class PlanningAsyncJobManager : BackgroundService, IPlanningAsyncJ
     }
 
     private bool UseDurableStore => !string.IsNullOrWhiteSpace(_connectionString);
+
+    private async Task EnsureDurableSchemaAsync(CancellationToken cancellationToken)
+    {
+        if (!UseDurableStore || _durableSchemaReady)
+        {
+            return;
+        }
+
+        await _schemaInitLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_durableSchemaReady)
+            {
+                return;
+            }
+
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var command = new NpgsqlCommand(
+                """
+                create table if not exists planning_async_jobs (
+                    job_id text primary key,
+                    category text not null,
+                    operation text not null,
+                    requested_by text not null,
+                    payload_json text not null,
+                    upload_content bytea null,
+                    upload_file_name text null,
+                    status text not null,
+                    progress_percent integer not null default 0,
+                    progress_message text not null,
+                    created_at timestamptz not null default now(),
+                    started_at timestamptz null,
+                    completed_at timestamptz null,
+                    error_message text null,
+                    summary_json text null,
+                    download_content bytea null,
+                    download_file_name text null,
+                    download_content_type text null,
+                    worker_id text null,
+                    attempt_count integer not null default 0,
+                    retain_until timestamptz null
+                );
+
+                create index if not exists idx_planning_async_jobs_status_created_at
+                    on planning_async_jobs (status, created_at);
+
+                create index if not exists idx_planning_async_jobs_retain_until
+                    on planning_async_jobs (retain_until);
+
+                create table if not exists planning_reconciliation_schedules (
+                    schedule_key text primary key,
+                    scenario_version_id bigint not null,
+                    is_enabled integer not null default 1,
+                    interval_minutes integer not null default 1440,
+                    next_run_at timestamptz not null default now() + interval '1 day',
+                    last_enqueued_at timestamptz null,
+                    retain_days integer not null default 30
+                );
+
+                insert into planning_reconciliation_schedules (schedule_key, scenario_version_id, is_enabled, interval_minutes, next_run_at, retain_days)
+                values ('default-scenario-1', 1, 1, 1440, now() + interval '1 day', 30)
+                on conflict (schedule_key) do nothing;
+
+                create table if not exists planning_reconciliation_reports (
+                    report_id text primary key,
+                    scenario_version_id bigint not null,
+                    requested_by text not null,
+                    is_scheduled boolean not null default false,
+                    mismatch_count integer not null,
+                    checked_cell_count integer not null,
+                    status text not null,
+                    report_json text not null,
+                    created_at timestamptz not null default now(),
+                    retain_until timestamptz null
+                );
+
+                create index if not exists idx_planning_reconciliation_reports_created_at
+                    on planning_reconciliation_reports (created_at desc);
+
+                create index if not exists idx_planning_reconciliation_reports_retain_until
+                    on planning_reconciliation_reports (retain_until);
+                """,
+                connection);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+            _durableSchemaReady = true;
+        }
+        finally
+        {
+            _schemaInitLock.Release();
+        }
+    }
 
     private async Task ExecuteDurableLoopAsync(CancellationToken stoppingToken)
     {
