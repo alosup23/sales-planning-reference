@@ -284,7 +284,7 @@ Resources:
             - Name: PlanningStorageMode
               Value: postgres
             - Name: PlanningApplyMigrationsOnStartup
-              Value: "false"
+              Value: "true"
             - Name: PlanningSecurityMode
               Value: entra
             - Name: PlanningDbPath
@@ -311,9 +311,6 @@ Resources:
               Value: !Ref EntraApiScope
             - Name: DOTNET_EnableDiagnostics
               Value: "0"
-          Secrets:
-            - Name: PlanningPostgresSecretPayload
-              ValueFrom: !Ref DbSecretArn
           LogConfiguration:
             LogDriver: awslogs
             Options:

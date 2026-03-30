@@ -3,6 +3,8 @@ using Amazon.Lambda.AspNetCoreServer;
 using Amazon.Lambda.AspNetCoreServer.Hosting;
 using Amazon.S3;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.IdentityModel.Tokens;
 using SalesPlanning.Api.Application;
 using SalesPlanning.Api.Infrastructure;
@@ -23,10 +25,25 @@ var entraTenantId = builder.Configuration["EntraTenantId"] ?? "76ad236c-6db1-4d3
 var entraClientId = builder.Configuration["EntraClientId"] ?? "557f0c81-0531-4616-b62e-0b69eb7cb86f";
 var entraApiAudience = builder.Configuration["EntraApiAudience"] ?? $"api://{entraClientId}";
 var entraApiScope = builder.Configuration["EntraApiScope"] ?? "SalesPlanning.Access";
+var postgresConnectionString = storageMode.Equals("postgres", StringComparison.OrdinalIgnoreCase)
+    ? PostgresConnectionStringResolver.ResolveAsync(builder.Configuration, CancellationToken.None).GetAwaiter().GetResult()
+    : null;
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+if (!string.IsNullOrWhiteSpace(postgresConnectionString))
+{
+    builder.Services
+        .AddDataProtection()
+        .SetApplicationName("sales-planning-uat")
+        .Services
+        .Configure<KeyManagementOptions>(options =>
+        {
+            options.XmlRepository = new PostgresXmlRepository(postgresConnectionString);
+        });
+}
 
 if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("AWS_LAMBDA_FUNCTION_NAME")))
 {
@@ -43,15 +60,12 @@ builder.Services.AddSingleton<IPlanningRepository>(serviceProvider =>
     if (storageMode.Equals("postgres", StringComparison.OrdinalIgnoreCase))
     {
         var postgresLogger = serviceProvider.GetRequiredService<ILogger<PostgresBackedSqlitePlanningRepository>>();
-        var connectionString = PostgresConnectionStringResolver.ResolveAsync(builder.Configuration, CancellationToken.None)
-            .GetAwaiter()
-            .GetResult();
         var migrationsDirectory = Path.Combine(builder.Environment.ContentRootPath, "Infrastructure", "Postgres", "Migrations");
         var applyMigrationsOnStartup = bool.TryParse(builder.Configuration["PlanningApplyMigrationsOnStartup"], out var parsedApplyMigrations)
             ? parsedApplyMigrations
             : true;
         return new PostgresBackedSqlitePlanningRepository(
-            connectionString,
+            postgresConnectionString!,
             postgresLogger,
             planningDbPath,
             applyMigrationsOnStartup,
@@ -77,9 +91,21 @@ builder.Services.AddSingleton<IPlanningRepository>(serviceProvider =>
     return new S3BackedSqlitePlanningRepository(s3Client, logger, bucketName, objectKey, planningDbPath);
 });
 builder.Services.AddSingleton<ISplashAllocator, SplashAllocator>();
-builder.Services.AddSingleton<PlanningAsyncJobManager>();
+builder.Services.AddSingleton<PlanningAsyncJobManager>(serviceProvider =>
+    new PlanningAsyncJobManager(
+        serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+        serviceProvider.GetRequiredService<ILogger<PlanningAsyncJobManager>>(),
+        postgresConnectionString));
 builder.Services.AddSingleton<IPlanningAsyncJobManager>(serviceProvider => serviceProvider.GetRequiredService<PlanningAsyncJobManager>());
 builder.Services.AddHostedService(serviceProvider => serviceProvider.GetRequiredService<PlanningAsyncJobManager>());
+if (!string.IsNullOrWhiteSpace(postgresConnectionString))
+{
+    builder.Services.AddHostedService(serviceProvider =>
+        new PlanningReconciliationScheduler(
+            serviceProvider.GetRequiredService<IPlanningAsyncJobManager>(),
+            serviceProvider.GetRequiredService<ILogger<PlanningReconciliationScheduler>>(),
+            postgresConnectionString));
+}
 builder.Services.AddSingleton<IPlanningService, PlanningService>();
 
 if (authEnabled)
