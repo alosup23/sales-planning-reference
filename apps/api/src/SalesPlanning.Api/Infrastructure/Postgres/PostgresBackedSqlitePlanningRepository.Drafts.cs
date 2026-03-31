@@ -221,7 +221,48 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             await importer.CompleteAsync(cancellationToken);
         }
 
-        await using (var mergeCommand = new NpgsqlCommand(
+        await using (var deleteCommand = new NpgsqlCommand(
+            $"""
+            delete from planning_draft_cells as target
+            using (
+                select distinct on (
+                    scenario_version_id,
+                    user_id,
+                    measure_id,
+                    store_id,
+                    product_node_id,
+                    time_period_id)
+                    scenario_version_id,
+                    user_id,
+                    measure_id,
+                    store_id,
+                    product_node_id,
+                    time_period_id
+                from {stageTableName}
+                order by
+                    scenario_version_id,
+                    user_id,
+                    measure_id,
+                    store_id,
+                    product_node_id,
+                    time_period_id,
+                    row_version desc
+            ) as source
+            where target.scenario_version_id = source.scenario_version_id
+              and target.user_id = source.user_id
+              and target.measure_id = source.measure_id
+              and target.store_id = source.store_id
+              and target.product_node_id = source.product_node_id
+              and target.time_period_id = source.time_period_id;
+            """,
+            connection,
+            transaction))
+        {
+            deleteCommand.CommandTimeout = 300;
+            await deleteCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var insertCommand = new NpgsqlCommand(
             $"""
             insert into planning_draft_cells (
                 scenario_version_id,
@@ -295,27 +336,13 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
                     product_node_id,
                     time_period_id,
                     row_version desc
-            ) as source
-            on conflict (scenario_version_id, user_id, measure_id, store_id, product_node_id, time_period_id)
-            do update set
-                input_value = excluded.input_value,
-                override_value = excluded.override_value,
-                is_system_generated_override = excluded.is_system_generated_override,
-                derived_value = excluded.derived_value,
-                effective_value = excluded.effective_value,
-                growth_factor = excluded.growth_factor,
-                is_locked = excluded.is_locked,
-                lock_reason = excluded.lock_reason,
-                locked_by = excluded.locked_by,
-                row_version = excluded.row_version,
-                cell_kind = excluded.cell_kind,
-                updated_at = now();
+            ) as source;
             """,
             connection,
             transaction))
         {
-            mergeCommand.CommandTimeout = 300;
-            await mergeCommand.ExecuteNonQueryAsync(cancellationToken);
+            insertCommand.CommandTimeout = 300;
+            await insertCommand.ExecuteNonQueryAsync(cancellationToken);
         }
     }
 
