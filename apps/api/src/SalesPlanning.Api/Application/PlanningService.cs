@@ -109,8 +109,7 @@ public sealed partial class PlanningService : IPlanningService
 
             RecalculateImpactedCells(originalCells, workingCells, metadata, request.ScenarioVersionId, editInstructions);
             var deltas = await PersistDraftChangesAsync(request.ScenarioVersionId, userId, originalCells, workingCells.Values, "manual-edit", ct);
-            var actionId = await AppendAuditAsync("manual_edit", "manual", userId, request.Comment, deltas, ct);
-            await AppendDraftCommandBatchAsync(
+            var actionId = await AppendDraftCommandBatchAsync(
                 request.ScenarioVersionId,
                 userId,
                 "manual_edit",
@@ -166,8 +165,7 @@ public sealed partial class PlanningService : IPlanningService
 
             RecalculateImpactedCells(originalCells, workingCells, metadata, request.ScenarioVersionId, [instruction]);
             var deltas = await PersistDraftChangesAsync(request.ScenarioVersionId, userId, originalCells, workingCells.Values, "splash", ct);
-            var actionId = await AppendAuditAsync("splash", request.Method, userId, request.Comment, deltas, ct);
-            await AppendDraftCommandBatchAsync(
+            var actionId = await AppendDraftCommandBatchAsync(
                 request.ScenarioVersionId,
                 userId,
                 "splash",
@@ -233,7 +231,6 @@ public sealed partial class PlanningService : IPlanningService
             }
 
             var deltas = await PersistDraftChangesAsync(request.ScenarioVersionId, userId, originalCells, targetedCells, request.Locked ? "lock" : "unlock", ct);
-            await AppendAuditAsync(request.Locked ? "lock" : "unlock", "lock", userId, request.Reason, deltas, ct);
             await AppendDraftCommandBatchAsync(
                 request.ScenarioVersionId,
                 userId,
@@ -527,8 +524,7 @@ public sealed partial class PlanningService : IPlanningService
 
             RecalculateImpactedCells(originalCells, workingCells, metadata, request.ScenarioVersionId, [instruction]);
             var deltas = await PersistDraftChangesAsync(request.ScenarioVersionId, userId, originalCells, workingCells.Values, "growth-factor", ct);
-            var actionId = await AppendAuditAsync("growth_factor", "growth-factor", userId, request.Comment, deltas, ct);
-            await AppendDraftCommandBatchAsync(
+            var actionId = await AppendDraftCommandBatchAsync(
                 request.ScenarioVersionId,
                 userId,
                 "growth_factor",
@@ -577,7 +573,7 @@ public sealed partial class PlanningService : IPlanningService
             var batch = draftAvailability.CanUndo
                 ? await _repository.UndoLatestDraftCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct)
                 : await _repository.UndoLatestCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
-            if (batch is not null)
+            if (batch is not null && !draftAvailability.CanUndo)
             {
                 await AppendAuditAsync("undo", "undo", userId, $"Undo {batch.CommandKind}", InvertCommandDeltas(batch.Deltas), ct);
             }
@@ -595,7 +591,7 @@ public sealed partial class PlanningService : IPlanningService
             var batch = draftAvailability.CanRedo
                 ? await _repository.RedoLatestDraftCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct)
                 : await _repository.RedoLatestCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
-            if (batch is not null)
+            if (batch is not null && !draftAvailability.CanRedo)
             {
                 await AppendAuditAsync("redo", "redo", userId, $"Redo {batch.CommandKind}", batch.Deltas, ct);
             }
@@ -1256,16 +1252,27 @@ public sealed partial class PlanningService : IPlanningService
         var grossProfitCell = workingCells[new PlanningCellCoordinate(coordinate.ScenarioVersionId, PlanningMeasures.GrossProfit, coordinate.StoreId, coordinate.ProductNodeId, coordinate.TimePeriodId).Key];
         var grossProfitPercentCell = workingCells[new PlanningCellCoordinate(coordinate.ScenarioVersionId, PlanningMeasures.GrossProfitPercent, coordinate.StoreId, coordinate.ProductNodeId, coordinate.TimePeriodId).Key];
 
+        if (coordinate.MeasureId == PlanningMeasures.SalesRevenue)
+        {
+            ApplyExactRevenueLeafState(
+                coordinate,
+                newValue,
+                quantityCell,
+                aspCell,
+                unitCostCell,
+                revenueCell,
+                totalCostsCell,
+                grossProfitCell,
+                grossProfitPercentCell);
+            return;
+        }
+
         var quantity = PlanningMath.NormalizeQuantity(quantityCell.InputValue ?? quantityCell.EffectiveValue);
         var asp = PlanningMath.NormalizeAsp(aspCell.InputValue ?? aspCell.EffectiveValue);
         var unitCost = PlanningMath.NormalizeUnitCost(unitCostCell.InputValue ?? unitCostCell.EffectiveValue);
 
         switch (coordinate.MeasureId)
         {
-            case PlanningMeasures.SalesRevenue:
-                asp = PlanningMath.NormalizeAsp(aspCell.InputValue ?? aspCell.EffectiveValue);
-                quantity = PlanningMath.DeriveQuantityFromRevenue(newValue, asp);
-                break;
             case PlanningMeasures.SoldQuantity:
                 quantity = PlanningMath.NormalizeQuantity(newValue);
                 asp = PlanningMath.NormalizeAsp(aspCell.InputValue ?? aspCell.EffectiveValue);
@@ -1292,6 +1299,49 @@ public sealed partial class PlanningService : IPlanningService
         SetLeafValue(aspCell, asp);
         SetLeafValue(unitCostCell, unitCost);
         SetLeafValue(revenueCell, revenue);
+        SetCalculatedLeafValue(totalCostsCell, totalCosts);
+        SetCalculatedLeafValue(grossProfitCell, grossProfit);
+        SetCalculatedLeafValue(grossProfitPercentCell, grossProfitPercentValue);
+    }
+
+    private static void ApplyExactRevenueLeafState(
+        PlanningCellCoordinate coordinate,
+        decimal desiredRevenue,
+        PlanningCell quantityCell,
+        PlanningCell aspCell,
+        PlanningCell unitCostCell,
+        PlanningCell revenueCell,
+        PlanningCell totalCostsCell,
+        PlanningCell grossProfitCell,
+        PlanningCell grossProfitPercentCell)
+    {
+        var normalizedRevenue = PlanningMath.NormalizeRevenue(desiredRevenue);
+        var currentQuantity = quantityCell.InputValue ?? quantityCell.EffectiveValue;
+        var currentAsp = aspCell.InputValue ?? aspCell.EffectiveValue;
+
+        if (!TryResolveRevenueLeafState(normalizedRevenue, currentQuantity, currentAsp, out var resolvedQuantity, out var resolvedAsp))
+        {
+            resolvedQuantity = normalizedRevenue <= 0m ? 0m : 1m;
+            resolvedAsp = normalizedRevenue <= 0m
+                ? PlanningMath.NormalizeAsp(currentAsp)
+                : PlanningMath.NormalizeAsp(normalizedRevenue);
+        }
+
+        if (normalizedRevenue > 0m && PlanningMath.CalculateRevenue(resolvedQuantity, resolvedAsp) != normalizedRevenue)
+        {
+            resolvedQuantity = 1m;
+            resolvedAsp = PlanningMath.NormalizeAsp(normalizedRevenue);
+        }
+
+        var unitCost = PlanningMath.NormalizeUnitCost(unitCostCell.InputValue ?? unitCostCell.EffectiveValue);
+        var totalCosts = PlanningMath.CalculateTotalCosts(resolvedQuantity, unitCost);
+        var grossProfit = PlanningMath.CalculateGrossProfit(resolvedQuantity, resolvedAsp, unitCost);
+        var grossProfitPercentValue = PlanningMath.CalculateGrossProfitPercent(resolvedAsp, unitCost);
+
+        SetLeafValue(quantityCell, resolvedQuantity);
+        SetLeafValue(aspCell, resolvedAsp);
+        SetLeafValue(unitCostCell, unitCost);
+        SetLeafValue(revenueCell, normalizedRevenue);
         SetCalculatedLeafValue(totalCostsCell, totalCosts);
         SetCalculatedLeafValue(grossProfitCell, grossProfit);
         SetCalculatedLeafValue(grossProfitPercentCell, grossProfitPercentValue);
@@ -1346,13 +1396,23 @@ public sealed partial class PlanningService : IPlanningService
         var allocations = _splashAllocator.Allocate(totalValue, splashTargets, roundingScale);
         foreach (var allocation in allocations)
         {
-            ApplyLeafMeasureEdit(allocation.Cell.Coordinate, allocation.NewValue, workingCells, metadata);
+            ApplyAllocatedLeafValue(measureId, allocation.Cell.Coordinate, allocation.NewValue, workingCells, metadata);
         }
 
         if (measureId == PlanningMeasures.SalesRevenue)
         {
-            ReconcileRevenueSplashResidual(totalValue, allocations, workingCells, metadata);
+            ReconcileRevenueSplashResidual(totalValue, splashTargets.Select(target => target.Cell.Coordinate).ToList(), allocations, workingCells, metadata);
         }
+    }
+
+    private static void ApplyAllocatedLeafValue(
+        long measureId,
+        PlanningCellCoordinate coordinate,
+        decimal newValue,
+        IDictionary<string, PlanningCell> workingCells,
+        PlanningMetadataSnapshot metadata)
+    {
+        ApplyLeafMeasureEdit(coordinate, newValue, workingCells, metadata);
     }
 
     private Dictionary<string, decimal> BuildWeights(
@@ -1445,11 +1505,12 @@ public sealed partial class PlanningService : IPlanningService
 
     private static void ReconcileRevenueSplashResidual(
         decimal requestedTotal,
+        IReadOnlyList<PlanningCellCoordinate> targetCoordinates,
         IReadOnlyList<SplashAllocation> allocations,
         IDictionary<string, PlanningCell> workingCells,
         PlanningMetadataSnapshot metadata)
     {
-        if (allocations.Count == 0)
+        if (targetCoordinates.Count == 0 || allocations.Count == 0)
         {
             return;
         }
@@ -1466,7 +1527,7 @@ public sealed partial class PlanningService : IPlanningService
             return;
         }
 
-        var residual = desiredTotal - SumRevenueTargets(allocations, workingCells);
+        var residual = desiredTotal - SumRevenueTargets(targetCoordinates, workingCells);
         if (residual == 0m)
         {
             return;
@@ -1510,7 +1571,7 @@ public sealed partial class PlanningService : IPlanningService
             ApplyLeafMeasureEdit(quantityCoordinate, resolvedQuantity, workingCells, metadata);
             ApplyLeafMeasureEdit(aspCoordinate, resolvedAsp, workingCells, metadata);
 
-            residual = desiredTotal - SumRevenueTargets(allocations, workingCells);
+            residual = desiredTotal - SumRevenueTargets(targetCoordinates, workingCells);
             if (residual == 0m)
             {
                 return;
@@ -1519,15 +1580,15 @@ public sealed partial class PlanningService : IPlanningService
     }
 
     private static decimal SumRevenueTargets(
-        IReadOnlyList<SplashAllocation> allocations,
+        IReadOnlyList<PlanningCellCoordinate> targetCoordinates,
         IDictionary<string, PlanningCell> workingCells)
     {
-        return allocations.Sum(allocation => workingCells[new PlanningCellCoordinate(
-            allocation.Cell.Coordinate.ScenarioVersionId,
+        return targetCoordinates.Sum(coordinate => workingCells[new PlanningCellCoordinate(
+            coordinate.ScenarioVersionId,
             PlanningMeasures.SalesRevenue,
-            allocation.Cell.Coordinate.StoreId,
-            allocation.Cell.Coordinate.ProductNodeId,
-            allocation.Cell.Coordinate.TimePeriodId).Key].EffectiveValue);
+            coordinate.StoreId,
+            coordinate.ProductNodeId,
+            coordinate.TimePeriodId).Key].EffectiveValue);
     }
 
     private static bool TryResolveRevenueLeafState(

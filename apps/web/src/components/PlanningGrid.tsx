@@ -247,6 +247,37 @@ export function PlanningGrid({
       node.setData(nextRow);
     });
 
+    const loadedRowsByKey = new Map<string, GridRowView>();
+    api.forEachNode((node) => {
+      if (!node.data) {
+        return;
+      }
+
+      loadedRowsByKey.set(getRowKey(node.data), node.data);
+    });
+
+    const syntheticRows = [...loadedRowsByKey.values()]
+      .filter(isSyntheticRow)
+      .sort((left, right) => right.path.length - left.path.length);
+
+    syntheticRows.forEach((row) => {
+      const directChildren = [...loadedRowsByKey.values()].filter((candidate) => isDirectChildRow(row, candidate));
+      if (directChildren.length === 0) {
+        return;
+      }
+
+      const recomputed = recomputeSyntheticRow(row, directChildren, data);
+      if (recomputed === row) {
+        return;
+      }
+
+      const rowKey = getRowKey(recomputed);
+      updatesByRowKey.set(rowKey, recomputed);
+      loadedRowsByKey.set(rowKey, recomputed);
+      rowCacheRef.current.set(rowKey, recomputed);
+      api.getRowNode(rowKey)?.setData(recomputed);
+    });
+
     if (updatesByRowKey.size > 0) {
       setRowCacheVersion((current) => current + 1);
     }
@@ -1038,6 +1069,105 @@ export function PlanningGrid({
 
 function getRowKey(row: GridRowView | GridRow): string {
   return row.viewRowId ?? `${row.storeId}-${row.productNodeId}`;
+}
+
+function isSyntheticRow(row: GridRowView): boolean {
+  return row.nodeKind === "virtual";
+}
+
+function isDirectChildRow(parent: GridRowView, child: GridRowView): boolean {
+  if (child.path.length !== parent.path.length + 1) {
+    return false;
+  }
+
+  return parent.path.every((segment, index) => child.path[index] === segment);
+}
+
+function roundAwayFromZero(value: number, decimalPlaces: number): number {
+  const factor = 10 ** decimalPlaces;
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  if (value >= 0) {
+    return Math.round(value * factor) / factor;
+  }
+
+  return -Math.round(Math.abs(value) * factor) / factor;
+}
+
+function recomputeSyntheticRow(
+  row: GridRowView,
+  directChildren: GridRowView[],
+  data: GridSliceResponse,
+): GridRowView {
+  let didChange = false;
+  const nextCells: GridRowView["cells"] = { ...row.cells };
+
+  data.periods.forEach((period) => {
+    const existingPeriod = row.cells[period.timePeriodId];
+    const nextMeasures = { ...(existingPeriod?.measures ?? {}) };
+
+    const revenue = directChildren.reduce(
+      (sum, child) => sum + Number(child.cells[period.timePeriodId]?.measures[1]?.value ?? 0),
+      0,
+    );
+    const quantity = directChildren.reduce(
+      (sum, child) => sum + Number(child.cells[period.timePeriodId]?.measures[2]?.value ?? 0),
+      0,
+    );
+    const totalCosts = directChildren.reduce(
+      (sum, child) => sum + Number(child.cells[period.timePeriodId]?.measures[5]?.value ?? 0),
+      0,
+    );
+    const grossProfit = directChildren.reduce(
+      (sum, child) => sum + Number(child.cells[period.timePeriodId]?.measures[6]?.value ?? 0),
+      0,
+    );
+
+    data.measures.forEach((measure) => {
+      const rawValue = directChildren.reduce(
+        (sum, child) => sum + Number(child.cells[period.timePeriodId]?.measures[measure.measureId]?.value ?? 0),
+        0,
+      );
+      const nextValue = measure.measureId === 3
+        ? (quantity <= 0 ? 0 : roundAwayFromZero(revenue / quantity, 2))
+        : measure.measureId === 4
+          ? (quantity <= 0 ? 0 : roundAwayFromZero(totalCosts / quantity, 2))
+          : measure.measureId === 7
+            ? (revenue <= 0 ? 0 : roundAwayFromZero(((grossProfit) / revenue) * 100, 1))
+            : rawValue;
+      const nextCell = {
+        value: nextValue,
+        growthFactor: 1,
+        isLocked: directChildren.every((child) => Boolean(child.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked)),
+        isCalculated: true,
+        isOverride: false,
+        rowVersion: 0,
+        cellKind: "calculated",
+      };
+
+      const existingCell = existingPeriod?.measures?.[measure.measureId];
+      if (!existingCell
+        || existingCell.value !== nextCell.value
+        || existingCell.isLocked !== nextCell.isLocked
+        || existingCell.growthFactor !== nextCell.growthFactor
+        || existingCell.isCalculated !== nextCell.isCalculated
+        || existingCell.isOverride !== nextCell.isOverride
+        || existingCell.rowVersion !== nextCell.rowVersion
+        || existingCell.cellKind !== nextCell.cellKind) {
+        didChange = true;
+      }
+
+      nextMeasures[measure.measureId] = nextCell;
+    });
+
+    nextCells[period.timePeriodId] = {
+      measures: nextMeasures,
+    };
+  });
+
+  return didChange ? { ...row, cells: nextCells } : row;
 }
 
 function getRowClasses(row: GridRowView | undefined): string[] {
