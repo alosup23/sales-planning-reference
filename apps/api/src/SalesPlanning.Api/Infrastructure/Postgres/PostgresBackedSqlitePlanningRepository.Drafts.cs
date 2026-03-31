@@ -100,6 +100,10 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
         }
 
         var orderedCells = cells
+            .GroupBy(cell => cell.Coordinate.Key, StringComparer.Ordinal)
+            .Select(group => group
+                .OrderByDescending(cell => cell.RowVersion)
+                .First())
             .OrderBy(cell => cell.Coordinate.MeasureId)
             .ThenBy(cell => cell.Coordinate.StoreId)
             .ThenBy(cell => cell.Coordinate.ProductNodeId)
@@ -217,37 +221,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             await importer.CompleteAsync(cancellationToken);
         }
 
-        await using (var updateCommand = new NpgsqlCommand(
-            $"""
-            update planning_draft_cells as target
-            set input_value = source.input_value,
-                override_value = source.override_value,
-                is_system_generated_override = source.is_system_generated_override,
-                derived_value = source.derived_value,
-                effective_value = source.effective_value,
-                growth_factor = source.growth_factor,
-                is_locked = source.is_locked,
-                lock_reason = source.lock_reason,
-                locked_by = source.locked_by,
-                row_version = source.row_version,
-                cell_kind = source.cell_kind,
-                updated_at = now()
-            from {stageTableName} as source
-            where target.scenario_version_id = source.scenario_version_id
-              and target.user_id = source.user_id
-              and target.measure_id = source.measure_id
-              and target.store_id = source.store_id
-              and target.product_node_id = source.product_node_id
-              and target.time_period_id = source.time_period_id;
-            """,
-            connection,
-            transaction))
-        {
-            updateCommand.CommandTimeout = 300;
-            await updateCommand.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await using (var insertCommand = new NpgsqlCommand(
+        await using (var mergeCommand = new NpgsqlCommand(
             $"""
             insert into planning_draft_cells (
                 scenario_version_id,
@@ -287,21 +261,61 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
                 source.row_version,
                 source.cell_kind,
                 now()
-            from {stageTableName} as source
-            left join planning_draft_cells as target
-              on target.scenario_version_id = source.scenario_version_id
-             and target.user_id = source.user_id
-             and target.measure_id = source.measure_id
-             and target.store_id = source.store_id
-             and target.product_node_id = source.product_node_id
-             and target.time_period_id = source.time_period_id
-            where target.scenario_version_id is null;
+            from (
+                select distinct on (
+                    scenario_version_id,
+                    user_id,
+                    measure_id,
+                    store_id,
+                    product_node_id,
+                    time_period_id)
+                    scenario_version_id,
+                    user_id,
+                    measure_id,
+                    store_id,
+                    product_node_id,
+                    time_period_id,
+                    input_value,
+                    override_value,
+                    is_system_generated_override,
+                    derived_value,
+                    effective_value,
+                    growth_factor,
+                    is_locked,
+                    lock_reason,
+                    locked_by,
+                    row_version,
+                    cell_kind
+                from {stageTableName}
+                order by
+                    scenario_version_id,
+                    user_id,
+                    measure_id,
+                    store_id,
+                    product_node_id,
+                    time_period_id,
+                    row_version desc
+            ) as source
+            on conflict (scenario_version_id, user_id, measure_id, store_id, product_node_id, time_period_id)
+            do update set
+                input_value = excluded.input_value,
+                override_value = excluded.override_value,
+                is_system_generated_override = excluded.is_system_generated_override,
+                derived_value = excluded.derived_value,
+                effective_value = excluded.effective_value,
+                growth_factor = excluded.growth_factor,
+                is_locked = excluded.is_locked,
+                lock_reason = excluded.lock_reason,
+                locked_by = excluded.locked_by,
+                row_version = excluded.row_version,
+                cell_kind = excluded.cell_kind,
+                updated_at = now();
             """,
             connection,
             transaction))
         {
-            insertCommand.CommandTimeout = 300;
-            await insertCommand.ExecuteNonQueryAsync(cancellationToken);
+            mergeCommand.CommandTimeout = 300;
+            await mergeCommand.ExecuteNonQueryAsync(cancellationToken);
         }
     }
 

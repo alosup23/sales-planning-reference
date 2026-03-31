@@ -17,6 +17,15 @@ public sealed class PlanningServiceTests
         _service = new PlanningService(_repository, new SplashAllocator());
     }
 
+    private async Task<PlanningCell?> GetEffectiveCellAsync(PlanningCellCoordinate coordinate, string userId = "planner.one")
+    {
+        var committedCellTask = _repository.GetCellAsync(coordinate, CancellationToken.None);
+        var draftCellsTask = _repository.GetDraftCellsAsync(coordinate.ScenarioVersionId, userId, [coordinate], CancellationToken.None);
+        await Task.WhenAll(committedCellTask, draftCellsTask);
+
+        return (await draftCellsTask).FirstOrDefault() ?? await committedCellTask;
+    }
+
     [Fact]
     public async Task GetGridSliceAsync_ReturnsExpandedMeasureSetAndMultiYearShape()
     {
@@ -76,11 +85,11 @@ public sealed class PlanningServiceTests
         Assert.Contains(result.Patch!.Cells, cell => cell.StoreId == 101 && cell.ProductNodeId == 2111 && cell.TimePeriodId == 202603 && cell.MeasureId == PlanningMeasures.GrossProfitPercent);
         Assert.Contains(result.Patch.Cells, cell => cell.StoreId == 101 && cell.ProductNodeId == 2111 && cell.TimePeriodId == 202603 && cell.MeasureId == PlanningMeasures.AverageSellingPrice);
 
-        var quantityCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2111, 202603), CancellationToken.None);
-        var aspCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.AverageSellingPrice, 101, 2111, 202603), CancellationToken.None);
-        var unitCostCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.UnitCost, 101, 2111, 202603), CancellationToken.None);
-        var revenueCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202603), CancellationToken.None);
-        var grossProfitCell = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.GrossProfit, 101, 2111, 202603), CancellationToken.None);
+        var quantityCell = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2111, 202603));
+        var aspCell = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.AverageSellingPrice, 101, 2111, 202603));
+        var unitCostCell = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.UnitCost, 101, 2111, 202603));
+        var revenueCell = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202603));
+        var grossProfitCell = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.GrossProfit, 101, 2111, 202603));
 
         Assert.NotNull(quantityCell);
         Assert.NotNull(aspCell);
@@ -99,7 +108,7 @@ public sealed class PlanningServiceTests
     {
         var lockResult = await _service.ApplyLockAsync(
             new LockCellsRequest(1, PlanningMeasures.SalesRevenue, true, "Freeze year", new[] { new LockCoordinateDto(101, 2100, 202600) }),
-            "manager.one",
+            "planner.one",
             CancellationToken.None);
 
         Assert.True(lockResult.Availability.CanUndo);
@@ -138,7 +147,7 @@ public sealed class PlanningServiceTests
             "planner.one",
             CancellationToken.None);
 
-        var editedRevenue = await _repository.GetCellAsync(revenueCoordinate, CancellationToken.None);
+        var editedRevenue = await GetEffectiveCellAsync(revenueCoordinate);
         Assert.NotNull(editedRevenue);
         Assert.NotEqual(beforeRevenue.EffectiveValue, editedRevenue!.EffectiveValue);
 
@@ -148,7 +157,7 @@ public sealed class PlanningServiceTests
         Assert.Equal(1, availabilityAfterEdit.UndoDepth);
 
         var undoResult = await _service.UndoAsync(1, "planner.one", CancellationToken.None);
-        var afterUndo = await _repository.GetCellAsync(revenueCoordinate, CancellationToken.None);
+        var afterUndo = await GetEffectiveCellAsync(revenueCoordinate);
         Assert.NotNull(afterUndo);
         Assert.Equal("applied", undoResult.Status);
         Assert.Equal(beforeRevenue.EffectiveValue, afterUndo!.EffectiveValue);
@@ -156,7 +165,7 @@ public sealed class PlanningServiceTests
         Assert.True(undoResult.Availability.CanRedo);
 
         var redoResult = await _service.RedoAsync(1, "planner.one", CancellationToken.None);
-        var afterRedo = await _repository.GetCellAsync(revenueCoordinate, CancellationToken.None);
+        var afterRedo = await GetEffectiveCellAsync(revenueCoordinate);
         Assert.NotNull(afterRedo);
         Assert.Equal("applied", redoResult.Status);
         Assert.Equal(editedRevenue.EffectiveValue, afterRedo!.EffectiveValue);
@@ -177,19 +186,19 @@ public sealed class PlanningServiceTests
             "planner.one",
             CancellationToken.None);
 
-        var lockedCell = await _repository.GetCellAsync(revenueCoordinate, CancellationToken.None);
+        var lockedCell = await GetEffectiveCellAsync(revenueCoordinate);
         Assert.NotNull(lockedCell);
         Assert.True(lockedCell!.IsLocked);
         Assert.Equal("Planner hold", lockedCell.LockReason);
 
         await _service.UndoAsync(1, "planner.one", CancellationToken.None);
-        var afterUndo = await _repository.GetCellAsync(revenueCoordinate, CancellationToken.None);
+        var afterUndo = await GetEffectiveCellAsync(revenueCoordinate);
         Assert.NotNull(afterUndo);
         Assert.False(afterUndo!.IsLocked);
         Assert.Null(afterUndo.LockReason);
 
         await _service.RedoAsync(1, "planner.one", CancellationToken.None);
-        var afterRedo = await _repository.GetCellAsync(revenueCoordinate, CancellationToken.None);
+        var afterRedo = await GetEffectiveCellAsync(revenueCoordinate);
         Assert.NotNull(afterRedo);
         Assert.True(afterRedo!.IsLocked);
         Assert.Equal("Planner hold", afterRedo.LockReason);
@@ -324,8 +333,8 @@ public sealed class PlanningServiceTests
         Assert.True(result.Availability.CanUndo);
         Assert.Contains(result.Patch!.Cells, cell => cell.StoreId == 101 && cell.ProductNodeId == 2111 && cell.TimePeriodId == 202603 && cell.MeasureId == PlanningMeasures.SalesRevenue);
 
-        var updatedMonthRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202603), CancellationToken.None);
-        var updatedYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202600), CancellationToken.None);
+        var updatedMonthRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202603));
+        var updatedYearRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202600));
         Assert.NotNull(updatedMonthRevenue);
         Assert.NotNull(updatedYearRevenue);
         Assert.Equal(1.0m, updatedMonthRevenue!.GrowthFactor);
@@ -365,8 +374,8 @@ public sealed class PlanningServiceTests
             "planner.one",
             CancellationToken.None);
 
-        var storeAAfter = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2000, 202600), CancellationToken.None);
-        var storeBLeafAfter = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, storeBLeaf.StoreId, storeBLeaf.ProductNodeId, 202601), CancellationToken.None);
+        var storeAAfter = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2000, 202600));
+        var storeBLeafAfter = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, storeBLeaf.StoreId, storeBLeaf.ProductNodeId, 202601));
 
         Assert.NotNull(storeAAfter);
         Assert.NotNull(storeBLeafAfter);
@@ -389,7 +398,7 @@ public sealed class PlanningServiceTests
             "planner.one",
             CancellationToken.None);
 
-        var storeMonthRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2000, 202601), CancellationToken.None);
+        var storeMonthRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2000, 202601));
 
         Assert.NotNull(storeMonthRevenue);
         Assert.Equal(12000m, storeMonthRevenue!.EffectiveValue);
@@ -412,9 +421,9 @@ public sealed class PlanningServiceTests
             "planner.one",
             CancellationToken.None);
 
-        var departmentRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2100, 202600), CancellationToken.None);
-        var softDrinksRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202600), CancellationToken.None);
-        var teaRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2120, 202600), CancellationToken.None);
+        var departmentRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2100, 202600));
+        var softDrinksRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202600));
+        var teaRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2120, 202600));
 
         Assert.NotNull(departmentRevenue);
         Assert.NotNull(softDrinksRevenue);
@@ -441,11 +450,11 @@ public sealed class PlanningServiceTests
             "planner.one",
             CancellationToken.None);
 
-        var colaRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202601), CancellationToken.None);
-        var sparklingFruitRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2112, 202601), CancellationToken.None);
-        var softDrinksRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202601), CancellationToken.None);
-        var teaRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2120, 202601), CancellationToken.None);
-        var departmentRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2100, 202601), CancellationToken.None);
+        var colaRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202601));
+        var sparklingFruitRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2112, 202601));
+        var softDrinksRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202601));
+        var teaRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2120, 202601));
+        var departmentRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2100, 202601));
 
         Assert.NotNull(colaRevenue);
         Assert.NotNull(sparklingFruitRevenue);
@@ -477,12 +486,12 @@ public sealed class PlanningServiceTests
             "planner.one",
             CancellationToken.None);
 
-        var colaYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202600), CancellationToken.None);
-        var colaFebRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202602), CancellationToken.None);
-        var sparklingFruitYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2112, 202600), CancellationToken.None);
-        var softDrinksYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202600), CancellationToken.None);
-        var teaYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2120, 202600), CancellationToken.None);
-        var departmentYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2100, 202600), CancellationToken.None);
+        var colaYearRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202600));
+        var colaFebRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202602));
+        var sparklingFruitYearRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2112, 202600));
+        var softDrinksYearRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202600));
+        var teaYearRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2120, 202600));
+        var departmentYearRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2100, 202600));
 
         Assert.NotNull(colaYearRevenue);
         Assert.NotNull(sparklingFruitYearRevenue);
@@ -515,11 +524,11 @@ public sealed class PlanningServiceTests
             "planner.one",
             CancellationToken.None);
 
-        var colaYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202600), CancellationToken.None);
-        var sparklingFruitYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2112, 202600), CancellationToken.None);
-        var softDrinksYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202600), CancellationToken.None);
-        var teaYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2120, 202600), CancellationToken.None);
-        var departmentYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2100, 202600), CancellationToken.None);
+        var colaYearRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202600));
+        var sparklingFruitYearRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2112, 202600));
+        var softDrinksYearRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202600));
+        var teaYearRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2120, 202600));
+        var departmentYearRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2100, 202600));
 
         Assert.NotNull(colaYearRevenue);
         Assert.NotNull(sparklingFruitYearRevenue);
@@ -554,12 +563,12 @@ public sealed class PlanningServiceTests
             "planner.one",
             CancellationToken.None);
 
-        var colaYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202600), CancellationToken.None);
-        var colaFebRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202602), CancellationToken.None);
-        var sparklingFruitYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2112, 202600), CancellationToken.None);
-        var softDrinksYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202600), CancellationToken.None);
-        var teaYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2120, 202600), CancellationToken.None);
-        var departmentYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2100, 202600), CancellationToken.None);
+        var colaYearRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202600));
+        var colaFebRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202602));
+        var sparklingFruitYearRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2112, 202600));
+        var softDrinksYearRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2110, 202600));
+        var teaYearRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2120, 202600));
+        var departmentYearRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2100, 202600));
 
         Assert.NotNull(colaYearRevenue);
         Assert.NotNull(colaFebRevenue);
@@ -594,11 +603,11 @@ public sealed class PlanningServiceTests
             "planner.one",
             CancellationToken.None);
 
-        var colaYearQuantity = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2111, 202600), CancellationToken.None);
-        var sparklingFruitYearQuantity = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2112, 202600), CancellationToken.None);
-        var softDrinksYearQuantity = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2110, 202600), CancellationToken.None);
-        var teaYearQuantity = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2120, 202600), CancellationToken.None);
-        var departmentYearQuantity = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2100, 202600), CancellationToken.None);
+        var colaYearQuantity = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2111, 202600));
+        var sparklingFruitYearQuantity = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2112, 202600));
+        var softDrinksYearQuantity = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2110, 202600));
+        var teaYearQuantity = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2120, 202600));
+        var departmentYearQuantity = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2100, 202600));
 
         Assert.NotNull(colaYearQuantity);
         Assert.NotNull(sparklingFruitYearQuantity);
