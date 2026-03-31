@@ -585,6 +585,24 @@ export default function App() {
     onError: (error: Error) => setLastError(error.message),
   });
 
+  const transitionPlanningContext = useCallback(
+    async (applyChange: () => void) => {
+      setLastError(null);
+
+      if (saveMutation.isPending) {
+        return;
+      }
+
+      if (planningViewActive && hasUnsavedChanges) {
+        await saveMutation.mutateAsync({ mode: "autosave" });
+      }
+
+      setPendingPlanningPatch(null);
+      applyChange();
+    },
+    [hasUnsavedChanges, planningViewActive, saveMutation],
+  );
+
   const addHierarchyDepartmentMutation = useMutation({
     mutationFn: postHierarchyDepartment,
     onSuccess: async () => {
@@ -1714,7 +1732,17 @@ export default function App() {
       <div className="view-menu-bar">
         <label className="year-picker">
           <span>Workspace</span>
-          <select value={activeView} onChange={(event) => setActiveView(event.target.value as ActiveView)}>
+          <select
+            value={activeView}
+            onChange={(event) => {
+              const nextView = event.target.value as ActiveView;
+              if (nextView === activeView) {
+                return;
+              }
+
+              void transitionPlanningContext(() => setActiveView(nextView));
+            }}
+          >
             <option value="planning-store">Planning - by Store</option>
             <option value="planning-department">Planning - by Department</option>
             <option value="hierarchy">Hierarchy Maintenance</option>
@@ -1733,7 +1761,12 @@ export default function App() {
               value={selectedPlanningStoreId === null ? "" : String(selectedPlanningStoreId)}
               onChange={(event) => {
                 const nextValue = event.target.value;
-                setSelectedPlanningStoreId(nextValue === "all" ? "all" : (Number(nextValue) || null));
+                const nextStoreScope = nextValue === "all" ? "all" : (Number(nextValue) || null);
+                if (nextStoreScope === selectedPlanningStoreId) {
+                  return;
+                }
+
+                void transitionPlanningContext(() => setSelectedPlanningStoreId(nextStoreScope));
               }}
             >
               <option value="all">All Stores</option>
@@ -1748,7 +1781,17 @@ export default function App() {
         {activeView === "planning-department" ? (
           <label className="year-picker">
             <span>Department Scope</span>
-            <select value={selectedDepartmentLabel ?? ""} onChange={(event) => setSelectedDepartmentLabel(event.target.value || null)}>
+            <select
+              value={selectedDepartmentLabel ?? ""}
+              onChange={(event) => {
+                const nextDepartmentLabel = event.target.value || null;
+                if (nextDepartmentLabel === selectedDepartmentLabel) {
+                  return;
+                }
+
+                void transitionPlanningContext(() => setSelectedDepartmentLabel(nextDepartmentLabel));
+              }}
+            >
               <option value="">All Departments</option>
               {(departmentScopeQuery.data?.departments ?? []).map((label) => (
                 <option key={label} value={label}>
@@ -1761,7 +1804,17 @@ export default function App() {
         {activeView === "planning-department" ? (
           <label className="year-picker">
             <span>Layout</span>
-            <select value={departmentLayout} onChange={(event) => setDepartmentLayout(event.target.value as DepartmentLayout)}>
+            <select
+              value={departmentLayout}
+              onChange={(event) => {
+                const nextLayout = event.target.value as DepartmentLayout;
+                if (nextLayout === departmentLayout) {
+                  return;
+                }
+
+                void transitionPlanningContext(() => setDepartmentLayout(nextLayout));
+              }}
+            >
               <option value="department-store-class">Department - Store - Class - Subclass</option>
               <option value="department-class-store">Department - Class - Store - Subclass</option>
             </select>
