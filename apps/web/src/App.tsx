@@ -568,10 +568,19 @@ export default function App() {
 
   const saveMutation = useMutation({
     mutationFn: ({ mode }: { mode: "manual" | "autosave" }) => postSave({ scenarioVersionId: 1, mode }),
-    onSuccess: (result) => {
+    onSuccess: async (result) => {
       setLastError(null);
       setHasUnsavedChanges(false);
       setLastSavedAt(result.savedAt);
+      setPendingPlanningPatch(null);
+      clearInactivePlanningSliceCaches();
+      setPlanningGridRefreshToken((current) => current + 1);
+      await refreshPlanningQueries({
+        includeGrid: true,
+        includeInactiveGrid: true,
+        includeUndoRedo: true,
+        includeInsights: false,
+      });
     },
     onError: (error: Error) => setLastError(error.message),
   });

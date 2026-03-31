@@ -575,6 +575,72 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
+    public async Task ApplyEditsAsync_OnLeafYearQuantity_CanBeRepeatedWithoutBreakingRollups()
+    {
+        await _service.ApplyEditsAsync(
+            new EditCellsRequest(
+                1,
+                PlanningMeasures.SoldQuantity,
+                "Leaf year quantity edit 1",
+                [new EditCellRequest(101, 2111, 202600, 390m, "override", null)]),
+            "planner.one",
+            CancellationToken.None);
+        var secondResult = await _service.ApplyEditsAsync(
+            new EditCellsRequest(
+                1,
+                PlanningMeasures.SoldQuantity,
+                "Leaf year quantity edit 2",
+                [new EditCellRequest(101, 2111, 202600, 420m, "override", null)]),
+            "planner.one",
+            CancellationToken.None);
+
+        var colaYearQuantity = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2111, 202600), CancellationToken.None);
+        var sparklingFruitYearQuantity = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2112, 202600), CancellationToken.None);
+        var softDrinksYearQuantity = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2110, 202600), CancellationToken.None);
+        var teaYearQuantity = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2120, 202600), CancellationToken.None);
+        var departmentYearQuantity = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, 101, 2100, 202600), CancellationToken.None);
+
+        Assert.NotNull(colaYearQuantity);
+        Assert.NotNull(sparklingFruitYearQuantity);
+        Assert.NotNull(softDrinksYearQuantity);
+        Assert.NotNull(teaYearQuantity);
+        Assert.NotNull(departmentYearQuantity);
+        Assert.True(secondResult.UpdatedCellCount > 0);
+        Assert.Equal(420m, colaYearQuantity!.EffectiveValue);
+        Assert.Equal(colaYearQuantity.EffectiveValue + sparklingFruitYearQuantity!.EffectiveValue, softDrinksYearQuantity!.EffectiveValue);
+        Assert.Equal(softDrinksYearQuantity.EffectiveValue + teaYearQuantity!.EffectiveValue, departmentYearQuantity!.EffectiveValue);
+    }
+
+    [Fact]
+    public async Task SaveScenarioAsync_AfterLeafYearQuantityEdit_DepartmentProjectionShowsCommittedLeafValue()
+    {
+        await _service.ApplyEditsAsync(
+            new EditCellsRequest(
+                1,
+                PlanningMeasures.SoldQuantity,
+                "Leaf year quantity edit",
+                [new EditCellRequest(101, 2111, 202600, 390m, "override", null)]),
+            "planner.one",
+            CancellationToken.None);
+        await _service.SaveScenarioAsync(new SaveScenarioRequest(1, "manual"), "planner.one", CancellationToken.None);
+
+        var request = new PlanningGridViewRequest(1, "department", null, "Beverages", "department-store-class", false);
+        var departmentRows = await _service.GetGridViewChildrenAsync(request, "view:department:root", "planner.one", CancellationToken.None);
+        var beveragesRow = Assert.Single(departmentRows.Rows, row => row.Label == "Beverages");
+
+        var storeRows = await _service.GetGridViewChildrenAsync(request, beveragesRow.ViewRowId!, "planner.one", CancellationToken.None);
+        var storeRow = Assert.Single(storeRows.Rows, row => row.Label == "Store A");
+
+        var classRows = await _service.GetGridViewChildrenAsync(request, storeRow.ViewRowId!, "planner.one", CancellationToken.None);
+        var classRow = Assert.Single(classRows.Rows, row => row.Label == "Soft Drinks");
+
+        var subclassRows = await _service.GetGridViewChildrenAsync(request, classRow.ViewRowId!, "planner.one", CancellationToken.None);
+        var subclassRow = Assert.Single(subclassRows.Rows, row => row.Label == "Cola");
+
+        Assert.Equal(390m, subclassRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value);
+    }
+
+    [Fact]
     public async Task GenerateNextYearAsync_CopiesEditableInputsAndRecomputesCalculatedMeasures()
     {
         var result = await _service.GenerateNextYearAsync(new GenerateNextYearRequest(1, 202600), "planner.one", CancellationToken.None);
