@@ -130,6 +130,28 @@ type ActiveView =
 type DepartmentLayout = "department-store-class" | "department-class-store";
 type PlanningStoreScopeSelection = number | "all" | null;
 
+function mergePlanningPatches(
+  existingPatch: PlanningGridPatch | null,
+  nextPatch: PlanningGridPatch,
+): PlanningGridPatch {
+  if (!existingPatch) {
+    return nextPatch;
+  }
+
+  const cellsByCoordinate = new Map<string, PlanningGridPatch["cells"][number]>();
+  existingPatch.cells.forEach((cell) => {
+    cellsByCoordinate.set(`${cell.storeId}:${cell.productNodeId}:${cell.timePeriodId}:${cell.measureId}`, cell);
+  });
+  nextPatch.cells.forEach((cell) => {
+    cellsByCoordinate.set(`${cell.storeId}:${cell.productNodeId}:${cell.timePeriodId}:${cell.measureId}`, cell);
+  });
+
+  return {
+    scenarioVersionId: nextPatch.scenarioVersionId,
+    cells: [...cellsByCoordinate.values()],
+  };
+}
+
 export default function App() {
   const queryClient = useQueryClient();
   const [lastError, setLastError] = useState<string | null>(null);
@@ -360,7 +382,7 @@ export default function App() {
   ) => {
     syncUndoRedoAvailability(result.availability);
     if (result.patch) {
-      setPendingPlanningPatch(result.patch);
+      setPendingPlanningPatch((current) => mergePlanningPatches(current, result.patch!));
       setPlanningPatchToken((current) => current + 1);
     }
 

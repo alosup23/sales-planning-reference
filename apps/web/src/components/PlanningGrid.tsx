@@ -166,8 +166,8 @@ export function PlanningGrid({
   }, [data.periods, yearPeriods]);
 
   const rootRows = useMemo<GridRowView[]>(
-    () => data.rows.map((row) => ({ ...row })),
-    [data.rows],
+    () => applyPatchToRows(data.rows.map((row) => ({ ...row })), pendingPatch),
+    [data.rows, pendingPatch],
   );
 
   const registerRows = (rows: GridRowView[]) => {
@@ -408,11 +408,12 @@ export function PlanningGrid({
             const rows = route.length === 0
               ? rootRows
               : await loadChildRows(route[route.length - 1]!);
+            const patchedRows = route.length === 0 ? rows : applyPatchToRows(rows, pendingPatch);
 
-            registerRows(rows);
+            registerRows(patchedRows);
             params.success({
-              rowData: rows,
-              rowCount: rows.length,
+              rowData: patchedRows,
+              rowCount: patchedRows.length,
             });
           } catch (error) {
             const message = error instanceof Error ? error.message : "Unable to load planning rows.";
@@ -422,7 +423,7 @@ export function PlanningGrid({
         })();
       },
     }),
-    [loadChildRows, onLoadError, rootRows],
+    [loadChildRows, onLoadError, pendingPatch, rootRows],
   );
 
   useEffect(() => {
@@ -1168,6 +1169,42 @@ function recomputeSyntheticRow(
   });
 
   return didChange ? { ...row, cells: nextCells } : row;
+}
+
+function applyPatchToRows(
+  rows: GridRowView[],
+  patch: PlanningGridPatch | null | undefined,
+): GridRowView[] {
+  if (!patch || patch.cells.length === 0) {
+    return rows;
+  }
+
+  return rows.map((row) => {
+    const canonicalStoreId = row.bindingStoreId ?? row.storeId;
+    const canonicalProductNodeId = row.bindingProductNodeId ?? row.productNodeId;
+    let nextRow: GridRowView | null = null;
+
+    patch.cells.forEach((cellPatch) => {
+      if (canonicalStoreId !== cellPatch.storeId || canonicalProductNodeId !== cellPatch.productNodeId) {
+        return;
+      }
+
+      const workingRow = nextRow ?? {
+        ...row,
+        cells: { ...row.cells },
+      };
+      const existingPeriod = workingRow.cells[cellPatch.timePeriodId];
+      workingRow.cells[cellPatch.timePeriodId] = {
+        measures: {
+          ...(existingPeriod?.measures ?? {}),
+          [cellPatch.measureId]: { ...cellPatch.cell },
+        },
+      };
+      nextRow = workingRow;
+    });
+
+    return nextRow ?? row;
+  });
 }
 
 function getRowClasses(row: GridRowView | undefined): string[] {
