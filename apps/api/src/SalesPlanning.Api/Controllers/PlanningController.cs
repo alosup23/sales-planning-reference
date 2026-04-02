@@ -1,8 +1,8 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using System.Security.Claims;
 using SalesPlanning.Api.Application;
 using SalesPlanning.Api.Contracts;
+using SalesPlanning.Api.Security;
 
 namespace SalesPlanning.Api.Controllers;
 
@@ -709,17 +709,6 @@ public sealed class PlanningController : ControllerBase
 
     private string GetRequiredUserId()
     {
-        if (!_authEnabled)
-        {
-            return "local.test.user";
-        }
-
-        return User.Identity?.Name
-            ?? User.FindFirst("preferred_username")?.Value
-            ?? User.FindFirst("name")?.Value
-            ?? User.FindFirst("oid")?.Value
-            ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value
-            ?? User.FindFirst("sub")?.Value
-            ?? throw new UnauthorizedAccessException("Authenticated user identity was not available.");
+        return PlanningUserIdentity.ResolveRequiredUserId(User, _authEnabled);
     }
 }

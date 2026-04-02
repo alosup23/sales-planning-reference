@@ -139,6 +139,8 @@ export function PlanningGrid({
   const columnWidthStateRef = useRef<Map<string, number>>(new Map());
   const rowCacheRef = useRef<Map<string, GridRowView>>(new Map());
   const initialRowsRenderedRef = useRef(false);
+  const rootRowsRef = useRef<GridRowView[]>([]);
+  const pendingPatchRef = useRef<PlanningGridPatch | null | undefined>(pendingPatch);
 
   useEffect(() => {
     expandedRowStateRef.current.clear();
@@ -166,9 +168,17 @@ export function PlanningGrid({
   }, [data.periods, yearPeriods]);
 
   const rootRows = useMemo<GridRowView[]>(
-    () => applyPatchToRows(data.rows.map((row) => ({ ...row })), pendingPatch),
-    [data.rows, pendingPatch],
+    () => data.rows.map((row) => ({ ...row })),
+    [data.rows],
   );
+
+  useEffect(() => {
+    rootRowsRef.current = rootRows;
+  }, [rootRows]);
+
+  useEffect(() => {
+    pendingPatchRef.current = pendingPatch;
+  }, [pendingPatch]);
 
   const registerRows = (rows: GridRowView[]) => {
     let didChange = false;
@@ -406,9 +416,9 @@ export function PlanningGrid({
           try {
             const route = params.request.groupKeys;
             const rows = route.length === 0
-              ? rootRows
+              ? rootRowsRef.current.map((row) => ({ ...row }))
               : await loadChildRows(route[route.length - 1]!);
-            const patchedRows = route.length === 0 ? rows : applyPatchToRows(rows, pendingPatch);
+            const patchedRows = applyPatchToRows(rows, pendingPatchRef.current);
 
             registerRows(patchedRows);
             params.success({
@@ -423,7 +433,7 @@ export function PlanningGrid({
         })();
       },
     }),
-    [loadChildRows, onLoadError, pendingPatch, rootRows],
+    [loadChildRows, onLoadError],
   );
 
   useEffect(() => {

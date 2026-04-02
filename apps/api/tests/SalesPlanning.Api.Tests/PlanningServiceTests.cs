@@ -650,6 +650,58 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
+    public async Task SaveScenarioAsync_AfterLeafYearQuantityEdit_CanBeEditedAgainAndRemainsVisibleAcrossViews()
+    {
+        await _service.ApplyEditsAsync(
+            new EditCellsRequest(
+                1,
+                PlanningMeasures.SoldQuantity,
+                "Leaf year quantity edit 1",
+                [new EditCellRequest(101, 2111, 202600, 390m, "override", null)]),
+            "planner.one",
+            CancellationToken.None);
+        await _service.SaveScenarioAsync(new SaveScenarioRequest(1, "manual"), "planner.one", CancellationToken.None);
+
+        var departmentRequest = new PlanningGridViewRequest(1, "department", null, "Beverages", "department-store-class", false);
+        var departmentRows = await _service.GetGridViewChildrenAsync(departmentRequest, "view:department:root", "planner.one", CancellationToken.None);
+        var beveragesRow = Assert.Single(departmentRows.Rows, row => row.Label == "Beverages");
+
+        var storeRows = await _service.GetGridViewChildrenAsync(departmentRequest, beveragesRow.ViewRowId!, "planner.one", CancellationToken.None);
+        var storeRow = Assert.Single(storeRows.Rows, row => row.Label == "Store A");
+
+        var classRows = await _service.GetGridViewChildrenAsync(departmentRequest, storeRow.ViewRowId!, "planner.one", CancellationToken.None);
+        var classRow = Assert.Single(classRows.Rows, row => row.Label == "Soft Drinks");
+
+        var subclassRows = await _service.GetGridViewChildrenAsync(departmentRequest, classRow.ViewRowId!, "planner.one", CancellationToken.None);
+        var subclassRow = Assert.Single(subclassRows.Rows, row => row.Label == "Cola");
+        Assert.Equal(390m, subclassRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value);
+
+        var secondResult = await _service.ApplyEditsAsync(
+            new EditCellsRequest(
+                1,
+                PlanningMeasures.SoldQuantity,
+                "Leaf year quantity edit 2",
+                [new EditCellRequest(101, 2111, 202600, 420m, "override", null)]),
+            "planner.one",
+            CancellationToken.None);
+
+        var storeRequest = new PlanningGridViewRequest(1, "store", null, null, null, false);
+        var storeRowsAfterSecondEdit = await _service.GetGridViewChildrenAsync(storeRequest, "view:store:root", "planner.one", CancellationToken.None);
+        var storeRowAfterSecondEdit = Assert.Single(storeRowsAfterSecondEdit.Rows, row => row.Label == "Store A");
+
+        var departmentRowsAfterSecondEdit = await _service.GetGridViewChildrenAsync(storeRequest, storeRowAfterSecondEdit.ViewRowId!, "planner.one", CancellationToken.None);
+        var departmentRow = Assert.Single(departmentRowsAfterSecondEdit.Rows, row => row.Label == "Beverages");
+
+        var classRowsAfterSecondEdit = await _service.GetGridViewChildrenAsync(storeRequest, departmentRow.ViewRowId!, "planner.one", CancellationToken.None);
+        var classRowAfterSecondEdit = Assert.Single(classRowsAfterSecondEdit.Rows, row => row.Label == "Soft Drinks");
+
+        var subclassRowsAfterSecondEdit = await _service.GetGridViewChildrenAsync(storeRequest, classRowAfterSecondEdit.ViewRowId!, "planner.one", CancellationToken.None);
+        var subclassRowAfterSecondEdit = Assert.Single(subclassRowsAfterSecondEdit.Rows, row => row.Label == "Cola");
+        Assert.Equal(420m, subclassRowAfterSecondEdit.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value);
+        Assert.True(secondResult.UpdatedCellCount > 0);
+    }
+
+    [Fact]
     public async Task GetGridViewChildrenAsync_AfterUnsavedLeafYearQuantityEdit_DepartmentProjectionShowsDraftLeafValue()
     {
         await _service.ApplyEditsAsync(
