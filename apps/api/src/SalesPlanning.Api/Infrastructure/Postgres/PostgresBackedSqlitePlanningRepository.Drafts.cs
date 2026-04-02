@@ -123,173 +123,8 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             .ThenBy(cell => cell.Coordinate.ProductNodeId)
             .ThenBy(cell => cell.Coordinate.TimePeriodId)
             .ToList();
-        var stageTableName = $"planning_draft_cells_stage_{Guid.NewGuid():N}";
-
-        await using (var createStageCommand = new NpgsqlCommand(
-            $"""
-            create temp table {stageTableName} (
-                scenario_version_id bigint not null,
-                user_id text not null,
-                measure_id bigint not null,
-                store_id bigint not null,
-                product_node_id bigint not null,
-                time_period_id bigint not null,
-                input_value numeric null,
-                override_value numeric null,
-                is_system_generated_override integer not null,
-                derived_value numeric not null,
-                effective_value numeric not null,
-                growth_factor numeric not null,
-                is_locked integer not null,
-                lock_reason text null,
-                locked_by text null,
-                row_version bigint not null,
-                cell_kind text not null
-            ) on commit drop;
-            """,
-            connection,
-            transaction))
-        {
-            createStageCommand.CommandTimeout = 300;
-            await createStageCommand.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await using (var importer = await connection.BeginBinaryImportAsync(
-                         $"""
-                          copy {stageTableName} (
-                              scenario_version_id,
-                              user_id,
-                              measure_id,
-                              store_id,
-                              product_node_id,
-                              time_period_id,
-                              input_value,
-                              override_value,
-                              is_system_generated_override,
-                              derived_value,
-                              effective_value,
-                              growth_factor,
-                              is_locked,
-                              lock_reason,
-                              locked_by,
-                              row_version,
-                              cell_kind)
-                          from stdin (format binary)
-                          """,
-                         cancellationToken))
-        {
-            foreach (var cell in orderedCells)
-            {
-                await importer.StartRowAsync(cancellationToken);
-                await importer.WriteAsync(scenarioVersionId, NpgsqlDbType.Bigint, cancellationToken);
-                await importer.WriteAsync(userContext.PrimaryUserId, NpgsqlDbType.Text, cancellationToken);
-                await importer.WriteAsync(cell.Coordinate.MeasureId, NpgsqlDbType.Bigint, cancellationToken);
-                await importer.WriteAsync(cell.Coordinate.StoreId, NpgsqlDbType.Bigint, cancellationToken);
-                await importer.WriteAsync(cell.Coordinate.ProductNodeId, NpgsqlDbType.Bigint, cancellationToken);
-                await importer.WriteAsync(cell.Coordinate.TimePeriodId, NpgsqlDbType.Bigint, cancellationToken);
-                if (cell.InputValue is { } inputValue)
-                {
-                    await importer.WriteAsync(inputValue, NpgsqlDbType.Numeric, cancellationToken);
-                }
-                else
-                {
-                    await importer.WriteNullAsync(cancellationToken);
-                }
-
-                if (cell.OverrideValue is { } overrideValue)
-                {
-                    await importer.WriteAsync(overrideValue, NpgsqlDbType.Numeric, cancellationToken);
-                }
-                else
-                {
-                    await importer.WriteNullAsync(cancellationToken);
-                }
-
-                await importer.WriteAsync(cell.IsSystemGeneratedOverride ? 1 : 0, NpgsqlDbType.Integer, cancellationToken);
-                await importer.WriteAsync(cell.DerivedValue, NpgsqlDbType.Numeric, cancellationToken);
-                await importer.WriteAsync(cell.EffectiveValue, NpgsqlDbType.Numeric, cancellationToken);
-                await importer.WriteAsync(cell.GrowthFactor, NpgsqlDbType.Numeric, cancellationToken);
-                await importer.WriteAsync(cell.IsLocked ? 1 : 0, NpgsqlDbType.Integer, cancellationToken);
-                if (cell.LockReason is { } lockReason)
-                {
-                    await importer.WriteAsync(lockReason, NpgsqlDbType.Text, cancellationToken);
-                }
-                else
-                {
-                    await importer.WriteNullAsync(cancellationToken);
-                }
-
-                if (cell.LockedBy is { } lockedBy)
-                {
-                    await importer.WriteAsync(lockedBy, NpgsqlDbType.Text, cancellationToken);
-                }
-                else
-                {
-                    await importer.WriteNullAsync(cancellationToken);
-                }
-
-                await importer.WriteAsync(cell.RowVersion, NpgsqlDbType.Bigint, cancellationToken);
-                await importer.WriteAsync(cell.CellKind, NpgsqlDbType.Text, cancellationToken);
-            }
-
-            await importer.CompleteAsync(cancellationToken);
-        }
-
-        var secondaryAliases = userContext.CandidateUserIds
-            .Where(candidate => !string.Equals(candidate, userContext.PrimaryUserId, StringComparison.Ordinal))
-            .ToArray();
-        if (secondaryAliases.Length > 0)
-        {
-            await using var deleteAliasCommand = new NpgsqlCommand(
-                $"""
-                delete from planning_draft_cells as draft
-                using {stageTableName} as source
-                where draft.scenario_version_id = source.scenario_version_id
-                  and draft.measure_id = source.measure_id
-                  and draft.store_id = source.store_id
-                  and draft.product_node_id = source.product_node_id
-                  and draft.time_period_id = source.time_period_id
-                  and draft.user_id = any(@secondaryAliases);
-                """,
-                connection,
-                transaction);
-            deleteAliasCommand.CommandTimeout = 300;
-            deleteAliasCommand.Parameters.Add(CreateArrayParameter("@secondaryAliases", NpgsqlDbType.Text, secondaryAliases));
-            await deleteAliasCommand.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await using (var updateCommand = new NpgsqlCommand(
-            $"""
-            update planning_draft_cells as target
-            set input_value = source.input_value,
-                override_value = source.override_value,
-                is_system_generated_override = source.is_system_generated_override,
-                derived_value = source.derived_value,
-                effective_value = source.effective_value,
-                growth_factor = source.growth_factor,
-                is_locked = source.is_locked,
-                lock_reason = source.lock_reason,
-                locked_by = source.locked_by,
-                row_version = source.row_version,
-                cell_kind = source.cell_kind,
-                updated_at = now()
-            from {stageTableName} as source
-            where target.scenario_version_id = source.scenario_version_id
-              and target.user_id = source.user_id
-              and target.measure_id = source.measure_id
-              and target.store_id = source.store_id
-              and target.product_node_id = source.product_node_id
-              and target.time_period_id = source.time_period_id;
-            """,
-            connection,
-            transaction))
-        {
-            updateCommand.CommandTimeout = 300;
-            await updateCommand.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await using (var insertCommand = new NpgsqlCommand(
-            $"""
+        const int draftUpsertChunkSize = 128;
+        const string upsertSql = """
             insert into planning_draft_cells (
                 scenario_version_id,
                 user_id,
@@ -309,40 +144,72 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
                 row_version,
                 cell_kind,
                 updated_at)
-            select
-                source.scenario_version_id,
-                source.user_id,
-                source.measure_id,
-                source.store_id,
-                source.product_node_id,
-                source.time_period_id,
-                source.input_value,
-                source.override_value,
-                source.is_system_generated_override,
-                source.derived_value,
-                source.effective_value,
-                source.growth_factor,
-                source.is_locked,
-                source.lock_reason,
-                source.locked_by,
-                source.row_version,
-                source.cell_kind,
-                now()
-            from {stageTableName} as source
-            left join planning_draft_cells as target
-              on target.scenario_version_id = source.scenario_version_id
-             and target.user_id = source.user_id
-             and target.measure_id = source.measure_id
-             and target.store_id = source.store_id
-             and target.product_node_id = source.product_node_id
-             and target.time_period_id = source.time_period_id
-            where target.scenario_version_id is null;
-            """,
-            connection,
-            transaction))
+            values (
+                @scenarioVersionId,
+                @userId,
+                @measureId,
+                @storeId,
+                @productNodeId,
+                @timePeriodId,
+                @inputValue,
+                @overrideValue,
+                @isSystemGeneratedOverride,
+                @derivedValue,
+                @effectiveValue,
+                @growthFactor,
+                @isLocked,
+                @lockReason,
+                @lockedBy,
+                @rowVersion,
+                @cellKind,
+                now())
+            on conflict (scenario_version_id, user_id, measure_id, store_id, product_node_id, time_period_id)
+            do update set
+                input_value = excluded.input_value,
+                override_value = excluded.override_value,
+                is_system_generated_override = excluded.is_system_generated_override,
+                derived_value = excluded.derived_value,
+                effective_value = excluded.effective_value,
+                growth_factor = excluded.growth_factor,
+                is_locked = excluded.is_locked,
+                lock_reason = excluded.lock_reason,
+                locked_by = excluded.locked_by,
+                row_version = excluded.row_version,
+                cell_kind = excluded.cell_kind,
+                updated_at = excluded.updated_at;
+            """;
+
+        foreach (var chunk in orderedCells.Chunk(draftUpsertChunkSize))
         {
-            insertCommand.CommandTimeout = 300;
-            await insertCommand.ExecuteNonQueryAsync(cancellationToken);
+            await using var batch = new NpgsqlBatch(connection, transaction)
+            {
+                Timeout = 300
+            };
+
+            foreach (var cell in chunk)
+            {
+                var command = new NpgsqlBatchCommand(upsertSql);
+                command.Parameters.AddWithValue("@scenarioVersionId", NpgsqlDbType.Bigint, scenarioVersionId);
+                command.Parameters.AddWithValue("@userId", NpgsqlDbType.Text, userContext.PrimaryUserId);
+                command.Parameters.AddWithValue("@measureId", NpgsqlDbType.Bigint, cell.Coordinate.MeasureId);
+                command.Parameters.AddWithValue("@storeId", NpgsqlDbType.Bigint, cell.Coordinate.StoreId);
+                command.Parameters.AddWithValue("@productNodeId", NpgsqlDbType.Bigint, cell.Coordinate.ProductNodeId);
+                command.Parameters.AddWithValue("@timePeriodId", NpgsqlDbType.Bigint, cell.Coordinate.TimePeriodId);
+                command.Parameters.Add(new NpgsqlParameter("@inputValue", NpgsqlDbType.Numeric) { Value = (object?)cell.InputValue ?? DBNull.Value });
+                command.Parameters.Add(new NpgsqlParameter("@overrideValue", NpgsqlDbType.Numeric) { Value = (object?)cell.OverrideValue ?? DBNull.Value });
+                command.Parameters.AddWithValue("@isSystemGeneratedOverride", NpgsqlDbType.Integer, cell.IsSystemGeneratedOverride ? 1 : 0);
+                command.Parameters.AddWithValue("@derivedValue", NpgsqlDbType.Numeric, cell.DerivedValue);
+                command.Parameters.AddWithValue("@effectiveValue", NpgsqlDbType.Numeric, cell.EffectiveValue);
+                command.Parameters.AddWithValue("@growthFactor", NpgsqlDbType.Numeric, cell.GrowthFactor);
+                command.Parameters.AddWithValue("@isLocked", NpgsqlDbType.Integer, cell.IsLocked ? 1 : 0);
+                command.Parameters.Add(new NpgsqlParameter("@lockReason", NpgsqlDbType.Text) { Value = (object?)cell.LockReason ?? DBNull.Value });
+                command.Parameters.Add(new NpgsqlParameter("@lockedBy", NpgsqlDbType.Text) { Value = (object?)cell.LockedBy ?? DBNull.Value });
+                command.Parameters.AddWithValue("@rowVersion", NpgsqlDbType.Bigint, cell.RowVersion);
+                command.Parameters.AddWithValue("@cellKind", NpgsqlDbType.Text, cell.CellKind);
+                batch.BatchCommands.Add(command);
+            }
+
+            await batch.ExecuteNonQueryAsync(cancellationToken);
         }
     }
 
