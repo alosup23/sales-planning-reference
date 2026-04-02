@@ -59,10 +59,11 @@ public sealed partial class PlanningService
             return 0;
         }
 
+        var primaryUserId = GetPrimaryPlanningUserId(userId);
         var batch = new PlanningCommandBatch(
             await _repository.GetNextCommandBatchIdAsync(cancellationToken),
             scenarioVersionId,
-            userId,
+            primaryUserId,
             commandKind,
             commandScope is null ? null : JsonSerializer.Serialize(commandScope),
             false,
@@ -88,10 +89,11 @@ public sealed partial class PlanningService
             return 0;
         }
 
+        var primaryUserId = GetPrimaryPlanningUserId(userId);
         var batch = new PlanningCommandBatch(
             await _repository.GetNextDraftCommandBatchIdAsync(cancellationToken),
             scenarioVersionId,
-            userId,
+            primaryUserId,
             commandKind,
             commandScope is null ? null : JsonSerializer.Serialize(commandScope),
             false,
@@ -115,7 +117,7 @@ public sealed partial class PlanningService
             return draftAvailability;
         }
 
-        return await _repository.GetUndoRedoAvailabilityAsync(scenarioVersionId, userId, UndoRedoLimit, cancellationToken);
+        return await _repository.GetUndoRedoAvailabilityAsync(scenarioVersionId, GetPrimaryPlanningUserId(userId), UndoRedoLimit, cancellationToken);
     }
 
     private static IReadOnlyList<PlanningCommandCellDelta> InvertCommandDeltas(IReadOnlyList<PlanningCommandCellDelta> deltas)

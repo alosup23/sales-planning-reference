@@ -1,6 +1,7 @@
 using Npgsql;
 using NpgsqlTypes;
 using SalesPlanning.Api.Domain;
+using SalesPlanning.Api.Security;
 
 namespace SalesPlanning.Api.Infrastructure.Postgres;
 
@@ -8,7 +9,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
 {
     private async Task<IReadOnlyList<PlanningCell>> GetDraftCellsDirectAsync(
         long scenarioVersionId,
-        string userId,
+        PlanningUserIdentity.PlanningUserContext userContext,
         IEnumerable<PlanningCellCoordinate> coordinates,
         CancellationToken cancellationToken)
     {
@@ -59,7 +60,16 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
                    and requested.store_id = p.store_id
                    and requested.product_node_id = p.product_node_id
                    and requested.time_period_id = p.time_period_id
-                where p.user_id = @userId;
+                where p.user_id = any(@candidateUserIds)
+                order by
+                    p.scenario_version_id,
+                    p.measure_id,
+                    p.store_id,
+                    p.product_node_id,
+                    p.time_period_id,
+                    case when p.user_id = @primaryUserId then 0 else 1 end,
+                    p.updated_at desc,
+                    p.row_version desc;
                 """;
 
             foreach (var coordinateChunk in coordinateList.Chunk(BulkWriteChunkSize))
@@ -68,7 +78,8 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
                 {
                     CommandTimeout = 300
                 };
-                command.Parameters.AddWithValue("@userId", userId);
+                command.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+                command.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
                 command.Parameters.Add(CreateArrayParameter("@scenarioVersionIds", NpgsqlDbType.Bigint, coordinateChunk.Select(coordinate => coordinate.ScenarioVersionId).ToArray()));
                 command.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, coordinateChunk.Select(coordinate => coordinate.MeasureId).ToArray()));
                 command.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, coordinateChunk.Select(coordinate => coordinate.StoreId).ToArray()));
@@ -82,7 +93,10 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
                 }
             }
 
-            return cells.Select(cell => cell.Clone()).ToList();
+            return cells
+                .DistinctBy(cell => cell.Coordinate.Key)
+                .Select(cell => cell.Clone())
+                .ToList();
         }, cancellationToken);
     }
 
@@ -90,7 +104,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         long scenarioVersionId,
-        string userId,
+        PlanningUserIdentity.PlanningUserContext userContext,
         IReadOnlyList<PlanningCell> cells,
         CancellationToken cancellationToken)
     {
@@ -168,7 +182,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             {
                 await importer.StartRowAsync(cancellationToken);
                 await importer.WriteAsync(scenarioVersionId, NpgsqlDbType.Bigint, cancellationToken);
-                await importer.WriteAsync(userId, NpgsqlDbType.Text, cancellationToken);
+                await importer.WriteAsync(userContext.PrimaryUserId, NpgsqlDbType.Text, cancellationToken);
                 await importer.WriteAsync(cell.Coordinate.MeasureId, NpgsqlDbType.Bigint, cancellationToken);
                 await importer.WriteAsync(cell.Coordinate.StoreId, NpgsqlDbType.Bigint, cancellationToken);
                 await importer.WriteAsync(cell.Coordinate.ProductNodeId, NpgsqlDbType.Bigint, cancellationToken);
@@ -221,7 +235,60 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             await importer.CompleteAsync(cancellationToken);
         }
 
-        await using (var mergeCommand = new NpgsqlCommand(
+        var secondaryAliases = userContext.CandidateUserIds
+            .Where(candidate => !string.Equals(candidate, userContext.PrimaryUserId, StringComparison.Ordinal))
+            .ToArray();
+        if (secondaryAliases.Length > 0)
+        {
+            await using var deleteAliasCommand = new NpgsqlCommand(
+                $"""
+                delete from planning_draft_cells as draft
+                using {stageTableName} as source
+                where draft.scenario_version_id = source.scenario_version_id
+                  and draft.measure_id = source.measure_id
+                  and draft.store_id = source.store_id
+                  and draft.product_node_id = source.product_node_id
+                  and draft.time_period_id = source.time_period_id
+                  and draft.user_id = any(@secondaryAliases);
+                """,
+                connection,
+                transaction);
+            deleteAliasCommand.CommandTimeout = 300;
+            deleteAliasCommand.Parameters.Add(CreateArrayParameter("@secondaryAliases", NpgsqlDbType.Text, secondaryAliases));
+            await deleteAliasCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var updateCommand = new NpgsqlCommand(
+            $"""
+            update planning_draft_cells as target
+            set input_value = source.input_value,
+                override_value = source.override_value,
+                is_system_generated_override = source.is_system_generated_override,
+                derived_value = source.derived_value,
+                effective_value = source.effective_value,
+                growth_factor = source.growth_factor,
+                is_locked = source.is_locked,
+                lock_reason = source.lock_reason,
+                locked_by = source.locked_by,
+                row_version = source.row_version,
+                cell_kind = source.cell_kind,
+                updated_at = now()
+            from {stageTableName} as source
+            where target.scenario_version_id = source.scenario_version_id
+              and target.user_id = source.user_id
+              and target.measure_id = source.measure_id
+              and target.store_id = source.store_id
+              and target.product_node_id = source.product_node_id
+              and target.time_period_id = source.time_period_id;
+            """,
+            connection,
+            transaction))
+        {
+            updateCommand.CommandTimeout = 300;
+            await updateCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var insertCommand = new NpgsqlCommand(
             $"""
             insert into planning_draft_cells (
                 scenario_version_id,
@@ -262,26 +329,20 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
                 source.cell_kind,
                 now()
             from {stageTableName} as source
-            on conflict (scenario_version_id, user_id, measure_id, store_id, product_node_id, time_period_id)
-            do update set
-                input_value = excluded.input_value,
-                override_value = excluded.override_value,
-                is_system_generated_override = excluded.is_system_generated_override,
-                derived_value = excluded.derived_value,
-                effective_value = excluded.effective_value,
-                growth_factor = excluded.growth_factor,
-                is_locked = excluded.is_locked,
-                lock_reason = excluded.lock_reason,
-                locked_by = excluded.locked_by,
-                row_version = excluded.row_version,
-                cell_kind = excluded.cell_kind,
-                updated_at = excluded.updated_at;
+            left join planning_draft_cells as target
+              on target.scenario_version_id = source.scenario_version_id
+             and target.user_id = source.user_id
+             and target.measure_id = source.measure_id
+             and target.store_id = source.store_id
+             and target.product_node_id = source.product_node_id
+             and target.time_period_id = source.time_period_id
+            where target.scenario_version_id is null;
             """,
             connection,
             transaction))
         {
-            mergeCommand.CommandTimeout = 300;
-            await mergeCommand.ExecuteNonQueryAsync(cancellationToken);
+            insertCommand.CommandTimeout = 300;
+            await insertCommand.ExecuteNonQueryAsync(cancellationToken);
         }
     }
 
@@ -675,7 +736,13 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
         var cells = batch.Deltas
             .Select(delta => (applyOldState ? delta.OldState : delta.NewState).ToPlanningCell(delta.Coordinate))
             .ToList();
-        await UpsertDraftPlanningCellsAsync(connection, transaction, scenarioVersionId, userId, cells, cancellationToken);
+        await UpsertDraftPlanningCellsAsync(
+            connection,
+            transaction,
+            scenarioVersionId,
+            PlanningUserIdentity.CreatePlanningUserContext(userId, userId),
+            cells,
+            cancellationToken);
 
         await using var command = new NpgsqlCommand(
             """
@@ -939,7 +1006,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         long scenarioVersionId,
-        string userId,
+        PlanningUserIdentity.PlanningUserContext userContext,
         CancellationToken cancellationToken)
     {
         await using (var mergeCommand = new NpgsqlCommand(
@@ -961,7 +1028,12 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
                 locked_by,
                 row_version,
                 cell_kind)
-            select
+            select distinct on (
+                scenario_version_id,
+                measure_id,
+                store_id,
+                product_node_id,
+                time_period_id)
                 scenario_version_id,
                 measure_id,
                 store_id,
@@ -980,7 +1052,16 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
                 cell_kind
             from planning_draft_cells
             where scenario_version_id = @scenarioVersionId
-              and user_id = @userId
+              and user_id = any(@candidateUserIds)
+            order by
+                scenario_version_id,
+                measure_id,
+                store_id,
+                product_node_id,
+                time_period_id,
+                case when user_id = @primaryUserId then 0 else 1 end,
+                updated_at desc,
+                row_version desc
             on conflict (scenario_version_id, measure_id, store_id, product_node_id, time_period_id)
             do update set
                 input_value = excluded.input_value,
@@ -999,7 +1080,8 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             transaction))
         {
             mergeCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
-            mergeCommand.Parameters.AddWithValue("@userId", userId);
+            mergeCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+            mergeCommand.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
             await mergeCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -1007,12 +1089,12 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             """
             delete from planning_draft_cells
             where scenario_version_id = @scenarioVersionId
-              and user_id = @userId;
+              and user_id = any(@candidateUserIds);
             """,
             connection,
             transaction);
         deleteCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
-        deleteCommand.Parameters.AddWithValue("@userId", userId);
+        deleteCommand.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
         await deleteCommand.ExecuteNonQueryAsync(cancellationToken);
 
         await using var deleteDeltaCommand = new NpgsqlCommand(
@@ -1022,25 +1104,25 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
                 select command_batch_id
                 from planning_draft_command_batches
                 where scenario_version_id = @scenarioVersionId
-                  and user_id = @userId
+                  and user_id = any(@candidateUserIds)
             );
             """,
             connection,
             transaction);
         deleteDeltaCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
-        deleteDeltaCommand.Parameters.AddWithValue("@userId", userId);
+        deleteDeltaCommand.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
         await deleteDeltaCommand.ExecuteNonQueryAsync(cancellationToken);
 
         await using var deleteBatchCommand = new NpgsqlCommand(
             """
             delete from planning_draft_command_batches
             where scenario_version_id = @scenarioVersionId
-              and user_id = @userId;
+              and user_id = any(@candidateUserIds);
             """,
             connection,
             transaction);
         deleteBatchCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
-        deleteBatchCommand.Parameters.AddWithValue("@userId", userId);
+        deleteBatchCommand.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
         await deleteBatchCommand.ExecuteNonQueryAsync(cancellationToken);
     }
 }

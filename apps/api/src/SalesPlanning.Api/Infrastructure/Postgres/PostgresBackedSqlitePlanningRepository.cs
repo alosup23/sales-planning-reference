@@ -6,6 +6,7 @@ using NpgsqlTypes;
 using SalesPlanning.Api.Application;
 using SalesPlanning.Api.Contracts;
 using SalesPlanning.Api.Domain;
+using SalesPlanning.Api.Security;
 using System.Globalization;
 
 namespace SalesPlanning.Api.Infrastructure.Postgres;
@@ -249,7 +250,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             : GetScenarioCellsDirectAsync(scenarioVersionId, cancellationToken);
 
     public Task<IReadOnlyList<PlanningCell>> GetDraftCellsAsync(long scenarioVersionId, string userId, IEnumerable<PlanningCellCoordinate> coordinates, CancellationToken cancellationToken) =>
-        GetDraftCellsDirectAsync(scenarioVersionId, userId, coordinates, cancellationToken);
+        GetDraftCellsDirectAsync(scenarioVersionId, PlanningUserIdentity.ParsePlanningUserToken(userId), coordinates, cancellationToken);
 
     public async Task UpsertCellsAsync(IEnumerable<PlanningCell> cells, CancellationToken cancellationToken)
     {
@@ -261,9 +262,10 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
 
     public async Task UpsertDraftCellsAsync(long scenarioVersionId, string userId, IEnumerable<PlanningCell> cells, CancellationToken cancellationToken)
     {
+        var userContext = PlanningUserIdentity.ParsePlanningUserToken(userId);
         var materialized = cells.Select(cell => cell.Clone()).ToList();
         await ExecuteDirectNonVersionedMutationAsync(
-            (connection, transaction, ct) => UpsertDraftPlanningCellsAsync(connection, transaction, scenarioVersionId, userId, materialized, ct),
+            (connection, transaction, ct) => UpsertDraftPlanningCellsAsync(connection, transaction, scenarioVersionId, userContext, materialized, ct),
             cancellationToken);
     }
 
@@ -314,16 +316,16 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             cancellationToken);
 
     public Task<PlanningUndoRedoAvailability> GetDraftUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
-        GetDraftUndoRedoAvailabilityDirectAsync(scenarioVersionId, userId, limit, cancellationToken);
+        GetDraftUndoRedoAvailabilityDirectAsync(scenarioVersionId, PlanningUserIdentity.ParsePlanningUserToken(userId).PrimaryUserId, limit, cancellationToken);
 
     public Task<PlanningCommandBatch?> UndoLatestDraftCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
         ExecuteDirectNonVersionedMutationAsync(
-            (connection, transaction, ct) => UndoLatestDraftCommandDirectAsync(connection, transaction, scenarioVersionId, userId, limit, ct),
+            (connection, transaction, ct) => UndoLatestDraftCommandDirectAsync(connection, transaction, scenarioVersionId, PlanningUserIdentity.ParsePlanningUserToken(userId).PrimaryUserId, limit, ct),
             cancellationToken);
 
     public Task<PlanningCommandBatch?> RedoLatestDraftCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
         ExecuteDirectNonVersionedMutationAsync(
-            (connection, transaction, ct) => RedoLatestDraftCommandDirectAsync(connection, transaction, scenarioVersionId, userId, limit, ct),
+            (connection, transaction, ct) => RedoLatestDraftCommandDirectAsync(connection, transaction, scenarioVersionId, PlanningUserIdentity.ParsePlanningUserToken(userId).PrimaryUserId, limit, ct),
             cancellationToken);
 
     public Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, string? selectedDepartmentLabel, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, CancellationToken cancellationToken) =>
@@ -361,7 +363,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
 
     public Task CommitDraftAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken) =>
         ExecuteDirectMutationAsync(
-            (connection, transaction, ct) => CommitDraftDirectAsync(connection, transaction, scenarioVersionId, userId, ct),
+            (connection, transaction, ct) => CommitDraftDirectAsync(connection, transaction, scenarioVersionId, PlanningUserIdentity.ParsePlanningUserToken(userId), ct),
             cancellationToken);
 
     public Task RecordSaveCheckpointAsync(long scenarioVersionId, string userId, string mode, DateTimeOffset savedAt, CancellationToken cancellationToken) =>

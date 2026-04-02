@@ -7,7 +7,7 @@ namespace SalesPlanning.Api.Tests;
 public sealed class PlanningUserIdentityTests
 {
     [Fact]
-    public void ResolveRequiredUserId_PrefersImmutableOidOverDisplayName()
+    public void ResolvePlanningUserToken_PreservesCandidateAliasesAndUsesPreferredUsernameAsPrimary()
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
         [
@@ -16,9 +16,12 @@ public sealed class PlanningUserIdentityTests
             new Claim("oid", "11111111-2222-3333-4444-555555555555"),
         ], "Bearer"));
 
-        var resolved = PlanningUserIdentity.ResolveRequiredUserId(principal, authEnabled: true);
+        var token = PlanningUserIdentity.ResolvePlanningUserToken(principal, authEnabled: true);
+        var context = PlanningUserIdentity.ParsePlanningUserToken(token);
 
-        Assert.Equal("11111111-2222-3333-4444-555555555555", resolved);
+        Assert.Equal("planner@example.com", context.PrimaryUserId);
+        Assert.Contains("planner@example.com", context.CandidateUserIds);
+        Assert.Contains("11111111-2222-3333-4444-555555555555", context.CandidateUserIds);
     }
 
     [Fact]
@@ -29,5 +32,14 @@ public sealed class PlanningUserIdentityTests
         var resolved = PlanningUserIdentity.ResolveRequiredUserId(principal, authEnabled: false);
 
         Assert.Equal("local.test.user", resolved);
+    }
+
+    [Fact]
+    public void ParsePlanningUserToken_TreatsPlainUserIdsAsSingleCandidateContext()
+    {
+        var context = PlanningUserIdentity.ParsePlanningUserToken("planner.one");
+
+        Assert.Equal("planner.one", context.PrimaryUserId);
+        Assert.Equal(["planner.one"], context.CandidateUserIds);
     }
 }

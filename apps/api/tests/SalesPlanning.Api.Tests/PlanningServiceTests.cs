@@ -3,6 +3,7 @@ using SalesPlanning.Api.Application;
 using SalesPlanning.Api.Contracts;
 using SalesPlanning.Api.Domain;
 using SalesPlanning.Api.Infrastructure;
+using SalesPlanning.Api.Security;
 using Xunit;
 
 namespace SalesPlanning.Api.Tests;
@@ -618,6 +619,108 @@ public sealed class PlanningServiceTests
         Assert.Equal(420m, colaYearQuantity!.EffectiveValue);
         Assert.Equal(colaYearQuantity.EffectiveValue + sparklingFruitYearQuantity!.EffectiveValue, softDrinksYearQuantity!.EffectiveValue);
         Assert.Equal(softDrinksYearQuantity.EffectiveValue + teaYearQuantity!.EffectiveValue, departmentYearQuantity!.EffectiveValue);
+    }
+
+    [Fact]
+    public async Task SaveScenarioAsync_AfterLeafYearQuantitySplash_DepartmentProjectionShowsCommittedLeafValueAcrossUserAliases()
+    {
+        const string legacyUserId = "11111111-2222-3333-4444-555555555555";
+        var aliasedUserToken = PlanningUserIdentity.SerializePlanningUserContext(
+            PlanningUserIdentity.CreatePlanningUserContext("planner.one@example.com", "planner.one@example.com", legacyUserId));
+
+        await _service.ApplySplashAsync(
+            new SplashRequest(
+                1,
+                PlanningMeasures.SoldQuantity,
+                new SplashCoordinateDto(101, 2111, 202600),
+                390m,
+                "seasonality_profile",
+                0,
+                "Leaf year quantity splash",
+                null,
+                [new SplashScopeRootDto(101, 2111)]),
+            legacyUserId,
+            CancellationToken.None);
+        await _service.SaveScenarioAsync(new SaveScenarioRequest(1, "manual"), aliasedUserToken, CancellationToken.None);
+
+        var request = new PlanningGridViewRequest(1, "department", null, "Beverages", "department-store-class", false);
+        var departmentRows = await _service.GetGridViewChildrenAsync(request, "view:department:root", aliasedUserToken, CancellationToken.None);
+        var beveragesRow = Assert.Single(departmentRows.Rows, row => row.Label == "Beverages");
+
+        var storeRows = await _service.GetGridViewChildrenAsync(request, beveragesRow.ViewRowId!, aliasedUserToken, CancellationToken.None);
+        var storeRow = Assert.Single(storeRows.Rows, row => row.Label == "Store A");
+
+        var classRows = await _service.GetGridViewChildrenAsync(request, storeRow.ViewRowId!, aliasedUserToken, CancellationToken.None);
+        var classRow = Assert.Single(classRows.Rows, row => row.Label == "Soft Drinks");
+
+        var subclassRows = await _service.GetGridViewChildrenAsync(request, classRow.ViewRowId!, aliasedUserToken, CancellationToken.None);
+        var subclassRow = Assert.Single(subclassRows.Rows, row => row.Label == "Cola");
+
+        Assert.Equal(390m, subclassRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value);
+    }
+
+    [Fact]
+    public async Task ApplySplashAsync_AfterAliasSave_CanBeAppliedAgainAndRemainsVisibleAcrossViews()
+    {
+        const string legacyUserId = "11111111-2222-3333-4444-555555555555";
+        var aliasedUserToken = PlanningUserIdentity.SerializePlanningUserContext(
+            PlanningUserIdentity.CreatePlanningUserContext("planner.one@example.com", "planner.one@example.com", legacyUserId));
+
+        await _service.ApplySplashAsync(
+            new SplashRequest(
+                1,
+                PlanningMeasures.SoldQuantity,
+                new SplashCoordinateDto(101, 2111, 202600),
+                390m,
+                "seasonality_profile",
+                0,
+                "Leaf year quantity splash 1",
+                null,
+                [new SplashScopeRootDto(101, 2111)]),
+            legacyUserId,
+            CancellationToken.None);
+        await _service.SaveScenarioAsync(new SaveScenarioRequest(1, "manual"), aliasedUserToken, CancellationToken.None);
+
+        var secondResult = await _service.ApplySplashAsync(
+            new SplashRequest(
+                1,
+                PlanningMeasures.SoldQuantity,
+                new SplashCoordinateDto(101, 2111, 202600),
+                420m,
+                "seasonality_profile",
+                0,
+                "Leaf year quantity splash 2",
+                null,
+                [new SplashScopeRootDto(101, 2111)]),
+            aliasedUserToken,
+            CancellationToken.None);
+
+        var storeRequest = new PlanningGridViewRequest(1, "store", null, null, null, false);
+        var storeRows = await _service.GetGridViewChildrenAsync(storeRequest, "view:store:root", aliasedUserToken, CancellationToken.None);
+        var storeRow = Assert.Single(storeRows.Rows, row => row.Label == "Store A");
+
+        var departmentRows = await _service.GetGridViewChildrenAsync(storeRequest, storeRow.ViewRowId!, aliasedUserToken, CancellationToken.None);
+        var departmentRow = Assert.Single(departmentRows.Rows, row => row.Label == "Beverages");
+
+        var classRows = await _service.GetGridViewChildrenAsync(storeRequest, departmentRow.ViewRowId!, aliasedUserToken, CancellationToken.None);
+        var classRow = Assert.Single(classRows.Rows, row => row.Label == "Soft Drinks");
+
+        var subclassRows = await _service.GetGridViewChildrenAsync(storeRequest, classRow.ViewRowId!, aliasedUserToken, CancellationToken.None);
+        var subclassRow = Assert.Single(subclassRows.Rows, row => row.Label == "Cola");
+
+        var departmentRequest = new PlanningGridViewRequest(1, "department", null, "Beverages", "department-store-class", false);
+        var departmentRootRows = await _service.GetGridViewChildrenAsync(departmentRequest, "view:department:root", aliasedUserToken, CancellationToken.None);
+        var beveragesRow = Assert.Single(departmentRootRows.Rows, row => row.Label == "Beverages");
+        var departmentStoreRows = await _service.GetGridViewChildrenAsync(departmentRequest, beveragesRow.ViewRowId!, aliasedUserToken, CancellationToken.None);
+        var departmentStoreRow = Assert.Single(departmentStoreRows.Rows, row => row.Label == "Store A");
+        var departmentClassRows = await _service.GetGridViewChildrenAsync(departmentRequest, departmentStoreRow.ViewRowId!, aliasedUserToken, CancellationToken.None);
+        var departmentClassRow = Assert.Single(departmentClassRows.Rows, row => row.Label == "Soft Drinks");
+        var departmentSubclassRows = await _service.GetGridViewChildrenAsync(departmentRequest, departmentClassRow.ViewRowId!, aliasedUserToken, CancellationToken.None);
+        var departmentSubclassRow = Assert.Single(departmentSubclassRows.Rows, row => row.Label == "Cola");
+
+        Assert.True(secondResult.CellsUpdated > 0);
+        Assert.Equal(420m, subclassRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value);
+        Assert.Equal(420m, departmentSubclassRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value);
     }
 
     [Fact]

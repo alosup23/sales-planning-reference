@@ -32,7 +32,7 @@ public sealed class PlanningController : ControllerBase
             .Distinct()
             .ToArray();
 
-        return _planningService.GetGridSliceAsync(scenarioVersionId, selectedStoreId, selectedDepartmentLabel, expandedNodes, expandAllBranches, GetRequiredUserId(), cancellationToken);
+        return _planningService.GetGridSliceAsync(scenarioVersionId, selectedStoreId, selectedDepartmentLabel, expandedNodes, expandAllBranches, GetPlanningUserToken(), cancellationToken);
     }
 
     [HttpGet("grid-view-root")]
@@ -47,7 +47,7 @@ public sealed class PlanningController : ControllerBase
     {
         return _planningService.GetGridViewRootAsync(
             new PlanningGridViewRequest(scenarioVersionId, view, selectedStoreId, selectedDepartmentLabel, departmentLayout, expandAllBranches),
-            GetRequiredUserId(),
+            GetPlanningUserToken(),
             cancellationToken);
     }
 
@@ -65,7 +65,7 @@ public sealed class PlanningController : ControllerBase
         return _planningService.GetGridViewChildrenAsync(
             new PlanningGridViewRequest(scenarioVersionId, view, selectedStoreId, selectedDepartmentLabel, departmentLayout, expandAllBranches),
             parentViewRowId,
-            GetRequiredUserId(),
+            GetPlanningUserToken(),
             cancellationToken);
     }
 
@@ -75,25 +75,25 @@ public sealed class PlanningController : ControllerBase
         [FromQuery] long parentProductNodeId,
         CancellationToken cancellationToken = default)
     {
-        return _planningService.GetGridBranchRowsAsync(scenarioVersionId, parentProductNodeId, GetRequiredUserId(), cancellationToken);
+        return _planningService.GetGridBranchRowsAsync(scenarioVersionId, parentProductNodeId, GetPlanningUserToken(), cancellationToken);
     }
 
     [HttpPost("cell-edits")]
     public Task<EditCellsResponse> EditCells([FromBody] EditCellsRequest request, CancellationToken cancellationToken)
     {
-        return _planningService.ApplyEditsAsync(request, GetRequiredUserId(), cancellationToken);
+        return _planningService.ApplyEditsAsync(request, GetPlanningUserToken(), cancellationToken);
     }
 
     [HttpPost("actions/splash")]
     public Task<SplashResponse> Splash([FromBody] SplashRequest request, CancellationToken cancellationToken)
     {
-        return _planningService.ApplySplashAsync(request, GetRequiredUserId(), cancellationToken);
+        return _planningService.ApplySplashAsync(request, GetPlanningUserToken(), cancellationToken);
     }
 
     [HttpPost("locks")]
     public Task<LockCellsResponse> LockCells([FromBody] LockCellsRequest request, CancellationToken cancellationToken)
     {
-        return _planningService.ApplyLockAsync(request, GetRequiredUserId(), cancellationToken);
+        return _planningService.ApplyLockAsync(request, GetPlanningUserToken(), cancellationToken);
     }
 
     [HttpGet("audit")]
@@ -128,7 +128,7 @@ public sealed class PlanningController : ControllerBase
     [HttpPost("years/generate-next")]
     public Task<GenerateNextYearResponse> GenerateNextYear([FromBody] GenerateNextYearRequest request, CancellationToken cancellationToken)
     {
-        return _planningService.GenerateNextYearAsync(request, GetRequiredUserId(), cancellationToken);
+        return _planningService.GenerateNextYearAsync(request, GetPlanningUserToken(), cancellationToken);
     }
 
     [HttpGet("hierarchy-mappings")]
@@ -163,37 +163,37 @@ public sealed class PlanningController : ControllerBase
         [FromQuery] long yearTimePeriodId,
         CancellationToken cancellationToken)
     {
-        return _planningService.GetPlanningInsightsAsync(scenarioVersionId, storeId, productNodeId, yearTimePeriodId, GetRequiredUserId(), cancellationToken);
+        return _planningService.GetPlanningInsightsAsync(scenarioVersionId, storeId, productNodeId, yearTimePeriodId, GetPlanningUserToken(), cancellationToken);
     }
 
     [HttpPost("growth-factors/apply")]
     public Task<ApplyGrowthFactorResponse> ApplyGrowthFactor([FromBody] ApplyGrowthFactorRequest request, CancellationToken cancellationToken)
     {
-        return _planningService.ApplyGrowthFactorAsync(request, GetRequiredUserId(), cancellationToken);
+        return _planningService.ApplyGrowthFactorAsync(request, GetPlanningUserToken(), cancellationToken);
     }
 
     [HttpPost("save")]
     public Task<SaveScenarioResponse> SaveScenario([FromBody] SaveScenarioRequest request, CancellationToken cancellationToken)
     {
-        return _planningService.SaveScenarioAsync(request, GetRequiredUserId(), cancellationToken);
+        return _planningService.SaveScenarioAsync(request, GetPlanningUserToken(), cancellationToken);
     }
 
     [HttpGet("undo-redo/availability")]
     public Task<UndoRedoAvailabilityDto> GetUndoRedoAvailability([FromQuery] long scenarioVersionId = 1, CancellationToken cancellationToken = default)
     {
-        return _planningService.GetUndoRedoAvailabilityAsync(scenarioVersionId, GetRequiredUserId(), cancellationToken);
+        return _planningService.GetUndoRedoAvailabilityAsync(scenarioVersionId, GetPlanningUserToken(), cancellationToken);
     }
 
     [HttpPost("actions/undo")]
     public Task<UndoPlanningActionResponse> Undo([FromQuery] long scenarioVersionId = 1, CancellationToken cancellationToken = default)
     {
-        return _planningService.UndoAsync(scenarioVersionId, GetRequiredUserId(), cancellationToken);
+        return _planningService.UndoAsync(scenarioVersionId, GetPlanningUserToken(), cancellationToken);
     }
 
     [HttpPost("actions/redo")]
     public Task<RedoPlanningActionResponse> Redo([FromQuery] long scenarioVersionId = 1, CancellationToken cancellationToken = default)
     {
-        return _planningService.RedoAsync(scenarioVersionId, GetRequiredUserId(), cancellationToken);
+        return _planningService.RedoAsync(scenarioVersionId, GetPlanningUserToken(), cancellationToken);
     }
 
     [HttpGet("planning-store-scopes")]
@@ -710,5 +710,10 @@ public sealed class PlanningController : ControllerBase
     private string GetRequiredUserId()
     {
         return PlanningUserIdentity.ResolveRequiredUserId(User, _authEnabled);
+    }
+
+    private string GetPlanningUserToken()
+    {
+        return PlanningUserIdentity.ResolvePlanningUserToken(User, _authEnabled);
     }
 }

@@ -1,6 +1,7 @@
 using SalesPlanning.Api.Application;
 using SalesPlanning.Api.Contracts;
 using SalesPlanning.Api.Domain;
+using SalesPlanning.Api.Security;
 
 namespace SalesPlanning.Api.Infrastructure;
 
@@ -26,13 +27,20 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository, IDisposabl
     public Task<IReadOnlyList<PlanningCell>> GetScenarioCellsAsync(long scenarioVersionId, CancellationToken cancellationToken) => _inner.GetScenarioCellsAsync(scenarioVersionId, cancellationToken);
     public Task<IReadOnlyList<PlanningCell>> GetDraftCellsAsync(long scenarioVersionId, string userId, IEnumerable<PlanningCellCoordinate> coordinates, CancellationToken cancellationToken)
     {
+        var userContext = PlanningUserIdentity.ParsePlanningUserToken(userId);
+        var userRank = userContext.CandidateUserIds
+            .Select((candidate, index) => (candidate, index))
+            .ToDictionary(entry => entry.candidate, entry => entry.index, StringComparer.Ordinal);
         lock (_draftGate)
         {
             var cells = coordinates
                 .DistinctBy(coordinate => coordinate.Key)
-                .Select(coordinate => _draftCells.GetValueOrDefault((scenarioVersionId, userId, coordinate.Key)))
-                .Where(cell => cell is not null)
-                .Select(cell => cell!.Clone())
+                .SelectMany(coordinate => userContext.CandidateUserIds
+                    .Select(candidate => (candidate, cell: _draftCells.GetValueOrDefault((scenarioVersionId, candidate, coordinate.Key))))
+                    .Where(entry => entry.cell is not null)
+                    .OrderBy(entry => userRank[entry.candidate], Comparer<int>.Default)
+                    .Take(1)
+                    .Select(entry => entry.cell!.Clone()))
                 .ToList();
             return Task.FromResult<IReadOnlyList<PlanningCell>>(cells);
         }
@@ -40,11 +48,22 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository, IDisposabl
     public Task UpsertCellsAsync(IEnumerable<PlanningCell> cells, CancellationToken cancellationToken) => _inner.UpsertCellsAsync(cells, cancellationToken);
     public Task UpsertDraftCellsAsync(long scenarioVersionId, string userId, IEnumerable<PlanningCell> cells, CancellationToken cancellationToken)
     {
+        var userContext = PlanningUserIdentity.ParsePlanningUserToken(userId);
         lock (_draftGate)
         {
             foreach (var cell in cells)
             {
-                _draftCells[(scenarioVersionId, userId, cell.Coordinate.Key)] = cell.Clone();
+                foreach (var alias in userContext.CandidateUserIds)
+                {
+                    if (string.Equals(alias, userContext.PrimaryUserId, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    _draftCells.Remove((scenarioVersionId, alias, cell.Coordinate.Key));
+                }
+
+                _draftCells[(scenarioVersionId, userContext.PrimaryUserId, cell.Coordinate.Key)] = cell.Clone();
             }
         }
 
@@ -89,9 +108,14 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository, IDisposabl
     public Task<PlanningCommandBatch?> RedoLatestCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) => _inner.RedoLatestCommandAsync(scenarioVersionId, userId, limit, cancellationToken);
     public Task<PlanningUndoRedoAvailability> GetDraftUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken)
     {
+        var userContext = PlanningUserIdentity.ParsePlanningUserToken(userId);
         lock (_draftGate)
         {
-            var retained = GetRetainedDraftHistory(scenarioVersionId, userId, limit);
+            var retained = userContext.CandidateUserIds
+                .SelectMany(candidate => GetRetainedDraftHistory(scenarioVersionId, candidate, limit))
+                .OrderByDescending(batch => batch.CommandBatchId)
+                .Take(limit)
+                .ToList();
             var undoDepth = retained.Count(batch => !batch.IsUndone);
             var redoDepth = retained.Count(batch => batch.IsUndone);
             return Task.FromResult(new PlanningUndoRedoAvailability(undoDepth > 0, redoDepth > 0, undoDepth, redoDepth, limit));
@@ -100,9 +124,11 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository, IDisposabl
 
     public Task<PlanningCommandBatch?> UndoLatestDraftCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken)
     {
+        var userContext = PlanningUserIdentity.ParsePlanningUserToken(userId);
         lock (_draftGate)
         {
-            var candidate = GetRetainedDraftHistory(scenarioVersionId, userId, limit)
+            var candidate = userContext.CandidateUserIds
+                .SelectMany(candidateUserId => GetRetainedDraftHistory(scenarioVersionId, candidateUserId, limit))
                 .Where(batch => !batch.IsUndone)
                 .OrderByDescending(batch => batch.CommandBatchId)
                 .FirstOrDefault();
@@ -113,7 +139,7 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository, IDisposabl
 
             foreach (var delta in candidate.Deltas)
             {
-                _draftCells[(scenarioVersionId, userId, delta.Coordinate.Key)] = delta.OldState.ToPlanningCell(delta.Coordinate);
+                _draftCells[(scenarioVersionId, userContext.PrimaryUserId, delta.Coordinate.Key)] = delta.OldState.ToPlanningCell(delta.Coordinate);
             }
 
             var undone = candidate with { IsUndone = true, UndoneAt = DateTimeOffset.UtcNow };
@@ -124,9 +150,11 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository, IDisposabl
 
     public Task<PlanningCommandBatch?> RedoLatestDraftCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken)
     {
+        var userContext = PlanningUserIdentity.ParsePlanningUserToken(userId);
         lock (_draftGate)
         {
-            var candidate = GetRetainedDraftHistory(scenarioVersionId, userId, limit)
+            var candidate = userContext.CandidateUserIds
+                .SelectMany(candidateUserId => GetRetainedDraftHistory(scenarioVersionId, candidateUserId, limit))
                 .Where(batch => batch.IsUndone)
                 .OrderByDescending(batch => batch.UndoneAt ?? batch.CreatedAt)
                 .ThenByDescending(batch => batch.CommandBatchId)
@@ -138,7 +166,7 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository, IDisposabl
 
             foreach (var delta in candidate.Deltas)
             {
-                _draftCells[(scenarioVersionId, userId, delta.Coordinate.Key)] = delta.NewState.ToPlanningCell(delta.Coordinate);
+                _draftCells[(scenarioVersionId, userContext.PrimaryUserId, delta.Coordinate.Key)] = delta.NewState.ToPlanningCell(delta.Coordinate);
             }
 
             var redone = candidate with { IsUndone = false, UndoneAt = null };
@@ -154,16 +182,22 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository, IDisposabl
     public Task EnsureYearAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken) => _inner.EnsureYearAsync(scenarioVersionId, fiscalYear, cancellationToken);
     public async Task CommitDraftAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken)
     {
+        var userContext = PlanningUserIdentity.ParsePlanningUserToken(userId);
         List<PlanningCell> cellsToCommit;
         lock (_draftGate)
         {
             cellsToCommit = _draftCells
-                .Where(entry => entry.Key.ScenarioVersionId == scenarioVersionId && string.Equals(entry.Key.UserId, userId, StringComparison.Ordinal))
-                .Select(entry => entry.Value.Clone())
+                .Where(entry => entry.Key.ScenarioVersionId == scenarioVersionId && userContext.CandidateUserIds.Contains(entry.Key.UserId, StringComparer.Ordinal))
+                .GroupBy(entry => entry.Key.CoordinateKey, StringComparer.Ordinal)
+                .Select(group => group
+                    .OrderBy(entry => string.Equals(entry.Key.UserId, userContext.PrimaryUserId, StringComparison.Ordinal) ? 0 : 1)
+                    .ThenByDescending(entry => entry.Value.RowVersion)
+                    .Select(entry => entry.Value.Clone())
+                    .First())
                 .ToList();
 
             foreach (var key in _draftCells.Keys
-                         .Where(key => key.ScenarioVersionId == scenarioVersionId && string.Equals(key.UserId, userId, StringComparison.Ordinal))
+                         .Where(key => key.ScenarioVersionId == scenarioVersionId && userContext.CandidateUserIds.Contains(key.UserId, StringComparer.Ordinal))
                          .ToList())
             {
                 _draftCells.Remove(key);
@@ -171,7 +205,7 @@ public sealed class InMemoryPlanningRepository : IPlanningRepository, IDisposabl
 
             _draftCommandBatches.RemoveAll(batch =>
                 batch.ScenarioVersionId == scenarioVersionId
-                && string.Equals(batch.UserId, userId, StringComparison.Ordinal));
+                && userContext.CandidateUserIds.Contains(batch.UserId, StringComparer.Ordinal));
         }
 
         if (cellsToCommit.Count > 0)

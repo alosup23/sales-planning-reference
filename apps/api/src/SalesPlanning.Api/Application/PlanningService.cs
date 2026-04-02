@@ -3,6 +3,7 @@ using System.Text.Json;
 using ClosedXML.Excel;
 using SalesPlanning.Api.Contracts;
 using SalesPlanning.Api.Domain;
+using SalesPlanning.Api.Security;
 
 namespace SalesPlanning.Api.Application;
 
@@ -50,6 +51,9 @@ public sealed partial class PlanningService : IPlanningService
         _splashAllocator = splashAllocator;
         _asyncJobManager = asyncJobManager;
     }
+
+    private static string GetPrimaryPlanningUserId(string userId) =>
+        PlanningUserIdentity.ParsePlanningUserToken(userId).PrimaryUserId;
 
     public async Task<GridSliceResponse> GetGridSliceAsync(long scenarioVersionId, long? selectedStoreId, string? selectedDepartmentLabel, IReadOnlyCollection<long>? expandedProductNodeIds, bool expandAllBranches, string userId, CancellationToken cancellationToken)
     {
@@ -196,6 +200,7 @@ public sealed partial class PlanningService : IPlanningService
     {
         return _repository.ExecuteAtomicAsync(async ct =>
         {
+            var primaryUserId = GetPrimaryPlanningUserId(userId);
             var coordinates = request.Coordinates
                 .Select(coordinate => new PlanningCellCoordinate(
                     request.ScenarioVersionId,
@@ -226,7 +231,7 @@ public sealed partial class PlanningService : IPlanningService
                 originalCells.Add(cell.Clone());
                 cell.IsLocked = request.Locked;
                 cell.LockReason = request.Reason;
-                cell.LockedBy = request.Locked ? userId : null;
+                cell.LockedBy = request.Locked ? primaryUserId : null;
                 targetedCells.Add(cell);
             }
 
@@ -552,9 +557,10 @@ public sealed partial class PlanningService : IPlanningService
 
     public async Task<SaveScenarioResponse> SaveScenarioAsync(SaveScenarioRequest request, string userId, CancellationToken cancellationToken)
     {
+        var primaryUserId = GetPrimaryPlanningUserId(userId);
         var savedAt = DateTimeOffset.UtcNow;
         await _repository.CommitDraftAsync(request.ScenarioVersionId, userId, cancellationToken);
-        await _repository.RecordSaveCheckpointAsync(request.ScenarioVersionId, userId, request.Mode, savedAt, cancellationToken);
+        await _repository.RecordSaveCheckpointAsync(request.ScenarioVersionId, primaryUserId, request.Mode, savedAt, cancellationToken);
         await AppendAuditAsync("save", request.Mode, userId, $"Scenario {request.ScenarioVersionId} save checkpoint", [], cancellationToken);
         return new SaveScenarioResponse("saved", request.Mode, savedAt);
     }
@@ -569,10 +575,11 @@ public sealed partial class PlanningService : IPlanningService
     {
         return _repository.ExecuteAtomicAsync(async ct =>
         {
+            var primaryUserId = GetPrimaryPlanningUserId(userId);
             var draftAvailability = await _repository.GetDraftUndoRedoAvailabilityAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
             var batch = draftAvailability.CanUndo
                 ? await _repository.UndoLatestDraftCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct)
-                : await _repository.UndoLatestCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
+                : await _repository.UndoLatestCommandAsync(scenarioVersionId, primaryUserId, UndoRedoLimit, ct);
             if (batch is not null && !draftAvailability.CanUndo)
             {
                 await AppendAuditAsync("undo", "undo", userId, $"Undo {batch.CommandKind}", InvertCommandDeltas(batch.Deltas), ct);
@@ -587,10 +594,11 @@ public sealed partial class PlanningService : IPlanningService
     {
         return _repository.ExecuteAtomicAsync(async ct =>
         {
+            var primaryUserId = GetPrimaryPlanningUserId(userId);
             var draftAvailability = await _repository.GetDraftUndoRedoAvailabilityAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
             var batch = draftAvailability.CanRedo
                 ? await _repository.RedoLatestDraftCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct)
-                : await _repository.RedoLatestCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
+                : await _repository.RedoLatestCommandAsync(scenarioVersionId, primaryUserId, UndoRedoLimit, ct);
             if (batch is not null && !draftAvailability.CanRedo)
             {
                 await AppendAuditAsync("redo", "redo", userId, $"Redo {batch.CommandKind}", batch.Deltas, ct);
@@ -1948,11 +1956,12 @@ public sealed partial class PlanningService : IPlanningService
         IReadOnlyList<PlanningCommandCellDelta> deltas,
         CancellationToken cancellationToken)
     {
+        var primaryUserId = GetPrimaryPlanningUserId(userId);
         var audit = new PlanningActionAudit(
             await _repository.GetNextActionIdAsync(cancellationToken),
             actionType,
             method,
-            userId,
+            primaryUserId,
             comment,
             DateTimeOffset.UtcNow,
             BuildAuditDeltas(deltas));
