@@ -724,6 +724,43 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
+    public async Task ApplySplashAsync_OnLeafYearQuantity_RollsUpDepartmentAncestorsAcrossViews()
+    {
+        var departmentRequest = new PlanningGridViewRequest(1, "department", null, "Beverages", "department-store-class", false);
+        var beforeDepartmentRows = await _service.GetGridViewChildrenAsync(departmentRequest, "view:department:root", "planner.one", CancellationToken.None);
+        var beforeBeveragesRow = Assert.Single(beforeDepartmentRows.Rows, row => row.Label == "Beverages");
+        var beforeStoreRows = await _service.GetGridViewChildrenAsync(departmentRequest, beforeBeveragesRow.ViewRowId!, "planner.one", CancellationToken.None);
+        var beforeStoreRow = Assert.Single(beforeStoreRows.Rows, row => row.Label == "Store A");
+
+        await _service.ApplySplashAsync(
+            new SplashRequest(
+                1,
+                PlanningMeasures.SoldQuantity,
+                new SplashCoordinateDto(101, 2111, 202600),
+                390m,
+                "seasonality_profile",
+                0,
+                "Leaf year quantity splash",
+                null,
+                [new SplashScopeRootDto(101, 2111)]),
+            "planner.one",
+            CancellationToken.None);
+
+        var afterDepartmentRows = await _service.GetGridViewChildrenAsync(departmentRequest, "view:department:root", "planner.one", CancellationToken.None);
+        var afterBeveragesRow = Assert.Single(afterDepartmentRows.Rows, row => row.Label == "Beverages");
+        var afterStoreRows = await _service.GetGridViewChildrenAsync(departmentRequest, afterBeveragesRow.ViewRowId!, "planner.one", CancellationToken.None);
+        var afterStoreRow = Assert.Single(afterStoreRows.Rows, row => row.Label == "Store A");
+        var classRows = await _service.GetGridViewChildrenAsync(departmentRequest, afterStoreRow.ViewRowId!, "planner.one", CancellationToken.None);
+        var classRow = Assert.Single(classRows.Rows, row => row.Label == "Soft Drinks");
+        var subclassRows = await _service.GetGridViewChildrenAsync(departmentRequest, classRow.ViewRowId!, "planner.one", CancellationToken.None);
+        var subclassRow = Assert.Single(subclassRows.Rows, row => row.Label == "Cola");
+
+        Assert.Equal(390m, subclassRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value);
+        Assert.NotEqual(beforeStoreRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value, afterStoreRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value);
+        Assert.NotEqual(beforeBeveragesRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value, afterBeveragesRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value);
+    }
+
+    [Fact]
     public async Task SaveScenarioAsync_AfterLeafYearQuantityEdit_DepartmentProjectionShowsCommittedLeafValue()
     {
         await _service.ApplyEditsAsync(

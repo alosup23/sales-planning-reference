@@ -418,7 +418,7 @@ export function PlanningGrid({
             const rows = route.length === 0
               ? rootRowsRef.current.map((row) => ({ ...row }))
               : await loadChildRows(route[route.length - 1]!);
-            const patchedRows = applyPatchToRows(rows, pendingPatchRef.current);
+            const patchedRows = applyPatchToRows(rows, pendingPatchRef.current, data);
 
             registerRows(patchedRows);
             params.success({
@@ -1181,15 +1181,42 @@ function recomputeSyntheticRow(
   return didChange ? { ...row, cells: nextCells } : row;
 }
 
+function recomputeSyntheticRows(
+  rows: GridRowView[],
+  data: GridSliceResponse,
+): GridRowView[] {
+  if (rows.length === 0) {
+    return rows;
+  }
+
+  const rowsByKey = new Map(rows.map((row) => [getRowKey(row), row] as const));
+  const syntheticRows = [...rowsByKey.values()]
+    .filter(isSyntheticRow)
+    .sort((left, right) => right.path.length - left.path.length);
+
+  syntheticRows.forEach((row) => {
+    const directChildren = [...rowsByKey.values()].filter((candidate) => isDirectChildRow(row, candidate));
+    if (directChildren.length === 0) {
+      return;
+    }
+
+    const recomputed = recomputeSyntheticRow(row, directChildren, data);
+    rowsByKey.set(getRowKey(recomputed), recomputed);
+  });
+
+  return rows.map((row) => rowsByKey.get(getRowKey(row)) ?? row);
+}
+
 function applyPatchToRows(
   rows: GridRowView[],
   patch: PlanningGridPatch | null | undefined,
+  data: GridSliceResponse,
 ): GridRowView[] {
   if (!patch || patch.cells.length === 0) {
     return rows;
   }
 
-  return rows.map((row) => {
+  const patchedRows = rows.map((row) => {
     const canonicalStoreId = row.bindingStoreId ?? row.storeId;
     const canonicalProductNodeId = row.bindingProductNodeId ?? row.productNodeId;
     let nextRow: GridRowView | null = null;
@@ -1215,6 +1242,8 @@ function applyPatchToRows(
 
     return nextRow ?? row;
   });
+
+  return recomputeSyntheticRows(patchedRows, data);
 }
 
 function getRowClasses(row: GridRowView | undefined): string[] {

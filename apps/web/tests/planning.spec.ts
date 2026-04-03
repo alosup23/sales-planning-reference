@@ -216,6 +216,15 @@ async function beginCellEdit(page: import("@playwright/test").Page, cell: import
   await page.keyboard.press("Enter");
 }
 
+async function savePlanningChanges(page: import("@playwright/test").Page) {
+  await page.getByRole("button", { name: "Save" }).click();
+  await expectReady(page);
+}
+
+async function normalizedCellText(cell: import("@playwright/test").Locator) {
+  return ((await cell.textContent()) ?? "").replace(/\s+/g, "");
+}
+
 async function acceptPrompts(page: import("@playwright/test").Page, responses: string[]) {
   let responseIndex = 0;
   const handler = async (dialog: import("@playwright/test").Dialog) => {
@@ -590,6 +599,50 @@ test("store leaf year edits propagate to the department view aggregates", async 
   const afterDepartmentValue = (await afterDepartmentCell.textContent())?.replace(/\s+/g, "") ?? "";
 
   expect(afterDepartmentValue).not.toBe(beforeDepartmentValue);
+});
+
+test("year Sold Qty edits survive save, remain visible across the department view, and keep department ancestors rolling up", async ({ page }) => {
+  await selectWorkspace(page, "planning-store");
+  await expectReady(page);
+  await expandRowById(page, storeRootRowId);
+  await expectReady(page);
+  await expandRowByLabel(page, "Store A");
+  await expectReady(page);
+  await expandRowByLabel(page, "Beverages");
+  await expectReady(page);
+  await expandRowByLabel(page, "Soft Drinks");
+  await expectReady(page);
+
+  await editCellByPinnedText(page, "Cola", "202600:2", "390");
+  await expectReady(page);
+  await savePlanningChanges(page);
+
+  await selectWorkspace(page, "planning-department");
+  await expectReady(page);
+  await selectDepartmentLayout(page, "department-store-class");
+  await expectReady(page);
+  await expandRowByLabel(page, "Beverages");
+  await expectReady(page);
+  await expandRowByLabel(page, "Store A");
+  await expectReady(page);
+  await expandRowByLabel(page, "Soft Drinks");
+  await expectReady(page);
+
+  const departmentLeafCell = await gridCellByPinnedText(page, "Cola", "202600:2");
+  await expect(departmentLeafCell).toContainText("390");
+
+  const departmentStoreBefore = await normalizedCellText(await gridCellByPinnedText(page, "Store A", "202600:2"));
+  const departmentTotalBefore = await normalizedCellText(await gridCellByPinnedText(page, "Beverages", "202600:2"));
+
+  await editCellByPinnedText(page, "Cola", "202600:2", "420");
+  await expectReady(page);
+
+  await expect(await gridCellByPinnedText(page, "Cola", "202600:2")).toContainText("420");
+  const departmentStoreAfter = await normalizedCellText(await gridCellByPinnedText(page, "Store A", "202600:2"));
+  const departmentTotalAfter = await normalizedCellText(await gridCellByPinnedText(page, "Beverages", "202600:2"));
+
+  expect(departmentStoreAfter).not.toBe(departmentStoreBefore);
+  expect(departmentTotalAfter).not.toBe(departmentTotalBefore);
 });
 
 test("adds Department and Class rows and shows them in hierarchy maintenance", async ({ page }) => {
