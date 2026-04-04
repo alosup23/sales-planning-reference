@@ -7,6 +7,7 @@ using SalesPlanning.Api.Application;
 using SalesPlanning.Api.Contracts;
 using SalesPlanning.Api.Domain;
 using SalesPlanning.Api.Security;
+using System.Diagnostics;
 using System.Globalization;
 
 namespace SalesPlanning.Api.Infrastructure.Postgres;
@@ -230,24 +231,16 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
     }
 
     public Task<PlanningMetadataSnapshot> GetMetadataAsync(CancellationToken cancellationToken) =>
-        ShouldUseHydratedCacheRead()
-            ? WithReadAsync(_innerRepository.GetMetadataAsync, cancellationToken)
-            : GetMetadataDirectAsync(cancellationToken);
+        GetMetadataDirectAsync(cancellationToken);
 
     public Task<IReadOnlyList<PlanningCell>> GetCellsAsync(IEnumerable<PlanningCellCoordinate> coordinates, CancellationToken cancellationToken) =>
-        ShouldUseHydratedCacheRead()
-            ? WithReadAsync(ct => _innerRepository.GetCellsAsync(coordinates, ct), cancellationToken)
-            : GetCellsDirectAsync(coordinates, cancellationToken);
+        GetCellsDirectAsync(coordinates, cancellationToken);
 
     public Task<PlanningCell?> GetCellAsync(PlanningCellCoordinate coordinate, CancellationToken cancellationToken) =>
-        ShouldUseHydratedCacheRead()
-            ? WithReadAsync(ct => _innerRepository.GetCellAsync(coordinate, ct), cancellationToken)
-            : GetCellDirectAsync(coordinate, cancellationToken);
+        GetCellDirectAsync(coordinate, cancellationToken);
 
     public Task<IReadOnlyList<PlanningCell>> GetScenarioCellsAsync(long scenarioVersionId, CancellationToken cancellationToken) =>
-        ShouldUseHydratedCacheRead()
-            ? WithReadAsync(ct => _innerRepository.GetScenarioCellsAsync(scenarioVersionId, ct), cancellationToken)
-            : GetScenarioCellsDirectAsync(scenarioVersionId, cancellationToken);
+        GetScenarioCellsDirectAsync(scenarioVersionId, cancellationToken);
 
     public Task<IReadOnlyList<PlanningCell>> GetDraftCellsAsync(long scenarioVersionId, string userId, IEnumerable<PlanningCellCoordinate> coordinates, CancellationToken cancellationToken) =>
         GetDraftCellsDirectAsync(scenarioVersionId, PlanningUserIdentity.ParsePlanningUserToken(userId), coordinates, cancellationToken);
@@ -264,9 +257,16 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
     {
         var userContext = PlanningUserIdentity.ParsePlanningUserToken(userId);
         var materialized = cells.Select(cell => cell.Clone()).ToList();
+        var stopwatch = Stopwatch.StartNew();
         await ExecuteDirectNonVersionedMutationAsync(
             (connection, transaction, ct) => UpsertDraftPlanningCellsAsync(connection, transaction, scenarioVersionId, userContext, materialized, ct),
             cancellationToken);
+        _logger.LogInformation(
+            "Upserted {DraftCellCount} planning draft cells for scenario {ScenarioVersionId} user {UserId} in {ElapsedMs} ms.",
+            materialized.Count,
+            scenarioVersionId,
+            userContext.PrimaryUserId,
+            stopwatch.ElapsedMilliseconds);
     }
 
     public async Task AppendAuditAsync(PlanningActionAudit audit, CancellationToken cancellationToken)
@@ -361,10 +361,19 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         InvalidateReadCaches(TimePeriodMutationTables);
     }
 
-    public Task CommitDraftAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken) =>
-        ExecuteDirectMutationAsync(
-            (connection, transaction, ct) => CommitDraftDirectAsync(connection, transaction, scenarioVersionId, PlanningUserIdentity.ParsePlanningUserToken(userId), ct),
+    public async Task CommitDraftAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken)
+    {
+        var userContext = PlanningUserIdentity.ParsePlanningUserToken(userId);
+        var stopwatch = Stopwatch.StartNew();
+        await ExecuteDirectMutationAsync(
+            (connection, transaction, ct) => CommitDraftDirectAsync(connection, transaction, scenarioVersionId, userContext, ct),
             cancellationToken);
+        _logger.LogInformation(
+            "Committed planning draft for scenario {ScenarioVersionId} user {UserId} in {ElapsedMs} ms.",
+            scenarioVersionId,
+            userContext.PrimaryUserId,
+            stopwatch.ElapsedMilliseconds);
+    }
 
     public Task RecordSaveCheckpointAsync(long scenarioVersionId, string userId, string mode, DateTimeOffset savedAt, CancellationToken cancellationToken) =>
         RecordSaveCheckpointDirectAsync(scenarioVersionId, userId, mode, savedAt, cancellationToken);
@@ -414,7 +423,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             cancellationToken);
 
     public Task<IReadOnlyList<HierarchyDepartmentRecord>> GetHierarchyMappingsAsync(CancellationToken cancellationToken) =>
-        WithReadAsync(_innerRepository.GetHierarchyMappingsAsync, cancellationToken);
+        GetHierarchyMappingsDirectAsync(cancellationToken);
 
     public Task UpsertHierarchyDepartmentAsync(string departmentLabel, CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(
@@ -573,9 +582,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             cancellationToken);
 
     public Task<ProductNode?> FindProductNodeByPathAsync(string[] path, CancellationToken cancellationToken) =>
-        ShouldUseHydratedCacheRead()
-            ? WithReadAsync(ct => _innerRepository.FindProductNodeByPathAsync(path, ct), cancellationToken)
-            : FindProductNodeByPathDirectAsync(path, cancellationToken);
+        FindProductNodeByPathDirectAsync(path, cancellationToken);
 
     public Task ResetAsync(CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(

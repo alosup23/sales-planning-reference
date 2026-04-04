@@ -63,6 +63,7 @@ type PlanningGridProps = {
   onInitialRowsRendered?: () => void;
   pendingRevealRow: AddRowResponse | null;
   onRevealHandled: () => void;
+  editingLocked?: boolean;
 };
 
 type GridRowView = GridRow;
@@ -133,6 +134,7 @@ export function PlanningGrid({
   onInitialRowsRendered,
   pendingRevealRow,
   onRevealHandled,
+  editingLocked = false,
 }: PlanningGridProps) {
   const [selectedRowKey, setSelectedRowKey] = useState<RowKey | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -340,7 +342,7 @@ export function PlanningGrid({
         colId: `${period.timePeriodId}:${measure.measureId}`,
         wrapHeaderText: true,
         autoHeaderHeight: true,
-        editable: (params) => !showGrowthFactors && (isLeafMonthEditable(params.data) || isTopDownEditable(params.data)),
+        editable: (params) => !editingLocked && !showGrowthFactors && (isLeafMonthEditable(params.data) || isTopDownEditable(params.data)),
         valueGetter: (params) => params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.value ?? 0,
         valueFormatter: (params) => formatValue(params, measure),
         initialWidth: columnWidthStateRef.current.get(`${period.timePeriodId}:${measure.measureId}`) ?? (isYearTotal ? yearTotalWidth : monthMeasureWidth),
@@ -385,7 +387,7 @@ export function PlanningGrid({
         ],
       };
     });
-  }, [data.measures, data.periods, onApplyGrowthFactor, showGrowthFactors, yearIndexByTimePeriodId, yearPeriods]);
+  }, [data.measures, data.periods, editingLocked, onApplyGrowthFactor, showGrowthFactors, yearIndexByTimePeriodId, yearPeriods]);
 
   const defaultColDef = useMemo<ColDef<GridRowView>>(
     () => ({

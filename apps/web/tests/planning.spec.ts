@@ -872,6 +872,45 @@ test("direct API year GP% splash returns the exact requested patch", async ({ re
 });
 
 for (const scenario of editableMeasureScenarios) {
+  test(`year ${scenario.label} draft edits remain visible across cross-view repeated editing without save`, async ({ page, request }) => {
+    await openStoreLeafPath(page, "Beverages", "Soft Drinks", "Cola");
+    await editCellByPinnedText(page, "Cola", `202600:${scenario.measureId}`, scenario.yearFirst);
+    await expectReady(page);
+
+    const draftYearStoreApiValue = await fetchStoreLeafMeasureValue(request, "Beverages", "Soft Drinks", "Cola", 202600, scenario.measureId);
+    const draftYearDepartmentApiValue = await fetchDepartmentLeafMeasureValue(request, "Beverages", "Soft Drinks", "Cola", 202600, scenario.measureId);
+    expect(draftYearStoreApiValue).toBe(Number(scenario.yearFirst));
+    expect(draftYearDepartmentApiValue).toBe(Number(scenario.yearFirst));
+
+    await openDepartmentLeafPath(page, "Beverages", "Soft Drinks", "Cola");
+    await expect(await gridCellByPinnedText(page, "Cola", `202600:${scenario.measureId}`))
+      .toContainText(formatGridValue(scenario.yearFirst, scenario.decimals, scenario.displayAsPercent));
+
+    const departmentStoreBefore = await normalizedCellText(await gridCellByPinnedText(page, "Store A", `202600:${scenario.measureId}`));
+    const departmentTotalBefore = await normalizedCellText(await gridCellByPinnedText(page, "Beverages", `202600:${scenario.measureId}`));
+
+    await editCellByPinnedText(page, "Cola", `202600:${scenario.measureId}`, scenario.yearSecond);
+    await expectReady(page);
+
+    const updatedDraftYearStoreApiValue = await fetchStoreLeafMeasureValue(request, "Beverages", "Soft Drinks", "Cola", 202600, scenario.measureId);
+    const updatedDraftYearDepartmentApiValue = await fetchDepartmentLeafMeasureValue(request, "Beverages", "Soft Drinks", "Cola", 202600, scenario.measureId);
+    expect(updatedDraftYearStoreApiValue).toBe(Number(scenario.yearSecond));
+    expect(updatedDraftYearDepartmentApiValue).toBe(Number(scenario.yearSecond));
+
+    await expect(await gridCellByPinnedText(page, "Cola", `202600:${scenario.measureId}`))
+      .toContainText(formatGridValue(scenario.yearSecond, scenario.decimals, scenario.displayAsPercent));
+
+    const departmentStoreAfter = await normalizedCellText(await gridCellByPinnedText(page, "Store A", `202600:${scenario.measureId}`));
+    const departmentTotalAfter = await normalizedCellText(await gridCellByPinnedText(page, "Beverages", `202600:${scenario.measureId}`));
+
+    expect(departmentStoreAfter).not.toBe(departmentStoreBefore);
+    expect(departmentTotalAfter).not.toBe(departmentTotalBefore);
+
+    await openStoreLeafPath(page, "Beverages", "Soft Drinks", "Cola");
+    await expect(await gridCellByPinnedText(page, "Cola", `202600:${scenario.measureId}`))
+      .toContainText(formatGridValue(scenario.yearSecond, scenario.decimals, scenario.displayAsPercent));
+  });
+
   test(`year ${scenario.label} edits survive save and repeated cross-view editing`, async ({ page, request }) => {
     await openStoreLeafPath(page, "Beverages", "Soft Drinks", "Cola");
     const splashResponsePromise = scenario.measureId === 7
@@ -967,6 +1006,51 @@ for (const scenario of editableMeasureScenarios) {
 
     await editCellByPinnedText(page, "Green Tea", `202603:${scenario.measureId}`, scenario.monthSecond);
     await expectReady(page);
+
+    await expect(await gridCellByPinnedText(page, "Green Tea", `202603:${scenario.measureId}`))
+      .toContainText(formatGridValue(scenario.monthSecond, scenario.decimals, scenario.displayAsPercent));
+
+    const departmentStoreAfter = await normalizedCellText(await gridCellByPinnedText(page, "Store A", `202603:${scenario.measureId}`));
+    const departmentTotalAfter = await normalizedCellText(await gridCellByPinnedText(page, "Beverages", `202603:${scenario.measureId}`));
+
+    expect(departmentStoreAfter).not.toBe(departmentStoreBefore);
+    expect(departmentTotalAfter).not.toBe(departmentTotalBefore);
+
+    await openStoreLeafPath(page, "Beverages", "Tea", "Green Tea");
+    await expandYears(page);
+    await expectReady(page);
+    await expect(await gridCellByPinnedText(page, "Green Tea", `202603:${scenario.measureId}`))
+      .toContainText(formatGridValue(scenario.monthSecond, scenario.decimals, scenario.displayAsPercent));
+  });
+
+  test(`month ${scenario.label} draft edits remain visible across cross-view repeated editing without save`, async ({ page, request }) => {
+    await openStoreLeafPath(page, "Beverages", "Tea", "Green Tea");
+    await expandYears(page);
+    await expectReady(page);
+    await editCellByPinnedText(page, "Green Tea", `202603:${scenario.measureId}`, scenario.monthFirst);
+    await expectReady(page);
+
+    const draftMonthStoreApiValue = await fetchStoreLeafMeasureValue(request, "Beverages", "Tea", "Green Tea", 202603, scenario.measureId);
+    const draftMonthDepartmentApiValue = await fetchDepartmentLeafMeasureValue(request, "Beverages", "Tea", "Green Tea", 202603, scenario.measureId);
+    expect(draftMonthStoreApiValue).toBe(Number(scenario.monthFirst));
+    expect(draftMonthDepartmentApiValue).toBe(Number(scenario.monthFirst));
+
+    await openDepartmentLeafPath(page, "Beverages", "Tea", "Green Tea");
+    await expandYears(page);
+    await expectReady(page);
+    await expect(await gridCellByPinnedText(page, "Green Tea", `202603:${scenario.measureId}`))
+      .toContainText(formatGridValue(scenario.monthFirst, scenario.decimals, scenario.displayAsPercent));
+
+    const departmentStoreBefore = await normalizedCellText(await gridCellByPinnedText(page, "Store A", `202603:${scenario.measureId}`));
+    const departmentTotalBefore = await normalizedCellText(await gridCellByPinnedText(page, "Beverages", `202603:${scenario.measureId}`));
+
+    await editCellByPinnedText(page, "Green Tea", `202603:${scenario.measureId}`, scenario.monthSecond);
+    await expectReady(page);
+
+    const updatedDraftMonthStoreApiValue = await fetchStoreLeafMeasureValue(request, "Beverages", "Tea", "Green Tea", 202603, scenario.measureId);
+    const updatedDraftMonthDepartmentApiValue = await fetchDepartmentLeafMeasureValue(request, "Beverages", "Tea", "Green Tea", 202603, scenario.measureId);
+    expect(updatedDraftMonthStoreApiValue).toBe(Number(scenario.monthSecond));
+    expect(updatedDraftMonthDepartmentApiValue).toBe(Number(scenario.monthSecond));
 
     await expect(await gridCellByPinnedText(page, "Green Tea", `202603:${scenario.measureId}`))
       .toContainText(formatGridValue(scenario.monthSecond, scenario.decimals, scenario.displayAsPercent));

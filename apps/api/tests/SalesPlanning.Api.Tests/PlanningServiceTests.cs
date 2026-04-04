@@ -4,6 +4,7 @@ using SalesPlanning.Api.Contracts;
 using SalesPlanning.Api.Domain;
 using SalesPlanning.Api.Infrastructure;
 using SalesPlanning.Api.Security;
+using System.Security.Claims;
 using Xunit;
 
 namespace SalesPlanning.Api.Tests;
@@ -721,6 +722,66 @@ public sealed class PlanningServiceTests
         Assert.True(secondResult.CellsUpdated > 0);
         Assert.Equal(420m, subclassRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value);
         Assert.Equal(420m, departmentSubclassRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value);
+    }
+
+    [Fact]
+    public async Task SaveScenarioAsync_WhenPreferredUsernameDisappearsAcrossRequests_RemainsVisibleAcrossViewsAndEditableAgain()
+    {
+        var initialPrincipal = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("preferred_username", "planner.one@example.com"),
+            new Claim("oid", "11111111-2222-3333-4444-555555555555"),
+            new Claim("name", "Planner One"),
+        ], "Bearer"));
+        var followUpPrincipal = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("oid", "11111111-2222-3333-4444-555555555555"),
+            new Claim("name", "Planner One"),
+        ], "Bearer"));
+
+        var initialToken = PlanningUserIdentity.ResolvePlanningUserToken(initialPrincipal, authEnabled: true);
+        var followUpToken = PlanningUserIdentity.ResolvePlanningUserToken(followUpPrincipal, authEnabled: true);
+
+        await _service.ApplySplashAsync(
+            new SplashRequest(
+                1,
+                PlanningMeasures.SoldQuantity,
+                new SplashCoordinateDto(101, 2111, 202600),
+                390m,
+                "seasonality_profile",
+                0,
+                "Leaf year quantity splash 1",
+                null,
+                [new SplashScopeRootDto(101, 2111)]),
+            initialToken,
+            CancellationToken.None);
+        await _service.SaveScenarioAsync(new SaveScenarioRequest(1, "manual"), followUpToken, CancellationToken.None);
+
+        var afterSaveDepartment = await GetDepartmentPathRowsAsync("Beverages", "Soft Drinks", "Cola", "Beverages", followUpToken);
+        var afterSaveStore = await GetStorePathRowsAsync("Beverages", "Soft Drinks", "Cola", followUpToken);
+
+        Assert.Equal(390m, afterSaveDepartment.SubclassRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value);
+        Assert.Equal(390m, afterSaveStore.SubclassRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value);
+
+        await _service.ApplySplashAsync(
+            new SplashRequest(
+                1,
+                PlanningMeasures.SoldQuantity,
+                new SplashCoordinateDto(101, 2111, 202600),
+                420m,
+                "seasonality_profile",
+                0,
+                "Leaf year quantity splash 2",
+                null,
+                [new SplashScopeRootDto(101, 2111)]),
+            followUpToken,
+            CancellationToken.None);
+
+        var afterSecondDepartment = await GetDepartmentPathRowsAsync("Beverages", "Soft Drinks", "Cola", "Beverages", followUpToken);
+        var afterSecondStore = await GetStorePathRowsAsync("Beverages", "Soft Drinks", "Cola", followUpToken);
+
+        Assert.Equal(420m, afterSecondDepartment.SubclassRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value);
+        Assert.Equal(420m, afterSecondStore.SubclassRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value);
     }
 
     [Fact]

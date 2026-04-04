@@ -111,6 +111,19 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
         }, cancellationToken);
     }
 
+    private async Task<IReadOnlyList<HierarchyDepartmentRecord>> GetHierarchyMappingsDirectAsync(CancellationToken cancellationToken)
+    {
+        var cached = GetCachedHierarchyMappings();
+        if (cached is not null)
+        {
+            return cached;
+        }
+
+        return await ExecuteDirectReadAsync(
+            (connection, transaction, ct) => GetHierarchyMappingsCachedDirectAsync(connection, transaction, ct),
+            cancellationToken);
+    }
+
     private async Task<IReadOnlyList<PlanningCell>> GetCellsDirectAsync(IEnumerable<PlanningCellCoordinate> coordinates, CancellationToken cancellationToken)
     {
         var coordinateList = coordinates

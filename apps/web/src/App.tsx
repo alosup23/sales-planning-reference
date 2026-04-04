@@ -416,6 +416,16 @@ export default function App() {
       includeGrid: !result.patch,
     });
 
+    if (result.patch) {
+      void refreshPlanningQueries({
+        includeStoreScopes: false,
+        includeUndoRedo: false,
+        includeInsights: false,
+        includeGrid: true,
+        includeInactiveGrid: true,
+      }).catch(() => undefined);
+    }
+
     void queryClient
       .refetchQueries({ queryKey: ["planning-insights"], type: "active" })
       .catch(() => undefined);
@@ -658,15 +668,9 @@ export default function App() {
       if (saveMutation.isPending) {
         return;
       }
-
-      if (planningViewActive && (hasUnsavedChangesRef.current || Boolean(pendingPlanningPatchRef.current?.cells.length))) {
-        await commitPlanningChanges("autosave");
-      }
-
-      setPendingPlanningPatch(null);
       applyChange();
     },
-    [commitPlanningChanges, planningViewActive, saveMutation],
+    [saveMutation],
   );
 
   const addHierarchyDepartmentMutation = useMutation({
@@ -1091,6 +1095,21 @@ export default function App() {
     inactivateVendorSupplyMutation.isPending ||
     vendorSupplyImportMutation.isPending ||
     vendorSupplyExportMutation.isPending;
+
+  const planningInteractionLocked =
+    editMutation.isPending ||
+    lockMutation.isPending ||
+    splashMutation.isPending ||
+    addRowMutation.isPending ||
+    deleteRowMutation.isPending ||
+    deleteYearMutation.isPending ||
+    generateNextYearMutation.isPending ||
+    importMutation.isPending ||
+    growthFactorMutation.isPending ||
+    reconciliationMutation.isPending ||
+    undoMutation.isPending ||
+    redoMutation.isPending ||
+    saveMutation.isPending;
 
   const statusText = useMemo(() => {
     const planningViewActive = activeView === "planning-store" || activeView === "planning-department";
@@ -2080,6 +2099,7 @@ export default function App() {
               onInitialRowsRendered={() => setPlanningSurfaceReady(true)}
               pendingRevealRow={pendingRevealRow}
               onRevealHandled={() => setPendingRevealRow(null)}
+              editingLocked={planningInteractionLocked}
             />
           </Suspense>
           <aside className="insight-panel" aria-live="polite">

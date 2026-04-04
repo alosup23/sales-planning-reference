@@ -90,10 +90,10 @@ public static class PlanningUserIdentity
 
         var candidates = new[]
             {
-                user.FindFirst("preferred_username")?.Value,
                 user.FindFirst("oid")?.Value,
                 user.FindFirst(ClaimTypes.NameIdentifier)?.Value,
                 user.FindFirst("sub")?.Value,
+                user.FindFirst("preferred_username")?.Value,
                 user.FindFirst("name")?.Value,
                 user.Identity?.Name,
             }
