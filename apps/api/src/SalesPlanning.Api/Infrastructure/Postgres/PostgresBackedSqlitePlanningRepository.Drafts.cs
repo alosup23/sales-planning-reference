@@ -257,38 +257,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             await deleteAliasCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await using (var updateCommand = new NpgsqlCommand(
-                         $"""
-                         update planning_draft_cells as target
-                         set input_value = source.input_value,
-                             override_value = source.override_value,
-                             is_system_generated_override = source.is_system_generated_override,
-                             derived_value = source.derived_value,
-                             effective_value = source.effective_value,
-                             growth_factor = source.growth_factor,
-                             is_locked = source.is_locked,
-                             lock_reason = source.lock_reason,
-                             locked_by = source.locked_by,
-                             row_version = source.row_version,
-                             cell_kind = source.cell_kind,
-                             updated_at = now()
-                         from {stageTableName} as source
-                         where target.scenario_version_id = source.scenario_version_id
-                           and target.user_id = @primaryUserId
-                           and target.measure_id = source.measure_id
-                           and target.store_id = source.store_id
-                           and target.product_node_id = source.product_node_id
-                           and target.time_period_id = source.time_period_id;
-                         """,
-                         connection,
-                         transaction))
-        {
-            updateCommand.CommandTimeout = 300;
-            updateCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
-            await updateCommand.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await using (var insertCommand = new NpgsqlCommand(
+        await using (var mergeCommand = new NpgsqlCommand(
                          $"""
                          insert into planning_draft_cells (
                              scenario_version_id,
@@ -329,21 +298,33 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
                              source.cell_kind,
                              now()
                          from {stageTableName} as source
-                         left join planning_draft_cells as target
-                           on target.scenario_version_id = source.scenario_version_id
-                          and target.user_id = @primaryUserId
-                          and target.measure_id = source.measure_id
-                          and target.store_id = source.store_id
-                          and target.product_node_id = source.product_node_id
-                          and target.time_period_id = source.time_period_id
-                         where target.scenario_version_id is null;
+                         on conflict (
+                             scenario_version_id,
+                             user_id,
+                             measure_id,
+                             store_id,
+                             product_node_id,
+                             time_period_id)
+                         do update set
+                             input_value = excluded.input_value,
+                             override_value = excluded.override_value,
+                             is_system_generated_override = excluded.is_system_generated_override,
+                             derived_value = excluded.derived_value,
+                             effective_value = excluded.effective_value,
+                             growth_factor = excluded.growth_factor,
+                             is_locked = excluded.is_locked,
+                             lock_reason = excluded.lock_reason,
+                             locked_by = excluded.locked_by,
+                             row_version = excluded.row_version,
+                             cell_kind = excluded.cell_kind,
+                             updated_at = excluded.updated_at;
                          """,
                          connection,
                          transaction))
         {
-            insertCommand.CommandTimeout = 300;
-            insertCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
-            await insertCommand.ExecuteNonQueryAsync(cancellationToken);
+            mergeCommand.CommandTimeout = 300;
+            mergeCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+            await mergeCommand.ExecuteNonQueryAsync(cancellationToken);
         }
     }
 

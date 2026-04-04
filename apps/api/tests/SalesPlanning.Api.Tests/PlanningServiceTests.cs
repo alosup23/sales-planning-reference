@@ -761,6 +761,213 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
+    public async Task ApplySplashAsync_OnLeafYearGrossProfitPercent_SaveAndRepeatedEditRemainConsistentAcrossViews()
+    {
+        await _service.ApplySplashAsync(
+            new SplashRequest(
+                1,
+                PlanningMeasures.GrossProfitPercent,
+                new SplashCoordinateDto(101, 2111, 202600),
+                28.5m,
+                "seasonality_profile",
+                1,
+                "Leaf year GP% splash 1",
+                null,
+                [new SplashScopeRootDto(101, 2111)]),
+            "planner.one",
+            CancellationToken.None);
+        await _service.SaveScenarioAsync(new SaveScenarioRequest(1, "manual"), "planner.one", CancellationToken.None);
+
+        var afterFirstDepartment = await GetDepartmentPathRowsAsync("Beverages", "Soft Drinks", "Cola");
+        var afterFirstStore = await GetStorePathRowsAsync("Beverages", "Soft Drinks", "Cola");
+
+        Assert.Equal(28.5m, afterFirstDepartment.SubclassRow.Cells[202600].Measures[PlanningMeasures.GrossProfitPercent].Value);
+        Assert.Equal(28.5m, afterFirstStore.SubclassRow.Cells[202600].Measures[PlanningMeasures.GrossProfitPercent].Value);
+
+        await _service.ApplySplashAsync(
+            new SplashRequest(
+                1,
+                PlanningMeasures.GrossProfitPercent,
+                new SplashCoordinateDto(101, 2111, 202600),
+                31.0m,
+                "seasonality_profile",
+                1,
+                "Leaf year GP% splash 2",
+                null,
+                [new SplashScopeRootDto(101, 2111)]),
+            "planner.one",
+            CancellationToken.None);
+
+        var afterSecondDepartment = await GetDepartmentPathRowsAsync("Beverages", "Soft Drinks", "Cola");
+        var afterSecondStore = await GetStorePathRowsAsync("Beverages", "Soft Drinks", "Cola");
+
+        Assert.Equal(31.0m, afterSecondDepartment.SubclassRow.Cells[202600].Measures[PlanningMeasures.GrossProfitPercent].Value);
+        Assert.Equal(31.0m, afterSecondStore.SubclassRow.Cells[202600].Measures[PlanningMeasures.GrossProfitPercent].Value);
+    }
+
+    [Fact]
+    public async Task ApplySplashAsync_OnLeafYearGrossProfitPercent_WithAllDepartmentsScope_RemainsConsistentAcrossViews()
+    {
+        await _service.ApplySplashAsync(
+            new SplashRequest(
+                1,
+                PlanningMeasures.GrossProfitPercent,
+                new SplashCoordinateDto(101, 2111, 202600),
+                28.5m,
+                "seasonality_profile",
+                1,
+                "Leaf year GP% all departments splash",
+                null,
+                [new SplashScopeRootDto(101, 2111)]),
+            "local.test.user",
+            CancellationToken.None);
+        await _service.SaveScenarioAsync(new SaveScenarioRequest(1, "manual"), "local.test.user", CancellationToken.None);
+
+        var departmentRows = await GetDepartmentPathRowsAsync("Beverages", "Soft Drinks", "Cola", null, "local.test.user");
+        var storeRows = await GetStorePathRowsAsync("Beverages", "Soft Drinks", "Cola", "local.test.user");
+
+        Assert.Equal(28.5m, departmentRows.SubclassRow.Cells[202600].Measures[PlanningMeasures.GrossProfitPercent].Value);
+        Assert.Equal(28.5m, storeRows.SubclassRow.Cells[202600].Measures[PlanningMeasures.GrossProfitPercent].Value);
+    }
+
+    [Fact]
+    public async Task ApplySplashAsync_OnLeafYearGrossProfitPercent_WithDirectSqliteRepository_RemainsConsistentAcrossViews()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), $"sales-planning-sqlite-{Guid.NewGuid():N}.db");
+        try
+        {
+            var sqliteRepository = new SqlitePlanningRepository(databasePath);
+            var sqliteService = new PlanningService(sqliteRepository, new SplashAllocator());
+
+            var response = await sqliteService.ApplySplashAsync(
+                new SplashRequest(
+                    1,
+                    PlanningMeasures.GrossProfitPercent,
+                    new SplashCoordinateDto(101, 2111, 202600),
+                    28.5m,
+                    "seasonality_profile",
+                    1,
+                    "Leaf year GP% sqlite splash",
+                    null,
+                    [new SplashScopeRootDto(101, 2111)]),
+                "local.test.user",
+                CancellationToken.None);
+            Assert.NotNull(response.Patch);
+            var patchCell = Assert.Single(response.Patch!.Cells, cell =>
+                cell.StoreId == 101 &&
+                cell.ProductNodeId == 2111 &&
+                cell.TimePeriodId == 202600 &&
+                cell.MeasureId == PlanningMeasures.GrossProfitPercent);
+            Assert.Equal(28.5m, patchCell.Cell.Value);
+            await sqliteService.SaveScenarioAsync(new SaveScenarioRequest(1, "manual"), "local.test.user", CancellationToken.None);
+
+            var request = new PlanningGridViewRequest(1, "department", null, "Beverages", "department-store-class", false);
+            var departmentRows = await sqliteService.GetGridViewChildrenAsync(request, "view:department:root", "local.test.user", CancellationToken.None);
+            var beveragesRow = Assert.Single(departmentRows.Rows, row => row.Label == "Beverages");
+            var storeRows = await sqliteService.GetGridViewChildrenAsync(request, beveragesRow.ViewRowId!, "local.test.user", CancellationToken.None);
+            var storeRow = Assert.Single(storeRows.Rows, row => row.Label == "Store A");
+            var classRows = await sqliteService.GetGridViewChildrenAsync(request, storeRow.ViewRowId!, "local.test.user", CancellationToken.None);
+            var classRow = Assert.Single(classRows.Rows, row => row.Label == "Soft Drinks");
+            var subclassRows = await sqliteService.GetGridViewChildrenAsync(request, classRow.ViewRowId!, "local.test.user", CancellationToken.None);
+            var subclassRow = Assert.Single(subclassRows.Rows, row => row.Label == "Cola");
+
+            Assert.Equal(28.5m, subclassRow.Cells[202600].Measures[PlanningMeasures.GrossProfitPercent].Value);
+        }
+        finally
+        {
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ApplySplashAsync_OnLeafYearGrossProfitPercent_WithCopiedAppDataSqliteRepository_ReturnsExactPatch()
+    {
+        var sourceDatabasePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../../api/src/SalesPlanning.Api/App_Data/planning.db"));
+        var databasePath = Path.Combine(Path.GetTempPath(), $"sales-planning-appdata-copy-{Guid.NewGuid():N}.db");
+        File.Copy(sourceDatabasePath, databasePath, true);
+
+        try
+        {
+            var sqliteRepository = new SqlitePlanningRepository(databasePath);
+            await sqliteRepository.ResetAsync(CancellationToken.None);
+            var sqliteService = new PlanningService(sqliteRepository, new SplashAllocator());
+
+            var response = await sqliteService.ApplySplashAsync(
+                new SplashRequest(
+                    1,
+                    PlanningMeasures.GrossProfitPercent,
+                    new SplashCoordinateDto(101, 2111, 202600),
+                    28.5m,
+                    "seasonality_profile",
+                    1,
+                    "Leaf year GP% copied appdata splash",
+                    null,
+                    [new SplashScopeRootDto(101, 2111)]),
+                "local.test.user",
+                CancellationToken.None);
+
+            Assert.NotNull(response.Patch);
+            var patchCell = Assert.Single(response.Patch!.Cells, cell =>
+                cell.StoreId == 101 &&
+                cell.ProductNodeId == 2111 &&
+                cell.TimePeriodId == 202600 &&
+                cell.MeasureId == PlanningMeasures.GrossProfitPercent);
+            Assert.Equal(28.5m, patchCell.Cell.Value);
+        }
+        finally
+        {
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ApplySplashAsync_OnLeafYearGrossProfitPercent_WithDirectSqliteRepositoryAfterReset_ReturnsExactPatch()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), $"sales-planning-sqlite-reset-{Guid.NewGuid():N}.db");
+        try
+        {
+            var sqliteRepository = new SqlitePlanningRepository(databasePath);
+            await sqliteRepository.ResetAsync(CancellationToken.None);
+            var sqliteService = new PlanningService(sqliteRepository, new SplashAllocator());
+
+            var response = await sqliteService.ApplySplashAsync(
+                new SplashRequest(
+                    1,
+                    PlanningMeasures.GrossProfitPercent,
+                    new SplashCoordinateDto(101, 2111, 202600),
+                    28.5m,
+                    "seasonality_profile",
+                    1,
+                    "Leaf year GP% sqlite splash after reset",
+                    null,
+                    [new SplashScopeRootDto(101, 2111)]),
+                "local.test.user",
+                CancellationToken.None);
+
+            Assert.NotNull(response.Patch);
+            var patchCell = Assert.Single(response.Patch!.Cells, cell =>
+                cell.StoreId == 101 &&
+                cell.ProductNodeId == 2111 &&
+                cell.TimePeriodId == 202600 &&
+                cell.MeasureId == PlanningMeasures.GrossProfitPercent);
+            Assert.Equal(28.5m, patchCell.Cell.Value);
+        }
+        finally
+        {
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
+    }
+
+    [Fact]
     public async Task SaveScenarioAsync_AfterLeafYearQuantityEdit_DepartmentProjectionShowsCommittedLeafValue()
     {
         await _service.ApplyEditsAsync(
@@ -867,6 +1074,74 @@ public sealed class PlanningServiceTests
         var subclassRow = Assert.Single(subclassRows.Rows, row => row.Label == "Cola");
 
         Assert.Equal(390m, subclassRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value);
+    }
+
+    [Theory]
+    [InlineData(PlanningMeasures.SalesRevenue, 3900, 4200)]
+    [InlineData(PlanningMeasures.SoldQuantity, 390, 420)]
+    [InlineData(PlanningMeasures.AverageSellingPrice, 12.25, 13.75)]
+    [InlineData(PlanningMeasures.UnitCost, 7.25, 7.75)]
+    [InlineData(PlanningMeasures.GrossProfitPercent, 28.5, 31.0)]
+    public async Task SaveScenarioAsync_YearLeafEditsRemainConsistentAcrossStoreAndDepartmentViews_ForEveryEditableMeasure(
+        long measureId,
+        decimal firstValue,
+        decimal secondValue)
+    {
+        var beforeDepartment = await GetDepartmentPathRowsAsync("Beverages", "Soft Drinks", "Cola");
+        var beforeStoreValue = beforeDepartment.StoreRow.Cells[202600].Measures[measureId].Value;
+        var beforeDepartmentValue = beforeDepartment.DepartmentRow.Cells[202600].Measures[measureId].Value;
+
+        await ApplyLeafChangeAsync(measureId, 2111, 202600, firstValue, $"Year edit 1 for measure {measureId}");
+        await _service.SaveScenarioAsync(new SaveScenarioRequest(1, "manual"), "planner.one", CancellationToken.None);
+
+        var afterFirstDepartment = await GetDepartmentPathRowsAsync("Beverages", "Soft Drinks", "Cola");
+        Assert.Equal(firstValue, afterFirstDepartment.SubclassRow.Cells[202600].Measures[measureId].Value);
+        Assert.NotEqual(beforeStoreValue, afterFirstDepartment.StoreRow.Cells[202600].Measures[measureId].Value);
+        Assert.NotEqual(beforeDepartmentValue, afterFirstDepartment.DepartmentRow.Cells[202600].Measures[measureId].Value);
+
+        await ApplyLeafChangeAsync(measureId, 2111, 202600, secondValue, $"Year edit 2 for measure {measureId}");
+
+        var afterSecondDepartment = await GetDepartmentPathRowsAsync("Beverages", "Soft Drinks", "Cola");
+        var afterSecondStore = await GetStorePathRowsAsync("Beverages", "Soft Drinks", "Cola");
+
+        Assert.Equal(secondValue, afterSecondDepartment.SubclassRow.Cells[202600].Measures[measureId].Value);
+        Assert.Equal(secondValue, afterSecondStore.SubclassRow.Cells[202600].Measures[measureId].Value);
+        Assert.NotEqual(afterFirstDepartment.StoreRow.Cells[202600].Measures[measureId].Value, afterSecondDepartment.StoreRow.Cells[202600].Measures[measureId].Value);
+        Assert.NotEqual(afterFirstDepartment.DepartmentRow.Cells[202600].Measures[measureId].Value, afterSecondDepartment.DepartmentRow.Cells[202600].Measures[measureId].Value);
+    }
+
+    [Theory]
+    [InlineData(PlanningMeasures.SalesRevenue, 1350, 1425)]
+    [InlineData(PlanningMeasures.SoldQuantity, 125, 145)]
+    [InlineData(PlanningMeasures.AverageSellingPrice, 11.75, 12.5)]
+    [InlineData(PlanningMeasures.UnitCost, 7.1, 7.6)]
+    [InlineData(PlanningMeasures.GrossProfitPercent, 26.5, 29.0)]
+    public async Task SaveScenarioAsync_MonthLeafEditsRemainConsistentAcrossStoreAndDepartmentViews_ForEveryEditableMeasure(
+        long measureId,
+        decimal firstValue,
+        decimal secondValue)
+    {
+        var beforeDepartment = await GetDepartmentPathRowsAsync("Beverages", "Tea", "Green Tea");
+        var beforeStoreValue = beforeDepartment.StoreRow.Cells[202603].Measures[measureId].Value;
+        var beforeDepartmentValue = beforeDepartment.DepartmentRow.Cells[202603].Measures[measureId].Value;
+
+        await ApplyLeafChangeAsync(measureId, 2121, 202603, firstValue, $"Month edit 1 for measure {measureId}");
+        await _service.SaveScenarioAsync(new SaveScenarioRequest(1, "manual"), "planner.one", CancellationToken.None);
+
+        var afterFirstDepartment = await GetDepartmentPathRowsAsync("Beverages", "Tea", "Green Tea");
+        Assert.Equal(firstValue, afterFirstDepartment.SubclassRow.Cells[202603].Measures[measureId].Value);
+        Assert.NotEqual(beforeStoreValue, afterFirstDepartment.StoreRow.Cells[202603].Measures[measureId].Value);
+        Assert.NotEqual(beforeDepartmentValue, afterFirstDepartment.DepartmentRow.Cells[202603].Measures[measureId].Value);
+
+        await ApplyLeafChangeAsync(measureId, 2121, 202603, secondValue, $"Month edit 2 for measure {measureId}");
+
+        var afterSecondDepartment = await GetDepartmentPathRowsAsync("Beverages", "Tea", "Green Tea");
+        var afterSecondStore = await GetStorePathRowsAsync("Beverages", "Tea", "Green Tea");
+
+        Assert.Equal(secondValue, afterSecondDepartment.SubclassRow.Cells[202603].Measures[measureId].Value);
+        Assert.Equal(secondValue, afterSecondStore.SubclassRow.Cells[202603].Measures[measureId].Value);
+        Assert.NotEqual(afterFirstDepartment.StoreRow.Cells[202603].Measures[measureId].Value, afterSecondDepartment.StoreRow.Cells[202603].Measures[measureId].Value);
+        Assert.NotEqual(afterFirstDepartment.DepartmentRow.Cells[202603].Measures[measureId].Value, afterSecondDepartment.DepartmentRow.Cells[202603].Measures[measureId].Value);
     }
 
     [Fact]
@@ -1208,6 +1483,72 @@ public sealed class PlanningServiceTests
 
     private static void WriteVendorSupplyHeader(IXLWorksheet sheet) =>
         WriteHeaderRow(sheet, "Supplier", "Brand", "Lead Time Days", "MOQ", "Case Pack", "Replenishment Type", "Payment Terms", "Status");
+
+    private async Task ApplyLeafChangeAsync(
+        long measureId,
+        long productNodeId,
+        long timePeriodId,
+        decimal newValue,
+        string comment)
+    {
+        var coordinate = new PlanningCellCoordinate(1, measureId, 101, productNodeId, timePeriodId);
+        var existingCell = await GetEffectiveCellAsync(coordinate);
+        Assert.NotNull(existingCell);
+
+        await _service.ApplyEditsAsync(
+            new EditCellsRequest(
+                1,
+                measureId,
+                comment,
+                [
+                    new EditCellRequest(
+                        101,
+                        productNodeId,
+                        timePeriodId,
+                        newValue,
+                        timePeriodId % 100 == 0 ? "override" : "input",
+                        existingCell!.RowVersion)
+                ]),
+            "planner.one",
+            CancellationToken.None);
+    }
+
+    private async Task<(GridRowDto DepartmentRow, GridRowDto StoreRow, GridRowDto ClassRow, GridRowDto SubclassRow)> GetDepartmentPathRowsAsync(
+        string departmentLabel,
+        string classLabel,
+        string subclassLabel,
+        string? selectedDepartmentLabel = null,
+        string userId = "planner.one")
+    {
+        var request = new PlanningGridViewRequest(1, "department", null, selectedDepartmentLabel, "department-store-class", false);
+        var departmentRows = await _service.GetGridViewChildrenAsync(request, "view:department:root", userId, CancellationToken.None);
+        var departmentRow = Assert.Single(departmentRows.Rows, row => row.Label == departmentLabel);
+        var storeRows = await _service.GetGridViewChildrenAsync(request, departmentRow.ViewRowId!, userId, CancellationToken.None);
+        var storeRow = Assert.Single(storeRows.Rows, row => row.Label == "Store A");
+        var classRows = await _service.GetGridViewChildrenAsync(request, storeRow.ViewRowId!, userId, CancellationToken.None);
+        var classRow = Assert.Single(classRows.Rows, row => row.Label == classLabel);
+        var subclassRows = await _service.GetGridViewChildrenAsync(request, classRow.ViewRowId!, userId, CancellationToken.None);
+        var subclassRow = Assert.Single(subclassRows.Rows, row => row.Label == subclassLabel);
+        return (departmentRow, storeRow, classRow, subclassRow);
+    }
+
+    private async Task<(GridRowDto StoreRow, GridRowDto DepartmentRow, GridRowDto ClassRow, GridRowDto SubclassRow)> GetStorePathRowsAsync(
+        string departmentLabel,
+        string classLabel,
+        string subclassLabel,
+        string userId = "planner.one")
+    {
+        var request = new PlanningGridViewRequest(1, "store", null, null, null, false);
+        var storeRows = await _service.GetGridViewChildrenAsync(request, "view:store:root", userId, CancellationToken.None);
+        var storeRow = Assert.Single(storeRows.Rows, row => row.Label == "Store A");
+        var departmentRows = await _service.GetGridViewChildrenAsync(request, storeRow.ViewRowId!, userId, CancellationToken.None);
+        var departmentRow = Assert.Single(departmentRows.Rows, row => row.Label == departmentLabel);
+        var classRows = await _service.GetGridViewChildrenAsync(request, departmentRow.ViewRowId!, userId, CancellationToken.None);
+        var classRow = Assert.Single(classRows.Rows, row => row.Label == classLabel);
+        var subclassRows = await _service.GetGridViewChildrenAsync(request, classRow.ViewRowId!, userId, CancellationToken.None);
+        var subclassRow = Assert.Single(subclassRows.Rows, row => row.Label == subclassLabel);
+        return (storeRow, departmentRow, classRow, subclassRow);
+    }
 
     private static void WriteHeaderRow(IXLWorksheet sheet, params string[] headers)
     {

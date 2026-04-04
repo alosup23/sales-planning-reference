@@ -28,7 +28,7 @@ public sealed partial class PlanningService
         CancellationToken cancellationToken)
     {
         var coordinates = BuildWorkingSetCoordinates(scenarioVersionId, metadata, instructions);
-        return await LoadEffectiveCellsAsync(scenarioVersionId, userId, coordinates, cancellationToken);
+        return await LoadEffectiveCellsAsync(scenarioVersionId, userId, metadata, coordinates, cancellationToken);
     }
 
     private static PlanningMutationInstruction BuildEditInstruction(

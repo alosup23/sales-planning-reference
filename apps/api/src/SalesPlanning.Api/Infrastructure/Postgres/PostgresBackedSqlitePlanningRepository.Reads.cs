@@ -302,7 +302,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
                 visibleNodes.Select(node => node.ProductNodeId).ToArray(),
                 ct);
 
-            var rows = BuildGridRowsDirect(visibleNodes, scenarioCells, productNodes, timePeriods, stores, hierarchyMappings);
+            var rows = BuildGridRowsDirect(scenarioVersionId, visibleNodes, scenarioCells, productNodes, timePeriods, stores, hierarchyMappings);
             var periods = timePeriods.Values
                 .OrderBy(node => node.SortOrder)
                 .Select(node => new GridPeriodDto(node.TimePeriodId, node.Label, node.Grain, node.ParentTimePeriodId, node.SortOrder))
@@ -362,7 +362,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
                 relevantNodeIds,
                 ct);
 
-            var rows = BuildGridRowsDirect(children, scenarioCells, productNodes, timePeriods, stores, hierarchyMappings);
+            var rows = BuildGridRowsDirect(scenarioVersionId, children, scenarioCells, productNodes, timePeriods, stores, hierarchyMappings);
             return new GridBranchResponse(scenarioVersionId, parentProductNodeId, rows);
         }, cancellationToken);
     }
@@ -888,6 +888,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
     }
 
     private static IReadOnlyList<GridRowDto> BuildGridRowsDirect(
+        long scenarioVersionId,
         IReadOnlyList<ProductNode> nodes,
         IReadOnlyCollection<PlanningCell> scenarioCells,
         IReadOnlyDictionary<long, ProductNode> productNodes,
@@ -907,21 +908,42 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             {
                 var resolvedMetadata = ResolveNodeMetadataDirect(node, stores, hierarchyMappings);
                 var nodeCells = cellsByNode.GetValueOrDefault((node.StoreId, node.ProductNodeId)) ?? [];
-                var cells = nodeCells
-                    .GroupBy(cell => cell.Coordinate.TimePeriodId)
+                var cellsByCoordinate = nodeCells.ToDictionary(
+                    cell => (cell.Coordinate.TimePeriodId, cell.Coordinate.MeasureId),
+                    cell => cell);
+                var cells = timePeriods.Values
+                    .OrderBy(period => period.SortOrder)
                     .ToDictionary(
-                        group => group.Key,
-                        group => new GridPeriodCellDto(
-                            group.ToDictionary(
-                                cell => cell.Coordinate.MeasureId,
-                                cell => new GridCellDto(
-                                    cell.EffectiveValue,
-                                    cell.GrowthFactor,
-                                    IsEffectivelyLockedDirect(cell.Coordinate, lockedCells, productNodes, timePeriods),
-                                    cell.CellKind == "calculated",
-                                    cell.OverrideValue is not null,
-                                    cell.RowVersion,
-                                    cell.CellKind))));
+                        period => period.TimePeriodId,
+                        period => new GridPeriodCellDto(
+                            PlanningMeasures.Definitions.ToDictionary(
+                                measure => measure.MeasureId,
+                                measure =>
+                                {
+                                    if (cellsByCoordinate.TryGetValue((period.TimePeriodId, measure.MeasureId), out var existingCell))
+                                    {
+                                        return new GridCellDto(
+                                            existingCell.EffectiveValue,
+                                            existingCell.GrowthFactor,
+                                            IsEffectivelyLockedDirect(existingCell.Coordinate, lockedCells, productNodes, timePeriods),
+                                            existingCell.CellKind == "calculated",
+                                            existingCell.OverrideValue is not null,
+                                            existingCell.RowVersion,
+                                            existingCell.CellKind);
+                                    }
+
+                                    var coordinate = new PlanningCellCoordinate(scenarioVersionId, measure.MeasureId, node.StoreId, node.ProductNodeId, period.TimePeriodId);
+                                    var isLeafMonth = node.IsLeaf && string.Equals(period.Grain, "month", StringComparison.OrdinalIgnoreCase);
+                                    var cellKind = isLeafMonth && measure.EditableAtLeaf ? "leaf" : "calculated";
+                                    return new GridCellDto(
+                                        0m,
+                                        1.0m,
+                                        IsEffectivelyLockedDirect(coordinate, lockedCells, productNodes, timePeriods),
+                                        string.Equals(cellKind, "calculated", StringComparison.OrdinalIgnoreCase),
+                                        false,
+                                        1,
+                                        cellKind);
+                                })));
 
                 return new GridRowDto(
                     node.StoreId,

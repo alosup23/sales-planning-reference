@@ -11,6 +11,17 @@ public sealed partial class PlanningService
         IEnumerable<PlanningCellCoordinate> coordinates,
         CancellationToken cancellationToken)
     {
+        var metadata = await _repository.GetMetadataAsync(cancellationToken);
+        return await LoadEffectiveCellsAsync(scenarioVersionId, userId, metadata, coordinates, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<PlanningCell>> LoadEffectiveCellsAsync(
+        long scenarioVersionId,
+        string userId,
+        PlanningMetadataSnapshot metadata,
+        IEnumerable<PlanningCellCoordinate> coordinates,
+        CancellationToken cancellationToken)
+    {
         var coordinateList = coordinates
             .DistinctBy(coordinate => coordinate.Key)
             .ToList();
@@ -23,7 +34,7 @@ public sealed partial class PlanningService
         var draftCellsTask = _repository.GetDraftCellsAsync(scenarioVersionId, userId, coordinateList, cancellationToken);
         await Task.WhenAll(baseCellsTask, draftCellsTask);
 
-        return ApplyDraftOverlay(await baseCellsTask, await draftCellsTask);
+        return HydrateMissingCells(metadata, coordinateList, ApplyDraftOverlay(await baseCellsTask, await draftCellsTask));
     }
 
     private async Task<IReadOnlyList<PlanningCell>> LoadEffectiveScenarioCellsAsync(
@@ -56,6 +67,52 @@ public sealed partial class PlanningService
         }
 
         return cellsByKey.Values.ToList();
+    }
+
+    private static IReadOnlyList<PlanningCell> HydrateMissingCells(
+        PlanningMetadataSnapshot metadata,
+        IReadOnlyList<PlanningCellCoordinate> requestedCoordinates,
+        IReadOnlyList<PlanningCell> cells)
+    {
+        var cellsByKey = cells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone(), StringComparer.Ordinal);
+        foreach (var coordinate in requestedCoordinates)
+        {
+            if (cellsByKey.ContainsKey(coordinate.Key))
+            {
+                continue;
+            }
+
+            cellsByKey[coordinate.Key] = CreateDefaultPlanningCell(metadata, coordinate);
+        }
+
+        return cellsByKey.Values.ToList();
+    }
+
+    private static PlanningCell CreateDefaultPlanningCell(
+        PlanningMetadataSnapshot metadata,
+        PlanningCellCoordinate coordinate)
+    {
+        var node = metadata.ProductNodes[coordinate.ProductNodeId];
+        var timePeriod = metadata.TimePeriods[coordinate.TimePeriodId];
+        var measure = PlanningMeasures.GetDefinition(coordinate.MeasureId);
+        var isLeafMonth = node.IsLeaf && string.Equals(timePeriod.Grain, "month", StringComparison.OrdinalIgnoreCase);
+        var cellKind = isLeafMonth && measure.EditableAtLeaf ? "leaf" : "calculated";
+
+        return new PlanningCell
+        {
+            Coordinate = coordinate,
+            InputValue = null,
+            OverrideValue = null,
+            IsSystemGeneratedOverride = false,
+            DerivedValue = 0m,
+            EffectiveValue = 0m,
+            GrowthFactor = 1.0m,
+            IsLocked = false,
+            LockReason = null,
+            LockedBy = null,
+            RowVersion = 1,
+            CellKind = cellKind,
+        };
     }
 
     private async Task<GridSliceResponse> ApplyDraftOverlayAsync(

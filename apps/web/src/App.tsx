@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiRequestError,
@@ -180,6 +180,9 @@ export default function App() {
   const [pendingPlanningPatch, setPendingPlanningPatch] = useState<PlanningGridPatch | null>(null);
   const [planningPatchToken, setPlanningPatchToken] = useState(0);
   const [expandAllBranches, setExpandAllBranches] = useState(false);
+  const hasUnsavedChangesRef = useRef(false);
+  const savePromiseRef = useRef<Promise<unknown> | null>(null);
+  const pendingPlanningPatchRef = useRef<PlanningGridPatch | null>(null);
   const planningStoreScopesQueryKey = ["planning-store-scopes"] as const;
   const planningDepartmentScopesQueryKey = ["planning-department-scopes"] as const;
   const undoRedoQueryKey = ["undo-redo-availability", 1] as const;
@@ -310,6 +313,24 @@ export default function App() {
     const firstYear = gridQuery.data.periods.find((period) => period.grain === "year");
     setSelectedYearId(firstYear?.timePeriodId ?? null);
   }, [gridQuery.data, selectedYearId]);
+
+  useEffect(() => {
+    hasUnsavedChangesRef.current = hasUnsavedChanges;
+  }, [hasUnsavedChanges]);
+
+  useEffect(() => {
+    pendingPlanningPatchRef.current = pendingPlanningPatch;
+  }, [pendingPlanningPatch]);
+
+  const markPlanningDirty = useCallback(() => {
+    hasUnsavedChangesRef.current = true;
+    setHasUnsavedChanges(true);
+  }, []);
+
+  const clearPlanningDirty = useCallback(() => {
+    hasUnsavedChangesRef.current = false;
+    setHasUnsavedChanges(false);
+  }, []);
 
   const loadPlanningChildRows = useCallback(async (parentViewRowId: string): Promise<GridRow[]> => {
     const result = await getGridViewChildren({
@@ -464,7 +485,7 @@ export default function App() {
     mutationFn: postEdit,
     onSuccess: async (result) => {
       setLastError(null);
-      setHasUnsavedChanges(true);
+      markPlanningDirty();
       await applyPlanningCommandResult(result);
     },
     onError: (error: Error) => setLastError(error.message),
@@ -474,7 +495,7 @@ export default function App() {
     mutationFn: postLock,
     onSuccess: async (result) => {
       setLastError(null);
-      setHasUnsavedChanges(true);
+      markPlanningDirty();
       await applyPlanningCommandResult(result);
     },
     onError: (error: Error) => setLastError(error.message),
@@ -484,7 +505,7 @@ export default function App() {
     mutationFn: postSplash,
     onSuccess: async (result) => {
       setLastError(null);
-      setHasUnsavedChanges(true);
+      markPlanningDirty();
       await applyPlanningCommandResult(result);
     },
     onError: (error: Error) => setLastError(error.message),
@@ -494,7 +515,7 @@ export default function App() {
     mutationFn: postAddRow,
     onSuccess: async () => {
       setLastError(null);
-      setHasUnsavedChanges(true);
+      markPlanningDirty();
       await refreshPlanningQueries({ includeStoreScopes: true });
     },
     onError: (error: Error) => setLastError(error.message),
@@ -504,7 +525,7 @@ export default function App() {
     mutationFn: postDeleteRow,
     onSuccess: async () => {
       setLastError(null);
-      setHasUnsavedChanges(true);
+      markPlanningDirty();
       await refreshPlanningQueries({ includeStoreScopes: true });
     },
     onError: (error: Error) => setLastError(error.message),
@@ -514,7 +535,7 @@ export default function App() {
     mutationFn: postDeleteYear,
     onSuccess: async () => {
       setLastError(null);
-      setHasUnsavedChanges(true);
+      markPlanningDirty();
       await refreshPlanningQueries({ includeStoreScopes: true });
     },
     onError: (error: Error) => setLastError(error.message),
@@ -524,7 +545,7 @@ export default function App() {
     mutationFn: postGenerateNextYear,
     onSuccess: async () => {
       setLastError(null);
-      setHasUnsavedChanges(true);
+      markPlanningDirty();
       await refreshPlanningQueries({ includeStoreScopes: true });
     },
     onError: (error: Error) => setLastError(error.message),
@@ -534,7 +555,7 @@ export default function App() {
     mutationFn: ({ file, scenarioVersionId }: { file: File; scenarioVersionId: number }) => queueWorkbookImportJob(scenarioVersionId, file),
     onSuccess: async (jobId) => {
       setLastError(null);
-      setHasUnsavedChanges(true);
+      markPlanningDirty();
       await waitForAsyncJob(jobId, { includeStoreScopes: true, includePlanningGrid: true });
     },
     onError: (error: Error) => setLastError(error.message),
@@ -562,7 +583,7 @@ export default function App() {
     mutationFn: postGrowthFactor,
     onSuccess: async (result) => {
       setLastError(null);
-      setHasUnsavedChanges(true);
+      markPlanningDirty();
       await applyPlanningCommandResult(result);
     },
     onError: (error: Error) => setLastError(error.message),
@@ -572,7 +593,7 @@ export default function App() {
     mutationFn: () => postUndo(1),
     onSuccess: async (result) => {
       setLastError(null);
-      setHasUnsavedChanges(true);
+      markPlanningDirty();
       await applyPlanningCommandResult(result);
     },
     onError: (error: Error) => setLastError(error.message),
@@ -582,7 +603,7 @@ export default function App() {
     mutationFn: () => postRedo(1),
     onSuccess: async (result) => {
       setLastError(null);
-      setHasUnsavedChanges(true);
+      markPlanningDirty();
       await applyPlanningCommandResult(result);
     },
     onError: (error: Error) => setLastError(error.message),
@@ -592,7 +613,7 @@ export default function App() {
     mutationFn: ({ mode }: { mode: "manual" | "autosave" }) => postSave({ scenarioVersionId: 1, mode }),
     onSuccess: async (result) => {
       setLastError(null);
-      setHasUnsavedChanges(false);
+      clearPlanningDirty();
       setLastSavedAt(result.savedAt);
       setPendingPlanningPatch(null);
       clearInactivePlanningSliceCaches();
@@ -607,22 +628,45 @@ export default function App() {
     onError: (error: Error) => setLastError(error.message),
   });
 
+  const commitPlanningChanges = useCallback(async (mode: "manual" | "autosave") => {
+    if (savePromiseRef.current) {
+      await savePromiseRef.current;
+      return;
+    }
+
+    if (!hasUnsavedChangesRef.current && !pendingPlanningPatchRef.current?.cells.length) {
+      return;
+    }
+
+    const savePromise = saveMutation.mutateAsync({ mode })
+      .finally(() => {
+        if (savePromiseRef.current === savePromise) {
+          savePromiseRef.current = null;
+        }
+      });
+    savePromiseRef.current = savePromise;
+    await savePromise;
+  }, [saveMutation]);
+
   const transitionPlanningContext = useCallback(
     async (applyChange: () => void) => {
       setLastError(null);
+      if (savePromiseRef.current) {
+        await savePromiseRef.current;
+      }
 
       if (saveMutation.isPending) {
         return;
       }
 
-      if (planningViewActive && hasUnsavedChanges) {
-        await saveMutation.mutateAsync({ mode: "autosave" });
+      if (planningViewActive && (hasUnsavedChangesRef.current || Boolean(pendingPlanningPatchRef.current?.cells.length))) {
+        await commitPlanningChanges("autosave");
       }
 
       setPendingPlanningPatch(null);
       applyChange();
     },
-    [hasUnsavedChanges, planningViewActive, saveMutation],
+    [commitPlanningChanges, planningViewActive, saveMutation],
   );
 
   const addHierarchyDepartmentMutation = useMutation({
@@ -995,18 +1039,6 @@ export default function App() {
     onError: (error: Error) => setLastError(error.message),
   });
 
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      if (!hasUnsavedChanges || saveMutation.isPending) {
-        return;
-      }
-
-      void saveMutation.mutateAsync({ mode: "autosave" });
-    }, 5 * 60 * 1000);
-
-    return () => window.clearInterval(interval);
-  }, [hasUnsavedChanges, saveMutation]);
-
   const isMutating =
     editMutation.isPending ||
     lockMutation.isPending ||
@@ -1125,7 +1157,7 @@ export default function App() {
     }
 
     if (hasUnsavedChanges) {
-      return "Changes pending save. Autosave runs every 5 minutes.";
+      return "Changes pending save.";
     }
 
     if (lastSavedAt) {
@@ -1869,7 +1901,7 @@ export default function App() {
           type="button"
           className="secondary-button"
           disabled={!hasUnsavedChanges || saveMutation.isPending}
-          onClick={() => void saveMutation.mutateAsync({ mode: "manual" })}
+          onClick={() => void commitPlanningChanges("manual")}
         >
           Save
         </button>

@@ -67,6 +67,14 @@ type PlanningGridProps = {
 
 type GridRowView = GridRow;
 
+declare global {
+  interface Window {
+    __planningGridTestApi?: {
+      ensureColumnVisible: (colId: string) => void;
+    };
+  }
+}
+
 type RowKey = {
   id: string;
 };
@@ -266,11 +274,11 @@ export function PlanningGrid({
       loadedRowsByKey.set(getRowKey(node.data), node.data);
     });
 
-    const syntheticRows = [...loadedRowsByKey.values()]
-      .filter(isSyntheticRow)
+    const aggregateRows = [...loadedRowsByKey.values()]
+      .filter(isAggregateRow)
       .sort((left, right) => right.path.length - left.path.length);
 
-    syntheticRows.forEach((row) => {
+    aggregateRows.forEach((row) => {
       const directChildren = [...loadedRowsByKey.values()].filter((candidate) => isDirectChildRow(row, candidate));
       if (directChildren.length === 0) {
         return;
@@ -625,6 +633,14 @@ export function PlanningGrid({
   };
 
   const handleModelUpdated = (event: ModelUpdatedEvent<GridRowView>) => {
+    if (import.meta.env.DEV) {
+      window.__planningGridTestApi = {
+        ensureColumnVisible: (colId: string) => {
+          event.api.ensureColumnVisible(colId);
+        },
+      };
+    }
+
     if (initialRowsRenderedRef.current || !onInitialRowsRendered) {
       return;
     }
@@ -643,6 +659,16 @@ export function PlanningGrid({
     initialRowsRenderedRef.current = true;
     onInitialRowsRendered();
   };
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) {
+      return;
+    }
+
+    return () => {
+      delete window.__planningGridTestApi;
+    };
+  }, []);
 
   const handleCellClicked = (event: CellClickedEvent<GridRowView>) => {
     const clickedElement = event.event?.target instanceof HTMLElement ? event.event.target : null;
@@ -1082,8 +1108,8 @@ function getRowKey(row: GridRowView | GridRow): string {
   return row.viewRowId ?? `${row.storeId}-${row.productNodeId}`;
 }
 
-function isSyntheticRow(row: GridRowView): boolean {
-  return row.nodeKind === "virtual";
+function isAggregateRow(row: GridRowView): boolean {
+  return !row.isLeaf;
 }
 
 function isDirectChildRow(parent: GridRowView, child: GridRowView): boolean {
@@ -1181,7 +1207,7 @@ function recomputeSyntheticRow(
   return didChange ? { ...row, cells: nextCells } : row;
 }
 
-function recomputeSyntheticRows(
+function recomputeAggregateRows(
   rows: GridRowView[],
   data: GridSliceResponse,
 ): GridRowView[] {
@@ -1190,11 +1216,11 @@ function recomputeSyntheticRows(
   }
 
   const rowsByKey = new Map(rows.map((row) => [getRowKey(row), row] as const));
-  const syntheticRows = [...rowsByKey.values()]
-    .filter(isSyntheticRow)
+  const aggregateRows = [...rowsByKey.values()]
+    .filter(isAggregateRow)
     .sort((left, right) => right.path.length - left.path.length);
 
-  syntheticRows.forEach((row) => {
+  aggregateRows.forEach((row) => {
     const directChildren = [...rowsByKey.values()].filter((candidate) => isDirectChildRow(row, candidate));
     if (directChildren.length === 0) {
       return;
@@ -1243,7 +1269,7 @@ function applyPatchToRows(
     return nextRow ?? row;
   });
 
-  return recomputeSyntheticRows(patchedRows, data);
+  return recomputeAggregateRows(patchedRows, data);
 }
 
 function getRowClasses(row: GridRowView | undefined): string[] {

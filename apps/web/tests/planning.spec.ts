@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test, type APIRequestContext } from "@playwright/test";
 
 const storeLabelsById: Record<number, string> = {
   101: "Store A",
@@ -14,6 +14,14 @@ const storeRowId = (storeId: number, productNodeId: number) =>
   `view:store:node:${storeId}:${productNodeId}:${encodeURIComponent(`Store Total>${storeLabelsById[storeId] ?? `Store ${storeId}`}`)}`;
 const storeRootRowId = "view:store:root";
 const departmentRootRowId = "view:department:root";
+
+const editableMeasureScenarios = [
+  { measureId: 1, label: "Sales Revenue", decimals: 0, displayAsPercent: false, yearFirst: "3900", yearSecond: "4200", monthFirst: "1350", monthSecond: "1425" },
+  { measureId: 2, label: "Sold Qty", decimals: 0, displayAsPercent: false, yearFirst: "390", yearSecond: "420", monthFirst: "125", monthSecond: "145" },
+  { measureId: 3, label: "ASP", decimals: 2, displayAsPercent: false, yearFirst: "12.25", yearSecond: "13.75", monthFirst: "11.75", monthSecond: "12.50" },
+  { measureId: 4, label: "Unit Cost", decimals: 2, displayAsPercent: false, yearFirst: "7.25", yearSecond: "7.75", monthFirst: "7.10", monthSecond: "7.60" },
+  { measureId: 7, label: "GP%", decimals: 1, displayAsPercent: true, yearFirst: "28.5", yearSecond: "31.0", monthFirst: "26.5", monthSecond: "29.0" },
+] as const;
 
 async function openGrid(page: import("@playwright/test").Page) {
   await page.goto("/");
@@ -33,7 +41,17 @@ async function expandYears(page: import("@playwright/test").Page) {
 }
 
 async function selectWorkspace(page: import("@playwright/test").Page, value: string) {
-  await page.locator(".view-menu-bar select").first().selectOption(value);
+  await expect.poll(async () => {
+    const workspaceSelect = page.locator(".view-menu-bar select").first();
+    await workspaceSelect.selectOption(value);
+    return await workspaceSelect.inputValue();
+  }, {
+    timeout: 15_000,
+  }).toBe(value);
+
+  if (value === "planning-department") {
+    await expect(page.locator(".view-menu-bar .year-picker").filter({ hasText: "Layout" }).locator("select")).toBeVisible();
+  }
 }
 
 async function selectStoreScope(page: import("@playwright/test").Page, storeId: string) {
@@ -42,7 +60,13 @@ async function selectStoreScope(page: import("@playwright/test").Page, storeId: 
 }
 
 async function selectDepartmentLayout(page: import("@playwright/test").Page, value: "department-store-class" | "department-class-store") {
-  await page.locator(".view-menu-bar .year-picker").filter({ hasText: "Layout" }).locator("select").selectOption(value);
+  await expect.poll(async () => {
+    const layoutSelect = page.locator(".view-menu-bar .year-picker").filter({ hasText: "Layout" }).locator("select");
+    await layoutSelect.selectOption(value);
+    return await layoutSelect.inputValue();
+  }, {
+    timeout: 15_000,
+  }).toBe(value);
 }
 
 async function toggleRowCaret(page: import("@playwright/test").Page, rowId: string) {
@@ -161,6 +185,7 @@ async function ensurePinnedRowVisible(page: import("@playwright/test").Page, row
 
 async function gridCell(page: import("@playwright/test").Page, rowId: string, colId: string) {
   await ensurePinnedRowVisible(page, rowId, [storeRootRowId, departmentRootRowId]);
+  await ensureGridColumnVisible(page, colId);
   const pinnedRow = page.locator(`.ag-pinned-left-cols-container [row-id="${rowId}"]`).first();
   await expect(pinnedRow).toBeVisible();
   return page.locator(`.ag-center-cols-container [row-id="${rowId}"] [col-id="${colId}"]`).first();
@@ -195,7 +220,14 @@ async function gridCellByPinnedText(page: import("@playwright/test").Page, rowTe
   await expect(pinnedRow).toBeVisible();
   const rowId = await pinnedRow.getAttribute("row-id");
   expect(rowId).not.toBeNull();
+  await ensureGridColumnVisible(page, colId);
   return page.locator(`.ag-center-cols-container [row-id="${rowId}"] [col-id="${colId}"]`).first();
+}
+
+async function ensureGridColumnVisible(page: import("@playwright/test").Page, colId: string) {
+  await page.evaluate((targetColId) => {
+    window.__planningGridTestApi?.ensureColumnVisible(targetColId);
+  }, colId);
 }
 
 async function editCell(page: import("@playwright/test").Page, rowId: string, colId: string, nextValue: string) {
@@ -217,12 +249,164 @@ async function beginCellEdit(page: import("@playwright/test").Page, cell: import
 }
 
 async function savePlanningChanges(page: import("@playwright/test").Page) {
-  await page.getByRole("button", { name: "Save" }).click();
+  const saveButton = page.getByRole("button", { name: "Save" });
+  await expect(saveButton).toBeEnabled();
+  await saveButton.click();
+  await expect(page.locator(".status-card")).toContainText("All changes saved.");
+  await expect(saveButton).toBeDisabled();
   await expectReady(page);
+}
+
+function formatGridValue(value: string, decimals: number, displayAsPercent: boolean) {
+  const formatted = new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  }).format(Number(value));
+  return displayAsPercent ? `${formatted}%` : formatted;
+}
+
+async function openStoreLeafPath(
+  page: import("@playwright/test").Page,
+  departmentLabel: string,
+  classLabel: string,
+  subclassLabel: string,
+) {
+  await selectWorkspace(page, "planning-store");
+  await expectReady(page);
+  await expandRowById(page, storeRootRowId);
+  await expectReady(page);
+  await expandRowByLabel(page, "Store A");
+  await expectReady(page);
+  await expandRowByLabel(page, departmentLabel);
+  await expectReady(page);
+  await expandRowByLabel(page, classLabel);
+  await expectReady(page);
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: subclassLabel }).first()).toBeVisible();
+}
+
+async function openDepartmentLeafPath(
+  page: import("@playwright/test").Page,
+  departmentLabel: string,
+  classLabel: string,
+  subclassLabel: string,
+) {
+  await selectWorkspace(page, "planning-department");
+  await expectReady(page);
+  await selectDepartmentLayout(page, "department-store-class");
+  await expectReady(page);
+  await expandRowByLabel(page, departmentLabel);
+  await expectReady(page);
+  await expandRowByLabel(page, "Store A");
+  await expectReady(page);
+  await expandRowByLabel(page, classLabel);
+  await expectReady(page);
+  await expect(page.locator(".ag-pinned-left-cols-container .ag-row").filter({ hasText: subclassLabel }).first()).toBeVisible();
 }
 
 async function normalizedCellText(cell: import("@playwright/test").Locator) {
   return ((await cell.textContent()) ?? "").replace(/\s+/g, "");
+}
+
+async function fetchJson<T>(request: APIRequestContext, url: string): Promise<T> {
+  const response = await request.get(url);
+  expect(response.ok()).toBeTruthy();
+  return await response.json() as T;
+}
+
+async function fetchDepartmentLeafMeasureValue(
+  request: APIRequestContext,
+  departmentLabel: string,
+  classLabel: string,
+  subclassLabel: string,
+  timePeriodId: number,
+  measureId: number,
+): Promise<number> {
+  const root = await fetchJson<{ rows: Array<{ viewRowId: string }> }>(
+    request,
+    "/api/v1/grid-view-root?scenarioVersionId=1&view=department&departmentLayout=department-store-class",
+  );
+  const rootRowId = root.rows[0]?.viewRowId;
+  expect(rootRowId).toBeTruthy();
+
+  const departmentRows = await fetchJson<{ rows: Array<{ label: string; viewRowId: string }> }>(
+    request,
+    `/api/v1/grid-view-children?scenarioVersionId=1&view=department&departmentLayout=department-store-class&parentViewRowId=${encodeURIComponent(rootRowId!)}`,
+  );
+  const departmentRow = departmentRows.rows.find((row) => row.label === departmentLabel);
+  expect(departmentRow).toBeTruthy();
+
+  const storeRows = await fetchJson<{ rows: Array<{ label: string; viewRowId: string }> }>(
+    request,
+    `/api/v1/grid-view-children?scenarioVersionId=1&view=department&departmentLayout=department-store-class&parentViewRowId=${encodeURIComponent(departmentRow!.viewRowId)}`,
+  );
+  const storeRow = storeRows.rows.find((row) => row.label === "Store A");
+  expect(storeRow).toBeTruthy();
+
+  const classRows = await fetchJson<{ rows: Array<{ label: string; viewRowId: string }> }>(
+    request,
+    `/api/v1/grid-view-children?scenarioVersionId=1&view=department&departmentLayout=department-store-class&parentViewRowId=${encodeURIComponent(storeRow!.viewRowId)}`,
+  );
+  const classRow = classRows.rows.find((row) => row.label === classLabel);
+  expect(classRow).toBeTruthy();
+
+  const leafRows = await fetchJson<{ rows: Array<{ label: string; cells: Record<string, { measures: Record<string, { value: number }> }> }> }>(
+    request,
+    `/api/v1/grid-view-children?scenarioVersionId=1&view=department&departmentLayout=department-store-class&parentViewRowId=${encodeURIComponent(classRow!.viewRowId)}`,
+  );
+  const leafRow = leafRows.rows.find((row) => row.label === subclassLabel);
+  expect(leafRow).toBeTruthy();
+
+  const value = leafRow?.cells[String(timePeriodId)]?.measures[String(measureId)]?.value;
+  expect(value).not.toBeUndefined();
+  return Number(value);
+}
+
+async function fetchStoreLeafMeasureValue(
+  request: APIRequestContext,
+  departmentLabel: string,
+  classLabel: string,
+  subclassLabel: string,
+  timePeriodId: number,
+  measureId: number,
+): Promise<number> {
+  const root = await fetchJson<{ rows: Array<{ label: string; viewRowId: string }> }>(
+    request,
+    "/api/v1/grid-view-root?scenarioVersionId=1&view=store",
+  );
+  const rootRowId = root.rows[0]?.viewRowId;
+  expect(rootRowId).toBeTruthy();
+
+  const storeRows = await fetchJson<{ rows: Array<{ label: string; viewRowId: string }> }>(
+    request,
+    `/api/v1/grid-view-children?scenarioVersionId=1&view=store&parentViewRowId=${encodeURIComponent(rootRowId!)}`,
+  );
+  const storeRow = storeRows.rows.find((row) => row.label === "Store A");
+  expect(storeRow).toBeTruthy();
+
+  const departmentRows = await fetchJson<{ rows: Array<{ label: string; viewRowId: string }> }>(
+    request,
+    `/api/v1/grid-view-children?scenarioVersionId=1&view=store&parentViewRowId=${encodeURIComponent(storeRow!.viewRowId)}`,
+  );
+  const departmentRow = departmentRows.rows.find((row) => row.label === departmentLabel);
+  expect(departmentRow).toBeTruthy();
+
+  const classRows = await fetchJson<{ rows: Array<{ label: string; viewRowId: string }> }>(
+    request,
+    `/api/v1/grid-view-children?scenarioVersionId=1&view=store&parentViewRowId=${encodeURIComponent(departmentRow!.viewRowId)}`,
+  );
+  const classRow = classRows.rows.find((row) => row.label === classLabel);
+  expect(classRow).toBeTruthy();
+
+  const leafRows = await fetchJson<{ rows: Array<{ label: string; cells: Record<string, { measures: Record<string, { value: number }> }> }> }>(
+    request,
+    `/api/v1/grid-view-children?scenarioVersionId=1&view=store&parentViewRowId=${encodeURIComponent(classRow!.viewRowId)}`,
+  );
+  const leafRow = leafRows.rows.find((row) => row.label === subclassLabel);
+  expect(leafRow).toBeTruthy();
+
+  const value = leafRow?.cells[String(timePeriodId)]?.measures[String(measureId)]?.value;
+  expect(value).not.toBeUndefined();
+  return Number(value);
 }
 
 async function acceptPrompts(page: import("@playwright/test").Page, responses: string[]) {
@@ -376,27 +560,31 @@ test("supports expand and collapse controls for rows and years", async ({ page }
 test("keeps year groups usable after scoped refreshes", async ({ page }) => {
   await page.getByRole("button", { name: "Expand Years" }).click();
   await expectReady(page);
-  await expect(page.locator(".ag-header-group-text", { hasText: "Jan" }).first()).toBeVisible();
+  await ensureGridColumnVisible(page, "202601:1");
+  await expect(page.locator('.ag-center-cols-container [col-id="202601:1"]').first()).toBeVisible();
   await selectStoreScope(page, "102");
   await expectReady(page);
 
   await page.getByRole("button", { name: "Expand Years" }).click();
   await expectReady(page);
-  await expect(page.locator(".ag-header-group-text", { hasText: "Jan" }).first()).toBeVisible();
+  await ensureGridColumnVisible(page, "202601:1");
+  await expect(page.locator('.ag-center-cols-container [col-id="202601:1"]').first()).toBeVisible();
 });
 
 test("does not pin year total measure columns and keeps caret expansion working in every view", async ({ page }) => {
   await expect(page.locator(`.ag-pinned-left-cols-container [col-id="202600:1"]`)).toHaveCount(0);
 
-  await toggleRowCaret(page, storeRootRowId);
-  await expectReady(page);
   await expectToggleLabel(page, storeRootRowId, "Collapse Store Total");
   await toggleRowCaret(page, storeRootRowId);
   await expectReady(page);
   await expectToggleLabel(page, storeRootRowId, "Expand Store Total");
+  await toggleRowCaret(page, storeRootRowId);
+  await expectReady(page);
+  await expectToggleLabel(page, storeRootRowId, "Collapse Store Total");
 
   await selectWorkspace(page, "planning-department");
   await expectReady(page);
+  await expectToggleLabel(page, departmentRootRowId, "Expand Department Total");
   await toggleRowCaret(page, departmentRootRowId);
   await expectReady(page);
   await expectToggleLabel(page, departmentRootRowId, "Collapse Department Total");
@@ -644,6 +832,158 @@ test("year Sold Qty edits survive save, remain visible across the department vie
   expect(departmentStoreAfter).not.toBe(departmentStoreBefore);
   expect(departmentTotalAfter).not.toBe(departmentTotalBefore);
 });
+
+test("direct API year GP% splash returns the exact requested patch", async ({ request }) => {
+  const response = await request.post("http://127.0.0.1:5081/api/v1/actions/splash", {
+    data: {
+      scenarioVersionId: 1,
+      measureId: 7,
+      sourceCell: {
+        storeId: 101,
+        productNodeId: 2111,
+        timePeriodId: 202600,
+      },
+      totalValue: 28.5,
+      method: "seasonality_profile",
+      roundingScale: 1,
+      comment: "Direct API GP% splash",
+      scopeRoots: [{ storeId: 101, productNodeId: 2111 }],
+    },
+  });
+  expect(response.ok()).toBeTruthy();
+
+  const body = await response.json() as {
+    patch?: {
+      cells?: Array<{
+        storeId: number;
+        productNodeId: number;
+        timePeriodId: number;
+        measureId: number;
+        cell: { value: number };
+      }>;
+    };
+  };
+  const patchCell = body.patch?.cells?.find((cell) =>
+    cell.storeId === 101 &&
+    cell.productNodeId === 2111 &&
+    cell.timePeriodId === 202600 &&
+    cell.measureId === 7);
+  expect(patchCell?.cell.value).toBe(28.5);
+});
+
+for (const scenario of editableMeasureScenarios) {
+  test(`year ${scenario.label} edits survive save and repeated cross-view editing`, async ({ page, request }) => {
+    await openStoreLeafPath(page, "Beverages", "Soft Drinks", "Cola");
+    const splashResponsePromise = scenario.measureId === 7
+      ? page.waitForResponse((response) =>
+        response.request().method() === "POST" &&
+        response.url().includes("/api/v1/actions/splash"))
+      : null;
+    await editCellByPinnedText(page, "Cola", `202600:${scenario.measureId}`, scenario.yearFirst);
+    await expectReady(page);
+
+    if (scenario.measureId === 7 && splashResponsePromise) {
+      const splashResponse = await splashResponsePromise;
+      const splashRequest = splashResponse.request().postDataJSON() as {
+        sourceCell: { storeId: number; productNodeId: number; timePeriodId: number };
+        totalValue: number;
+        scopeRoots?: Array<{ storeId: number; productNodeId: number }>;
+      };
+      expect(splashRequest.sourceCell).toEqual({ storeId: 101, productNodeId: 2111, timePeriodId: 202600 });
+      expect(splashRequest.totalValue).toBe(28.5);
+      expect(splashRequest.scopeRoots).toEqual([{ storeId: 101, productNodeId: 2111 }]);
+
+      const splashBody = await splashResponse.json() as {
+        patch?: {
+          cells?: Array<{
+            storeId: number;
+            productNodeId: number;
+            timePeriodId: number;
+            measureId: number;
+            cell: { value: number };
+          }>;
+        };
+      };
+      const gpPatchCell = splashBody.patch?.cells?.find((cell) =>
+        cell.storeId === 101 &&
+        cell.productNodeId === 2111 &&
+        cell.timePeriodId === 202600 &&
+        cell.measureId === 7);
+      expect(gpPatchCell?.cell.value).toBe(28.5);
+    }
+
+    await savePlanningChanges(page);
+
+    const yearStoreApiValue = await fetchStoreLeafMeasureValue(request, "Beverages", "Soft Drinks", "Cola", 202600, scenario.measureId);
+    const yearDepartmentApiValue = await fetchDepartmentLeafMeasureValue(request, "Beverages", "Soft Drinks", "Cola", 202600, scenario.measureId);
+    expect(yearStoreApiValue).toBe(Number(scenario.yearFirst));
+    expect(yearDepartmentApiValue).toBe(Number(scenario.yearFirst));
+
+    await openDepartmentLeafPath(page, "Beverages", "Soft Drinks", "Cola");
+    await expect(await gridCellByPinnedText(page, "Cola", `202600:${scenario.measureId}`))
+      .toContainText(formatGridValue(scenario.yearFirst, scenario.decimals, scenario.displayAsPercent));
+
+    const departmentStoreBefore = await normalizedCellText(await gridCellByPinnedText(page, "Store A", `202600:${scenario.measureId}`));
+    const departmentTotalBefore = await normalizedCellText(await gridCellByPinnedText(page, "Beverages", `202600:${scenario.measureId}`));
+
+    await editCellByPinnedText(page, "Cola", `202600:${scenario.measureId}`, scenario.yearSecond);
+    await expectReady(page);
+
+    await expect(await gridCellByPinnedText(page, "Cola", `202600:${scenario.measureId}`))
+      .toContainText(formatGridValue(scenario.yearSecond, scenario.decimals, scenario.displayAsPercent));
+
+    const departmentStoreAfter = await normalizedCellText(await gridCellByPinnedText(page, "Store A", `202600:${scenario.measureId}`));
+    const departmentTotalAfter = await normalizedCellText(await gridCellByPinnedText(page, "Beverages", `202600:${scenario.measureId}`));
+
+    expect(departmentStoreAfter).not.toBe(departmentStoreBefore);
+    expect(departmentTotalAfter).not.toBe(departmentTotalBefore);
+
+    await openStoreLeafPath(page, "Beverages", "Soft Drinks", "Cola");
+    await expect(await gridCellByPinnedText(page, "Cola", `202600:${scenario.measureId}`))
+      .toContainText(formatGridValue(scenario.yearSecond, scenario.decimals, scenario.displayAsPercent));
+  });
+
+  test(`month ${scenario.label} edits survive save and repeated cross-view editing`, async ({ page, request }) => {
+    await openStoreLeafPath(page, "Beverages", "Tea", "Green Tea");
+    await expandYears(page);
+    await expectReady(page);
+    await editCellByPinnedText(page, "Green Tea", `202603:${scenario.measureId}`, scenario.monthFirst);
+    await expectReady(page);
+    await savePlanningChanges(page);
+
+    const monthStoreApiValue = await fetchStoreLeafMeasureValue(request, "Beverages", "Tea", "Green Tea", 202603, scenario.measureId);
+    const monthDepartmentApiValue = await fetchDepartmentLeafMeasureValue(request, "Beverages", "Tea", "Green Tea", 202603, scenario.measureId);
+    expect(monthStoreApiValue).toBe(Number(scenario.monthFirst));
+    expect(monthDepartmentApiValue).toBe(Number(scenario.monthFirst));
+
+    await openDepartmentLeafPath(page, "Beverages", "Tea", "Green Tea");
+    await expandYears(page);
+    await expectReady(page);
+    await expect(await gridCellByPinnedText(page, "Green Tea", `202603:${scenario.measureId}`))
+      .toContainText(formatGridValue(scenario.monthFirst, scenario.decimals, scenario.displayAsPercent));
+
+    const departmentStoreBefore = await normalizedCellText(await gridCellByPinnedText(page, "Store A", `202603:${scenario.measureId}`));
+    const departmentTotalBefore = await normalizedCellText(await gridCellByPinnedText(page, "Beverages", `202603:${scenario.measureId}`));
+
+    await editCellByPinnedText(page, "Green Tea", `202603:${scenario.measureId}`, scenario.monthSecond);
+    await expectReady(page);
+
+    await expect(await gridCellByPinnedText(page, "Green Tea", `202603:${scenario.measureId}`))
+      .toContainText(formatGridValue(scenario.monthSecond, scenario.decimals, scenario.displayAsPercent));
+
+    const departmentStoreAfter = await normalizedCellText(await gridCellByPinnedText(page, "Store A", `202603:${scenario.measureId}`));
+    const departmentTotalAfter = await normalizedCellText(await gridCellByPinnedText(page, "Beverages", `202603:${scenario.measureId}`));
+
+    expect(departmentStoreAfter).not.toBe(departmentStoreBefore);
+    expect(departmentTotalAfter).not.toBe(departmentTotalBefore);
+
+    await openStoreLeafPath(page, "Beverages", "Tea", "Green Tea");
+    await expandYears(page);
+    await expectReady(page);
+    await expect(await gridCellByPinnedText(page, "Green Tea", `202603:${scenario.measureId}`))
+      .toContainText(formatGridValue(scenario.monthSecond, scenario.decimals, scenario.displayAsPercent));
+  });
+}
 
 test("adds Department and Class rows and shows them in hierarchy maintenance", async ({ page }) => {
   await selectWorkspace(page, "hierarchy");

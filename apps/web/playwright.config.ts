@@ -12,8 +12,9 @@ const dotnetCommand = fs.existsSync(path.join(localDotnetRoot, "dotnet"))
   : "dotnet";
 const apiProjectPath = path.join(workspaceRoot, "apps/api/src/SalesPlanning.Api/SalesPlanning.Api.csproj");
 const apiAssemblyPath = path.join(workspaceRoot, "apps/api/src/SalesPlanning.Api/bin/Debug/net8.0/SalesPlanning.Api.dll");
-const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const manualServers = process.env.PLAYWRIGHT_MANUAL_SERVERS === "true";
+const systemChromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const useSystemChrome = process.env.PLAYWRIGHT_USE_SYSTEM_CHROME === "true" && fs.existsSync(systemChromePath);
 
 export default defineConfig({
   testDir: "./tests",
@@ -27,7 +28,7 @@ export default defineConfig({
   use: {
     baseURL: "http://127.0.0.1:5173",
     trace: "on-first-retry",
-    launchOptions: fs.existsSync(chromePath) ? { executablePath: chromePath } : {},
+    launchOptions: useSystemChrome ? { executablePath: systemChromePath } : {},
   },
   webServer: manualServers ? undefined : [
     {

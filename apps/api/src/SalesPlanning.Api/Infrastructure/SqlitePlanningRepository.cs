@@ -4,6 +4,7 @@ using Microsoft.Data.Sqlite;
 using SalesPlanning.Api.Application;
 using SalesPlanning.Api.Contracts;
 using SalesPlanning.Api.Domain;
+using SalesPlanning.Api.Security;
 using SQLitePCL;
 
 namespace SalesPlanning.Api.Infrastructure;
@@ -19,6 +20,10 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
 
     private readonly string _connectionString;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly object _draftGate = new();
+    private readonly Dictionary<(long ScenarioVersionId, string UserId, string CoordinateKey), PlanningCell> _draftCells = new();
+    private readonly List<PlanningCommandBatch> _draftCommandBatches = [];
+    private long _nextDraftCommandBatchId = 1;
     private bool _initialized;
 
     public SqlitePlanningRepository(string databasePath)
@@ -113,8 +118,27 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
             .ToList();
     }
 
-    public Task<IReadOnlyList<PlanningCell>> GetDraftCellsAsync(long scenarioVersionId, string userId, IEnumerable<PlanningCellCoordinate> coordinates, CancellationToken cancellationToken) =>
-        Task.FromResult<IReadOnlyList<PlanningCell>>([]);
+    public Task<IReadOnlyList<PlanningCell>> GetDraftCellsAsync(long scenarioVersionId, string userId, IEnumerable<PlanningCellCoordinate> coordinates, CancellationToken cancellationToken)
+    {
+        var userContext = PlanningUserIdentity.ParsePlanningUserToken(userId);
+        var userRank = userContext.CandidateUserIds
+            .Select((candidate, index) => (candidate, index))
+            .ToDictionary(entry => entry.candidate, entry => entry.index, StringComparer.Ordinal);
+
+        lock (_draftGate)
+        {
+            var cells = coordinates
+                .DistinctBy(coordinate => coordinate.Key)
+                .SelectMany(coordinate => userContext.CandidateUserIds
+                    .Select(candidate => (candidate, cell: _draftCells.GetValueOrDefault((scenarioVersionId, candidate, coordinate.Key))))
+                    .Where(entry => entry.cell is not null)
+                    .OrderBy(entry => userRank[entry.candidate], Comparer<int>.Default)
+                    .Take(1)
+                    .Select(entry => entry.cell!.Clone()))
+                .ToList();
+            return Task.FromResult<IReadOnlyList<PlanningCell>>(cells);
+        }
+    }
 
     public async Task UpsertCellsAsync(IEnumerable<PlanningCell> cells, CancellationToken cancellationToken)
     {
@@ -137,8 +161,29 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
         }
     }
 
-    public Task UpsertDraftCellsAsync(long scenarioVersionId, string userId, IEnumerable<PlanningCell> cells, CancellationToken cancellationToken) =>
-        UpsertCellsAsync(cells, cancellationToken);
+    public Task UpsertDraftCellsAsync(long scenarioVersionId, string userId, IEnumerable<PlanningCell> cells, CancellationToken cancellationToken)
+    {
+        var userContext = PlanningUserIdentity.ParsePlanningUserToken(userId);
+        lock (_draftGate)
+        {
+            foreach (var cell in cells)
+            {
+                foreach (var alias in userContext.CandidateUserIds)
+                {
+                    if (string.Equals(alias, userContext.PrimaryUserId, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    _draftCells.Remove((scenarioVersionId, alias, cell.Coordinate.Key));
+                }
+
+                _draftCells[(scenarioVersionId, userContext.PrimaryUserId, cell.Coordinate.Key)] = cell.Clone();
+            }
+        }
+
+        return Task.CompletedTask;
+    }
 
     public async Task AppendAuditAsync(PlanningActionAudit audit, CancellationToken cancellationToken)
     {
@@ -1410,23 +1455,138 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
     public Task RecordSaveCheckpointAsync(long scenarioVersionId, string userId, string mode, DateTimeOffset savedAt, CancellationToken cancellationToken) =>
         Task.CompletedTask;
 
-    public Task<long> GetNextDraftCommandBatchIdAsync(CancellationToken cancellationToken) =>
-        GetNextCommandBatchIdAsync(cancellationToken);
+    public Task<long> GetNextDraftCommandBatchIdAsync(CancellationToken cancellationToken)
+    {
+        lock (_draftGate)
+        {
+            return Task.FromResult(_nextDraftCommandBatchId++);
+        }
+    }
 
-    public Task AppendDraftCommandBatchAsync(PlanningCommandBatch batch, CancellationToken cancellationToken) =>
-        AppendCommandBatchAsync(batch, cancellationToken);
+    public Task AppendDraftCommandBatchAsync(PlanningCommandBatch batch, CancellationToken cancellationToken)
+    {
+        lock (_draftGate)
+        {
+            for (var index = 0; index < _draftCommandBatches.Count; index += 1)
+            {
+                var existing = _draftCommandBatches[index];
+                if (existing.ScenarioVersionId == batch.ScenarioVersionId
+                    && string.Equals(existing.UserId, batch.UserId, StringComparison.Ordinal)
+                    && existing.IsUndone
+                    && existing.SupersededByBatchId is null)
+                {
+                    _draftCommandBatches[index] = existing with { SupersededByBatchId = batch.CommandBatchId };
+                }
+            }
 
-    public Task<PlanningUndoRedoAvailability> GetDraftUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
-        GetUndoRedoAvailabilityAsync(scenarioVersionId, userId, limit, cancellationToken);
+            _draftCommandBatches.Add(CloneBatch(batch));
+        }
 
-    public Task<PlanningCommandBatch?> UndoLatestDraftCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
-        UndoLatestCommandAsync(scenarioVersionId, userId, limit, cancellationToken);
+        return Task.CompletedTask;
+    }
 
-    public Task<PlanningCommandBatch?> RedoLatestDraftCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
-        RedoLatestCommandAsync(scenarioVersionId, userId, limit, cancellationToken);
+    public Task<PlanningUndoRedoAvailability> GetDraftUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken)
+    {
+        var userContext = PlanningUserIdentity.ParsePlanningUserToken(userId);
+        lock (_draftGate)
+        {
+            var retained = userContext.CandidateUserIds
+                .SelectMany(candidate => GetRetainedDraftHistory(scenarioVersionId, candidate, limit))
+                .OrderByDescending(batch => batch.CommandBatchId)
+                .Take(limit)
+                .ToList();
+            var undoDepth = retained.Count(batch => !batch.IsUndone);
+            var redoDepth = retained.Count(batch => batch.IsUndone);
+            return Task.FromResult(new PlanningUndoRedoAvailability(undoDepth > 0, redoDepth > 0, undoDepth, redoDepth, limit));
+        }
+    }
 
-    public Task CommitDraftAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken) =>
-        Task.CompletedTask;
+    public Task<PlanningCommandBatch?> UndoLatestDraftCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken)
+    {
+        var userContext = PlanningUserIdentity.ParsePlanningUserToken(userId);
+        lock (_draftGate)
+        {
+            var candidate = userContext.CandidateUserIds
+                .SelectMany(candidateUserId => GetRetainedDraftHistory(scenarioVersionId, candidateUserId, limit))
+                .Where(batch => !batch.IsUndone)
+                .OrderByDescending(batch => batch.CommandBatchId)
+                .FirstOrDefault();
+            if (candidate is null)
+            {
+                return Task.FromResult<PlanningCommandBatch?>(null);
+            }
+
+            foreach (var delta in candidate.Deltas)
+            {
+                _draftCells[(scenarioVersionId, userContext.PrimaryUserId, delta.Coordinate.Key)] = delta.OldState.ToPlanningCell(delta.Coordinate);
+            }
+
+            var undone = candidate with { IsUndone = true, UndoneAt = DateTimeOffset.UtcNow };
+            ReplaceDraftBatch(undone);
+            return Task.FromResult<PlanningCommandBatch?>(CloneBatch(undone));
+        }
+    }
+
+    public Task<PlanningCommandBatch?> RedoLatestDraftCommandAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken)
+    {
+        var userContext = PlanningUserIdentity.ParsePlanningUserToken(userId);
+        lock (_draftGate)
+        {
+            var candidate = userContext.CandidateUserIds
+                .SelectMany(candidateUserId => GetRetainedDraftHistory(scenarioVersionId, candidateUserId, limit))
+                .Where(batch => batch.IsUndone)
+                .OrderByDescending(batch => batch.UndoneAt ?? batch.CreatedAt)
+                .ThenByDescending(batch => batch.CommandBatchId)
+                .FirstOrDefault();
+            if (candidate is null)
+            {
+                return Task.FromResult<PlanningCommandBatch?>(null);
+            }
+
+            foreach (var delta in candidate.Deltas)
+            {
+                _draftCells[(scenarioVersionId, userContext.PrimaryUserId, delta.Coordinate.Key)] = delta.NewState.ToPlanningCell(delta.Coordinate);
+            }
+
+            var redone = candidate with { IsUndone = false, UndoneAt = null };
+            ReplaceDraftBatch(redone);
+            return Task.FromResult<PlanningCommandBatch?>(CloneBatch(redone));
+        }
+    }
+
+    public async Task CommitDraftAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken)
+    {
+        var userContext = PlanningUserIdentity.ParsePlanningUserToken(userId);
+        List<PlanningCell> cellsToCommit;
+        lock (_draftGate)
+        {
+            cellsToCommit = _draftCells
+                .Where(entry => entry.Key.ScenarioVersionId == scenarioVersionId && userContext.CandidateUserIds.Contains(entry.Key.UserId, StringComparer.Ordinal))
+                .GroupBy(entry => entry.Key.CoordinateKey, StringComparer.Ordinal)
+                .Select(group => group
+                    .OrderBy(entry => string.Equals(entry.Key.UserId, userContext.PrimaryUserId, StringComparison.Ordinal) ? 0 : 1)
+                    .ThenByDescending(entry => entry.Value.RowVersion)
+                    .Select(entry => entry.Value.Clone())
+                    .First())
+                .ToList();
+
+            foreach (var key in _draftCells.Keys
+                         .Where(key => key.ScenarioVersionId == scenarioVersionId && userContext.CandidateUserIds.Contains(key.UserId, StringComparer.Ordinal))
+                         .ToList())
+            {
+                _draftCells.Remove(key);
+            }
+
+            _draftCommandBatches.RemoveAll(batch =>
+                batch.ScenarioVersionId == scenarioVersionId
+                && userContext.CandidateUserIds.Contains(batch.UserId, StringComparer.Ordinal));
+        }
+
+        if (cellsToCommit.Count > 0)
+        {
+            await UpsertCellsAsync(cellsToCommit, cancellationToken);
+        }
+    }
 
     public async Task ResetAsync(CancellationToken cancellationToken)
     {
@@ -1469,7 +1629,19 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
             }
 
             await SeedAsync(connection, transaction, cancellationToken);
+            await EnsureSupportedTimePeriodsAsync(connection, transaction, cancellationToken);
+            await EnsureGrowthFactorColumnAsync(connection, transaction, cancellationToken);
+            await EnsureStoreProfileColumnsAsync(connection, transaction, cancellationToken);
+            await EnsureProductProfileColumnsAsync(connection, transaction, cancellationToken);
+            await EnsureSeedSupportDataAsync(connection, transaction, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
+
+            lock (_draftGate)
+            {
+                _draftCells.Clear();
+                _draftCommandBatches.Clear();
+                _nextDraftCommandBatchId = 1;
+            }
         }
         finally
         {
@@ -1782,15 +1954,7 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
 
                 if (needsSeed)
                 {
-                    var productNodes = await LoadProductNodesAsync(connection, transaction, cancellationToken);
-                    var timePeriods = await LoadTimePeriodsAsync(connection, transaction, cancellationToken);
-                    await EnsureSupportedMeasureCellsAsync(connection, transaction, productNodes.Values, timePeriods.Values, cancellationToken);
-                    await EnsureQuantitySeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
-                    await EnsureAspSeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
-                    await EnsureExtendedMeasureSeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
-                    await EnsureStoreProfileOptionSeedAsync(connection, transaction, cancellationToken);
-                    await EnsureProductProfileSeedAsync(connection, transaction, cancellationToken);
-                    await EnsureProductProfileOptionSeedAsync(connection, transaction, cancellationToken);
+                    await EnsureSeedSupportDataAsync(connection, transaction, cancellationToken);
                 }
             }
 
@@ -1802,6 +1966,49 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
             _gate.Release();
         }
     }
+
+    private static async Task EnsureSeedSupportDataAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        var productNodes = await LoadProductNodesAsync(connection, transaction, cancellationToken);
+        var timePeriods = await LoadTimePeriodsAsync(connection, transaction, cancellationToken);
+        await EnsureSupportedMeasureCellsAsync(connection, transaction, productNodes.Values, timePeriods.Values, cancellationToken);
+        await EnsureQuantitySeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
+        await EnsureAspSeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
+        await EnsureExtendedMeasureSeedAsync(connection, transaction, productNodes, timePeriods, cancellationToken);
+        await EnsureStoreProfileOptionSeedAsync(connection, transaction, cancellationToken);
+        await EnsureProductProfileSeedAsync(connection, transaction, cancellationToken);
+        await EnsureProductProfileOptionSeedAsync(connection, transaction, cancellationToken);
+    }
+
+    private List<PlanningCommandBatch> GetRetainedDraftHistory(long scenarioVersionId, string userId, int limit) =>
+        _draftCommandBatches
+            .Where(batch => batch.ScenarioVersionId == scenarioVersionId
+                && string.Equals(batch.UserId, userId, StringComparison.Ordinal)
+                && batch.SupersededByBatchId is null)
+            .OrderByDescending(batch => batch.CommandBatchId)
+            .Take(limit)
+            .Select(CloneBatch)
+            .ToList();
+
+    private void ReplaceDraftBatch(PlanningCommandBatch replacement)
+    {
+        var index = _draftCommandBatches.FindIndex(batch => batch.CommandBatchId == replacement.CommandBatchId);
+        if (index >= 0)
+        {
+            _draftCommandBatches[index] = CloneBatch(replacement);
+        }
+    }
+
+    private static PlanningCommandBatch CloneBatch(PlanningCommandBatch batch) =>
+        batch with
+        {
+            Deltas = batch.Deltas
+                .Select(delta => new PlanningCommandCellDelta(delta.Coordinate, delta.OldState, delta.NewState, delta.ChangeKind))
+                .ToList()
+        };
 
     private static async Task<bool> HasInitializedSchemaAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
@@ -4587,23 +4794,42 @@ public sealed partial class SqlitePlanningRepository : IPlanningRepository
         ApplyLeafSeedValues(cells, 1, revenueLeafValues);
         ApplyLeafSeedValues(cells, 2, quantityLeafValues);
 
+        var leafMonthPeriods = timePeriods.Values
+            .Where(period => string.Equals(period.Grain, "month", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var leafNode in productNodes.Values.Where(node => node.IsLeaf))
+        {
+            foreach (var monthPeriod in leafMonthPeriods)
+            {
+                var revenue = cells[new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, leafNode.StoreId, leafNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
+                var quantity = cells[new PlanningCellCoordinate(1, PlanningMeasures.SoldQuantity, leafNode.StoreId, leafNode.ProductNodeId, monthPeriod.TimePeriodId).Key].EffectiveValue;
+                var asp = quantity > 0m ? PlanningMath.DeriveAspFromRevenue(revenue, quantity) : 1.00m;
+                var unitCost = PlanningMath.DefaultSeedUnitCost(asp);
+                var totalCosts = PlanningMath.CalculateTotalCosts(quantity, unitCost);
+                var grossProfit = PlanningMath.CalculateGrossProfit(quantity, asp, unitCost);
+                var grossProfitPercent = PlanningMath.CalculateGrossProfitPercent(asp, unitCost);
+
+                SetSeedInputValue(cells[new PlanningCellCoordinate(1, PlanningMeasures.AverageSellingPrice, leafNode.StoreId, leafNode.ProductNodeId, monthPeriod.TimePeriodId).Key], asp);
+                SetSeedInputValue(cells[new PlanningCellCoordinate(1, PlanningMeasures.UnitCost, leafNode.StoreId, leafNode.ProductNodeId, monthPeriod.TimePeriodId).Key], unitCost);
+                SetSeedCalculatedValue(cells[new PlanningCellCoordinate(1, PlanningMeasures.TotalCosts, leafNode.StoreId, leafNode.ProductNodeId, monthPeriod.TimePeriodId).Key], totalCosts, true);
+                SetSeedCalculatedValue(cells[new PlanningCellCoordinate(1, PlanningMeasures.GrossProfit, leafNode.StoreId, leafNode.ProductNodeId, monthPeriod.TimePeriodId).Key], grossProfit, true);
+                SetSeedCalculatedValue(cells[new PlanningCellCoordinate(1, PlanningMeasures.GrossProfitPercent, leafNode.StoreId, leafNode.ProductNodeId, monthPeriod.TimePeriodId).Key], grossProfitPercent, true);
+            }
+        }
+
         var lockedCoordinate = new PlanningCellCoordinate(1, 1, 101, 2111, 202602);
         cells[lockedCoordinate.Key].IsLocked = true;
         cells[lockedCoordinate.Key].LockReason = "Manager-held sample lock";
         cells[lockedCoordinate.Key].LockedBy = "demo.manager";
 
-        RecalculateSeedTotals(
-            1,
-            1,
-            cells.Where(entry => entry.Value.Coordinate.MeasureId == 1).ToDictionary(entry => entry.Key, entry => entry.Value),
-            productNodes,
-            timePeriods);
-        RecalculateSeedTotals(
-            1,
-            2,
-            cells.Where(entry => entry.Value.Coordinate.MeasureId == 2).ToDictionary(entry => entry.Key, entry => entry.Value),
-            productNodes,
-            timePeriods);
+        RecalculateSeedTotals(1, PlanningMeasures.SalesRevenue, cells, productNodes, timePeriods);
+        RecalculateSeedTotals(1, PlanningMeasures.SoldQuantity, cells, productNodes, timePeriods);
+        RecalculateSeedTotals(1, PlanningMeasures.TotalCosts, cells, productNodes, timePeriods);
+        RecalculateSeedTotals(1, PlanningMeasures.GrossProfit, cells, productNodes, timePeriods);
+        RecalculateSeedDerivedRateTotals(1, PlanningMeasures.AverageSellingPrice, cells, productNodes, timePeriods);
+        RecalculateSeedDerivedRateTotals(1, PlanningMeasures.UnitCost, cells, productNodes, timePeriods);
+        RecalculateSeedDerivedRateTotals(1, PlanningMeasures.GrossProfitPercent, cells, productNodes, timePeriods);
 
         await RebuildHierarchyMappingsAsync(connection, transaction, cancellationToken);
 
