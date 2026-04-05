@@ -232,12 +232,13 @@ public sealed partial class PostgresPlanningRepository
             await importer.CompleteAsync(cancellationToken);
         }
 
-        await using (var deleteExistingCommand = new NpgsqlCommand(
+        await using (var deleteAliasCommand = new NpgsqlCommand(
                          $"""
                          delete from planning_draft_cells as target
                          using {stageTableName} as source
                          where target.scenario_version_id = source.scenario_version_id
                            and target.user_id = any(@candidateUserIds)
+                           and target.user_id <> @primaryUserId
                            and target.measure_id = source.measure_id
                            and target.store_id = source.store_id
                            and target.product_node_id = source.product_node_id
@@ -246,12 +247,44 @@ public sealed partial class PostgresPlanningRepository
                          connection,
                          transaction))
         {
-            deleteExistingCommand.CommandTimeout = 300;
-            deleteExistingCommand.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
-            await deleteExistingCommand.ExecuteNonQueryAsync(cancellationToken);
+            deleteAliasCommand.CommandTimeout = 300;
+            deleteAliasCommand.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
+            deleteAliasCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+            await deleteAliasCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await using (var insertCommand = new NpgsqlCommand(
+        await using (var updateExistingCommand = new NpgsqlCommand(
+                         $"""
+                         update planning_draft_cells as target
+                         set input_value = source.input_value,
+                             override_value = source.override_value,
+                             is_system_generated_override = source.is_system_generated_override,
+                             derived_value = source.derived_value,
+                             effective_value = source.effective_value,
+                             growth_factor = source.growth_factor,
+                             is_locked = source.is_locked,
+                             lock_reason = source.lock_reason,
+                             locked_by = source.locked_by,
+                             row_version = source.row_version,
+                             cell_kind = source.cell_kind,
+                             updated_at = now()
+                         from {stageTableName} as source
+                         where target.scenario_version_id = source.scenario_version_id
+                           and target.user_id = @primaryUserId
+                           and target.measure_id = source.measure_id
+                           and target.store_id = source.store_id
+                           and target.product_node_id = source.product_node_id
+                           and target.time_period_id = source.time_period_id;
+                         """,
+                         connection,
+                         transaction))
+        {
+            updateExistingCommand.CommandTimeout = 300;
+            updateExistingCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+            await updateExistingCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var insertMissingCommand = new NpgsqlCommand(
                          $"""
                          insert into planning_draft_cells (
                              scenario_version_id,
@@ -291,14 +324,24 @@ public sealed partial class PostgresPlanningRepository
                              source.row_version,
                              source.cell_kind,
                              now()
-                         from {stageTableName} as source;
+                         from {stageTableName} as source
+                         where not exists (
+                             select 1
+                             from planning_draft_cells as target
+                             where target.scenario_version_id = source.scenario_version_id
+                               and target.user_id = @primaryUserId
+                               and target.measure_id = source.measure_id
+                               and target.store_id = source.store_id
+                               and target.product_node_id = source.product_node_id
+                               and target.time_period_id = source.time_period_id
+                         );
                          """,
                          connection,
                          transaction))
         {
-            insertCommand.CommandTimeout = 300;
-            insertCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
-            await insertCommand.ExecuteNonQueryAsync(cancellationToken);
+            insertMissingCommand.CommandTimeout = 300;
+            insertMissingCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+            await insertMissingCommand.ExecuteNonQueryAsync(cancellationToken);
         }
     }
 

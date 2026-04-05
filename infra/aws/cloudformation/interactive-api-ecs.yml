@@ -287,14 +287,10 @@ Resources:
           Environment:
             - Name: ASPNETCORE_URLS
               Value: !Sub http://+:${ContainerPort}
-            - Name: PlanningStorageMode
-              Value: postgres
             - Name: PlanningApplyMigrationsOnStartup
               Value: "true"
             - Name: PlanningSecurityMode
               Value: entra
-            - Name: PlanningDbPath
-              Value: /tmp/sales-planning-demo/planning.db
             - Name: EnableTestReset
               Value: "false"
             - Name: PlanningPostgresHost

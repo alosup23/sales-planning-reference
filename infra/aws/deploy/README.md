@@ -68,7 +68,6 @@ Note:
 Use the PostgreSQL admin tool for:
 
 - schema migrations
-- one-time SQLite cutover imports
 - future controlled migration and admin operations
 
 - project:
@@ -79,11 +78,8 @@ Commands:
 1. Apply migrations
    - `dotnet run --project apps/api/tools/SalesPlanning.PostgresAdmin -- migrate "<connection-string>"`
 
-2. Import an existing SQLite snapshot into PostgreSQL
-   - `dotnet run --project apps/api/tools/SalesPlanning.PostgresAdmin -- import-sqlite "<connection-string>" "<sqlite-db-path>" "<seed-key>" "<source-name>"`
-
-Recommended seed key for the live cutover:
-- `live-s3-sqlite-cutover-20260328`
+2. Inspect PostgreSQL planning storage
+   - `dotnet run --project apps/api/tools/SalesPlanning.PostgresAdmin -- stats "<connection-string>"`
 
 ## Important current status
 
