@@ -1,6 +1,3 @@
-using Microsoft.Data.Sqlite;
-using Amazon;
-using Amazon.S3;
 using Npgsql;
 using NpgsqlTypes;
 using SalesPlanning.Api.Application;
@@ -8,11 +5,10 @@ using SalesPlanning.Api.Contracts;
 using SalesPlanning.Api.Domain;
 using SalesPlanning.Api.Security;
 using System.Diagnostics;
-using System.Globalization;
 
 namespace SalesPlanning.Api.Infrastructure.Postgres;
 
-public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRepository
+public sealed partial class PostgresPlanningRepository : IPlanningRepository
 {
     private const int BulkWriteChunkSize = 500;
     private static readonly string[] StoreMutationTables = ["store_metadata", "store_profile_options", "product_nodes", "planning_cells"];
@@ -45,53 +41,30 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
     private static readonly string[] ProductNodeMutationTables = ["product_nodes", "planning_cells", "hierarchy_categories", "hierarchy_subcategories", "hierarchy_departments_v2", "hierarchy_classes_v2", "hierarchy_subclasses_v2"];
     private static readonly string[] TimePeriodMutationTables = ["time_periods", "planning_cells"];
 
-    private readonly SqlitePlanningRepository _innerRepository;
     private readonly string _connectionString;
-    private readonly string _localCachePath;
-    private readonly string _localVersionPath;
-    private readonly ILogger<PostgresBackedSqlitePlanningRepository> _logger;
+    private readonly ILogger<PostgresPlanningRepository> _logger;
     private readonly bool _applyMigrationsOnStartup;
     private readonly string _migrationsDirectory;
-    private readonly string? _bootstrapS3Bucket;
-    private readonly string? _bootstrapS3ObjectKey;
-    private readonly string? _bootstrapS3Region;
-    private readonly string? _bootstrapSeedKey;
     private readonly SemaphoreSlim _syncGate = new(1, 1);
     private readonly AsyncLocal<int> _atomicDepth = new();
-    private readonly AsyncLocal<PostgresSyncPlan?> _pendingSyncPlan = new();
     private readonly AsyncLocal<PostgresDirectAtomicContext?> _directAtomicContext = new();
     private readonly object _readCacheGate = new();
-    private bool _hydrated;
     private bool _databaseReady;
-    private long? _localDataVersion;
     private PlanningMetadataSnapshot? _metadataCache;
     private IReadOnlyList<StoreNodeMetadata>? _storeListCache;
     private IReadOnlyDictionary<long, long>? _storeRootProductNodeIdsCache;
     private IReadOnlyList<HierarchyDepartmentRecord>? _hierarchyMappingsCache;
 
-    public PostgresBackedSqlitePlanningRepository(
+    public PostgresPlanningRepository(
         string connectionString,
-        ILogger<PostgresBackedSqlitePlanningRepository> logger,
-        string localCachePath,
+        ILogger<PostgresPlanningRepository> logger,
         bool applyMigrationsOnStartup,
-        string migrationsDirectory,
-        string? bootstrapS3Bucket = null,
-        string? bootstrapS3ObjectKey = null,
-        string? bootstrapS3Region = null,
-        string? bootstrapSeedKey = null)
+        string migrationsDirectory)
     {
         _connectionString = connectionString;
         _logger = logger;
-        _localCachePath = localCachePath;
-        _localVersionPath = $"{localCachePath}.version";
         _applyMigrationsOnStartup = applyMigrationsOnStartup;
         _migrationsDirectory = migrationsDirectory;
-        _bootstrapS3Bucket = bootstrapS3Bucket;
-        _bootstrapS3ObjectKey = bootstrapS3ObjectKey;
-        _bootstrapS3Region = bootstrapS3Region;
-        _bootstrapSeedKey = bootstrapSeedKey;
-        Directory.CreateDirectory(Path.GetDirectoryName(localCachePath) ?? ".");
-        _innerRepository = new SqlitePlanningRepository(localCachePath);
     }
 
     private PlanningMetadataSnapshot? GetCachedMetadataSnapshot()
@@ -206,21 +179,19 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
 
     private async Task WithMutationAndCacheInvalidationAsync(
         Func<CancellationToken, Task> action,
-        Action<PostgresSyncPlan> queueSync,
         IReadOnlyCollection<string> tableNames,
         CancellationToken cancellationToken)
     {
-        await WithMutationAsync(action, queueSync, cancellationToken);
+        await action(cancellationToken);
         InvalidateReadCaches(tableNames.ToArray());
     }
 
     private async Task<T> WithMutationAndCacheInvalidationAsync<T>(
         Func<CancellationToken, Task<T>> action,
-        Action<PostgresSyncPlan> queueSync,
         IReadOnlyCollection<string> tableNames,
         CancellationToken cancellationToken)
     {
-        var result = await WithMutationAsync(action, queueSync, cancellationToken);
+        var result = await action(cancellationToken);
         InvalidateReadCaches(tableNames.ToArray());
         return result;
     }
@@ -386,39 +357,34 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
 
     public Task<StoreNodeMetadata> UpsertStoreProfileAsync(long scenarioVersionId, StoreNodeMetadata storeProfile, CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(
-            ct => _innerRepository.UpsertStoreProfileAsync(scenarioVersionId, storeProfile, ct),
-            plan => plan.QueueTableReplace(StoreMutationTables),
+            ct => UpsertStoreProfileDirectAsync(scenarioVersionId, storeProfile, ct),
             StoreMutationTables,
             cancellationToken);
 
     public Task DeleteStoreProfileAsync(long scenarioVersionId, long storeId, CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(
-            ct => _innerRepository.DeleteStoreProfileAsync(scenarioVersionId, storeId, ct),
-            plan => plan.QueueTableReplace(StoreMutationTables),
+            ct => DeleteStoreProfileDirectAsync(scenarioVersionId, storeId, ct),
             StoreMutationTables,
             cancellationToken);
 
     public Task InactivateStoreProfileAsync(long storeId, CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(
-            ct => _innerRepository.InactivateStoreProfileAsync(storeId, ct),
-            plan => plan.QueueTableReplace("store_metadata"),
+            ct => InactivateStoreProfileDirectAsync(storeId, ct),
             ["store_metadata"],
             cancellationToken);
 
     public Task<IReadOnlyList<StoreProfileOptionValue>> GetStoreProfileOptionsAsync(CancellationToken cancellationToken) =>
-        WithReadAsync(_innerRepository.GetStoreProfileOptionsAsync, cancellationToken);
+        GetStoreProfileOptionsDirectAsync(cancellationToken);
 
     public Task UpsertStoreProfileOptionAsync(string fieldName, string value, bool isActive, CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(
-            ct => _innerRepository.UpsertStoreProfileOptionAsync(fieldName, value, isActive, ct),
-            plan => plan.QueueTableReplace("store_profile_options"),
+            ct => UpsertStoreProfileOptionDirectAsync(fieldName, value, isActive, ct),
             ["store_profile_options"],
             cancellationToken);
 
     public Task DeleteStoreProfileOptionAsync(string fieldName, string value, CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(
-            ct => _innerRepository.DeleteStoreProfileOptionAsync(fieldName, value, ct),
-            plan => plan.QueueTableReplace("store_profile_options"),
+            ct => DeleteStoreProfileOptionDirectAsync(fieldName, value, ct),
             ["store_profile_options"],
             cancellationToken);
 
@@ -427,90 +393,79 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
 
     public Task UpsertHierarchyDepartmentAsync(string departmentLabel, CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(
-            ct => _innerRepository.UpsertHierarchyDepartmentAsync(departmentLabel, ct),
-            plan => plan.QueueTableReplace(HierarchyTables),
+            ct => UpsertHierarchyDepartmentDirectAsync(departmentLabel, ct),
             HierarchyTables,
             cancellationToken);
 
     public Task UpsertHierarchyClassAsync(string departmentLabel, string classLabel, CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(
-            ct => _innerRepository.UpsertHierarchyClassAsync(departmentLabel, classLabel, ct),
-            plan => plan.QueueTableReplace(HierarchyTables),
+            ct => UpsertHierarchyClassDirectAsync(departmentLabel, classLabel, ct),
             HierarchyTables,
             cancellationToken);
 
     public Task UpsertHierarchySubclassAsync(string departmentLabel, string classLabel, string subclassLabel, CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(
-            ct => _innerRepository.UpsertHierarchySubclassAsync(departmentLabel, classLabel, subclassLabel, ct),
-            plan => plan.QueueTableReplace(HierarchyTables),
+            ct => UpsertHierarchySubclassDirectAsync(departmentLabel, classLabel, subclassLabel, ct),
             HierarchyTables,
             cancellationToken);
 
     public Task<(IReadOnlyList<ProductProfileMetadata> Profiles, int TotalCount)> GetProductProfilesAsync(string? searchTerm, int pageNumber, int pageSize, CancellationToken cancellationToken) =>
-        WithReadAsync(ct => _innerRepository.GetProductProfilesAsync(searchTerm, pageNumber, pageSize, ct), cancellationToken);
+        GetProductProfilesDirectAsync(searchTerm, pageNumber, pageSize, cancellationToken);
 
     public Task<ProductProfileMetadata> UpsertProductProfileAsync(ProductProfileMetadata profile, CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(
-            ct => _innerRepository.UpsertProductProfileAsync(profile, ct),
-            plan => plan.QueueTableReplace(ProductMutationTables),
+            ct => UpsertProductProfileDirectAsync(profile, ct),
             ProductMutationTables,
             cancellationToken);
 
     public Task DeleteProductProfileAsync(string skuVariant, CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(
-            ct => _innerRepository.DeleteProductProfileAsync(skuVariant, ct),
-            plan => plan.QueueTableReplace(ProductMutationTables),
+            ct => DeleteProductProfileDirectAsync(skuVariant, ct),
             ProductMutationTables,
             cancellationToken);
 
     public Task InactivateProductProfileAsync(string skuVariant, CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(
-            ct => _innerRepository.InactivateProductProfileAsync(skuVariant, ct),
-            plan => plan.QueueTableReplace(ProductMutationTables),
+            ct => InactivateProductProfileDirectAsync(skuVariant, ct),
             ProductMutationTables,
             cancellationToken);
 
     public Task<IReadOnlyList<ProductProfileOptionValue>> GetProductProfileOptionsAsync(CancellationToken cancellationToken) =>
-        WithReadAsync(_innerRepository.GetProductProfileOptionsAsync, cancellationToken);
+        GetProductProfileOptionsDirectAsync(cancellationToken);
 
     public Task UpsertProductProfileOptionAsync(string fieldName, string value, bool isActive, CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(
-            ct => _innerRepository.UpsertProductProfileOptionAsync(fieldName, value, isActive, ct),
-            plan => plan.QueueTableReplace("product_profile_options"),
+            ct => UpsertProductProfileOptionDirectAsync(fieldName, value, isActive, ct),
             ["product_profile_options"],
             cancellationToken);
 
     public Task DeleteProductProfileOptionAsync(string fieldName, string value, CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(
-            ct => _innerRepository.DeleteProductProfileOptionAsync(fieldName, value, ct),
-            plan => plan.QueueTableReplace("product_profile_options"),
+            ct => DeleteProductProfileOptionDirectAsync(fieldName, value, ct),
             ["product_profile_options"],
             cancellationToken);
 
     public Task<IReadOnlyList<ProductHierarchyCatalogRecord>> GetProductHierarchyCatalogAsync(CancellationToken cancellationToken) =>
-        WithReadAsync(_innerRepository.GetProductHierarchyCatalogAsync, cancellationToken);
+        GetProductHierarchyCatalogDirectAsync(cancellationToken);
 
     public Task<IReadOnlyList<ProductSubclassCatalogRecord>> GetProductSubclassCatalogAsync(CancellationToken cancellationToken) =>
-        WithReadAsync(_innerRepository.GetProductSubclassCatalogAsync, cancellationToken);
+        GetProductSubclassCatalogDirectAsync(cancellationToken);
 
     public Task UpsertProductHierarchyCatalogAsync(ProductHierarchyCatalogRecord record, CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(
-            ct => _innerRepository.UpsertProductHierarchyCatalogAsync(record, ct),
-            plan => plan.QueueTableReplace(ProductMutationTables),
+            ct => UpsertProductHierarchyCatalogDirectAsync(record, ct),
             ProductMutationTables,
             cancellationToken);
 
     public Task DeleteProductHierarchyCatalogAsync(string dptNo, string clssNo, CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(
-            ct => _innerRepository.DeleteProductHierarchyCatalogAsync(dptNo, clssNo, ct),
-            plan => plan.QueueTableReplace(ProductMutationTables),
+            ct => DeleteProductHierarchyCatalogDirectAsync(dptNo, clssNo, ct),
             ProductMutationTables,
             cancellationToken);
 
     public Task ReplaceProductMasterDataAsync(IReadOnlyList<ProductHierarchyCatalogRecord> hierarchyRows, IReadOnlyList<ProductProfileMetadata> profiles, CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(
-            ct => _innerRepository.ReplaceProductMasterDataAsync(hierarchyRows, profiles, ct),
-            plan => plan.QueueTableReplace(ProductMutationTables),
+            ct => ReplaceProductMasterDataDirectAsync(hierarchyRows, profiles, ct),
             ProductMutationTables,
             cancellationToken);
 
@@ -576,8 +531,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
 
     public Task RebuildPlanningFromMasterDataAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(
-            ct => _innerRepository.RebuildPlanningFromMasterDataAsync(scenarioVersionId, fiscalYear, ct),
-            plan => plan.QueueFullSnapshot(),
+            ct => RebuildPlanningFromMasterDataDirectAsync(scenarioVersionId, fiscalYear, ct),
             ProductMutationTables.Concat(TimePeriodMutationTables).Concat(StoreMutationTables).Concat(HierarchyTables).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             cancellationToken);
 
@@ -586,8 +540,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
 
     public Task ResetAsync(CancellationToken cancellationToken) =>
         WithMutationAndCacheInvalidationAsync(
-            ct => _innerRepository.ResetAsync(ct),
-            plan => plan.QueueFullSnapshot(),
+            ct => ResetDirectAsync(ct),
             ProductMutationTables.Concat(TimePeriodMutationTables).Concat(StoreMutationTables).Concat(HierarchyTables).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             cancellationToken);
 
@@ -598,90 +551,11 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         await migrator.ApplyMigrationsAsync(cancellationToken);
     }
 
-    public async Task ImportSqliteSnapshotAsync(string sqliteDatabasePath, string seedKey, string sourceName, CancellationToken cancellationToken)
-    {
-        if (!File.Exists(sqliteDatabasePath))
-        {
-            throw new FileNotFoundException("SQLite migration source was not found.", sqliteDatabasePath);
-        }
-
-        _logger.LogInformation(
-            "Starting SQLite to PostgreSQL snapshot import from {SourceName} using seed key {SeedKey}.",
-            sourceName,
-            seedKey);
-
-        await using var sqlite = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = sqliteDatabasePath,
-            Cache = SqliteCacheMode.Shared,
-            Mode = SqliteOpenMode.ReadOnly
-        }.ToString());
-        await sqlite.OpenAsync(cancellationToken);
-
-        await using var postgres = new NpgsqlConnection(_connectionString);
-        await postgres.OpenAsync(cancellationToken);
-        await using var transaction = await postgres.BeginTransactionAsync(cancellationToken);
-
-        await using (var command = new NpgsqlCommand(
-                         """
-                         insert into seed_runs (seed_key, source_name, status, started_at)
-                         values (@seedKey, @sourceName, 'running', now())
-                         on conflict (seed_key) do nothing;
-                         """,
-                         postgres,
-                         transaction))
-        {
-            command.Parameters.AddWithValue("@seedKey", seedKey);
-            command.Parameters.AddWithValue("@sourceName", sourceName);
-            await command.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        foreach (var tableName in PostgresTableDefinitions.FullSnapshotDeleteOrder)
-        {
-            await using var deleteCommand = new NpgsqlCommand($"delete from {tableName};", postgres, transaction);
-            await deleteCommand.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        foreach (var definition in PostgresTableDefinitions.All)
-        {
-            _logger.LogInformation("Copying table {TableName} from SQLite into PostgreSQL.", definition.Name);
-            await CopyTableSqliteToPostgresAsync(sqlite, postgres, transaction, definition, cancellationToken);
-            _logger.LogInformation("Copied table {TableName} into PostgreSQL.", definition.Name);
-        }
-
-        await UpdateDataVersionAsync(postgres, transaction, cancellationToken);
-
-        await using (var completeCommand = new NpgsqlCommand(
-                         """
-                         update seed_runs
-                         set status = 'completed',
-                             completed_at = now(),
-                             details_json = @detailsJson
-                         where seed_key = @seedKey;
-                         """,
-                         postgres,
-                         transaction))
-        {
-            completeCommand.Parameters.AddWithValue("@seedKey", seedKey);
-            completeCommand.Parameters.AddWithValue("@detailsJson", $"{{\"source\":\"{EscapeJson(sourceName)}\"}}");
-            await completeCommand.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await transaction.CommitAsync(cancellationToken);
-        _hydrated = false;
-        _localDataVersion = null;
-        _logger.LogInformation(
-            "Completed SQLite to PostgreSQL snapshot import from {SourceName} using seed key {SeedKey}.",
-            sourceName,
-            seedKey);
-    }
-
     private async Task<T> ExecuteAtomicCoreAsync<T>(Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken)
     {
         var isOutermost = _atomicDepth.Value == 0;
         if (isOutermost)
         {
-            _pendingSyncPlan.Value = new PostgresSyncPlan();
             _directAtomicContext.Value = null;
         }
 
@@ -699,9 +573,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             _atomicDepth.Value -= 1;
             if (isOutermost)
             {
-                var plan = _pendingSyncPlan.Value;
                 var directContext = _directAtomicContext.Value;
-                _pendingSyncPlan.Value = null;
                 _directAtomicContext.Value = null;
                 try
                 {
@@ -715,29 +587,10 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
                             }
 
                             await directContext.Transaction.CommitAsync(cancellationToken);
-
-                            if (directContext.HasMutations)
-                            {
-                                _hydrated = false;
-                                _localDataVersion = null;
-                            }
                         }
                         else
                         {
                             await directContext.Transaction.RollbackAsync(cancellationToken);
-                        }
-                    }
-
-                    if (succeeded && plan is { HasMutations: true })
-                    {
-                        await _syncGate.WaitAsync(cancellationToken);
-                        try
-                        {
-                            await ExecuteSyncPlanAsync(plan, cancellationToken);
-                        }
-                        finally
-                        {
-                            _syncGate.Release();
                         }
                     }
                 }
@@ -750,17 +603,6 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
                 }
             }
         }
-    }
-
-    private async Task<T> WithReadAsync<T>(Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken)
-    {
-        await EnsureHydratedAsync(cancellationToken);
-        return await action(cancellationToken);
-    }
-
-    private bool ShouldUseHydratedCacheRead()
-    {
-        return _atomicDepth.Value > 0 && (_pendingSyncPlan.Value?.HasMutations ?? false);
     }
 
     private async Task<NpgsqlConnection> OpenPostgresConnectionAsync(CancellationToken cancellationToken)
@@ -799,21 +641,6 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         return await action(connection, null, cancellationToken);
     }
 
-    private async Task WithMutationAsync(Func<CancellationToken, Task> action, Action<PostgresSyncPlan> queueSync, CancellationToken cancellationToken)
-    {
-        await EnsureHydratedAsync(cancellationToken);
-        await action(cancellationToken);
-        await QueueOrExecuteSyncAsync(queueSync, cancellationToken);
-    }
-
-    private async Task<T> WithMutationAsync<T>(Func<CancellationToken, Task<T>> action, Action<PostgresSyncPlan> queueSync, CancellationToken cancellationToken)
-    {
-        await EnsureHydratedAsync(cancellationToken);
-        var result = await action(cancellationToken);
-        await QueueOrExecuteSyncAsync(queueSync, cancellationToken);
-        return result;
-    }
-
     private async Task ExecuteDirectMutationAsync(Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task> action, CancellationToken cancellationToken)
     {
         if (_atomicDepth.Value > 0)
@@ -830,8 +657,6 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         await action(connection, transaction, cancellationToken);
         await UpdateDataVersionAsync(connection, transaction, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        _hydrated = false;
-        _localDataVersion = null;
     }
 
     private async Task ExecuteDirectNonVersionedMutationAsync(Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task> action, CancellationToken cancellationToken)
@@ -882,59 +707,7 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         var directResult = await action(connection, transaction, cancellationToken);
         await UpdateDataVersionAsync(connection, transaction, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        _hydrated = false;
-        _localDataVersion = null;
         return directResult;
-    }
-
-    private async Task QueueOrExecuteSyncAsync(Action<PostgresSyncPlan> queueSync, CancellationToken cancellationToken)
-    {
-        if (_atomicDepth.Value > 0)
-        {
-            var plan = _pendingSyncPlan.Value ??= new PostgresSyncPlan();
-            queueSync(plan);
-            return;
-        }
-
-        var immediatePlan = new PostgresSyncPlan();
-        queueSync(immediatePlan);
-        await _syncGate.WaitAsync(cancellationToken);
-        try
-        {
-            await ExecuteSyncPlanAsync(immediatePlan, cancellationToken);
-        }
-        finally
-        {
-            _syncGate.Release();
-        }
-    }
-
-    private async Task EnsureHydratedAsync(CancellationToken cancellationToken)
-    {
-        await EnsureDatabaseReadyAsync(cancellationToken);
-        var remoteVersion = await GetRemoteDataVersionAsync(cancellationToken);
-        if (_hydrated && _localDataVersion == remoteVersion && File.Exists(_localCachePath))
-        {
-            return;
-        }
-
-        await _syncGate.WaitAsync(cancellationToken);
-        try
-        {
-            remoteVersion = await GetRemoteDataVersionAsync(cancellationToken);
-            if (_hydrated && _localDataVersion == remoteVersion && File.Exists(_localCachePath))
-            {
-                return;
-            }
-
-            await RebuildLocalCacheFromPostgresAsync(remoteVersion, cancellationToken);
-            _hydrated = true;
-            _localDataVersion = remoteVersion;
-        }
-        finally
-        {
-            _syncGate.Release();
-        }
     }
 
     private async Task EnsureDatabaseReadyAsync(CancellationToken cancellationToken)
@@ -960,39 +733,6 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
                 _logger.LogInformation("PostgreSQL migrations are up to date.");
             }
 
-            var remoteVersion = await GetRemoteDataVersionAsync(cancellationToken);
-            if (remoteVersion == 0
-                && !string.IsNullOrWhiteSpace(_bootstrapS3Bucket)
-                && !string.IsNullOrWhiteSpace(_bootstrapS3ObjectKey)
-                && !string.IsNullOrWhiteSpace(_bootstrapSeedKey))
-            {
-                _logger.LogInformation(
-                    "PostgreSQL data version is 0. Bootstrapping from s3://{Bucket}/{Key} with seed key {SeedKey}.",
-                    _bootstrapS3Bucket,
-                    _bootstrapS3ObjectKey,
-                    _bootstrapSeedKey);
-                var tempSqlitePath = Path.Combine(Path.GetTempPath(), "sales-planning-postgres-bootstrap", "source.db");
-                Directory.CreateDirectory(Path.GetDirectoryName(tempSqlitePath) ?? Path.GetTempPath());
-                if (File.Exists(tempSqlitePath))
-                {
-                    File.Delete(tempSqlitePath);
-                }
-
-                using var s3Client = new AmazonS3Client(RegionEndpoint.GetBySystemName(_bootstrapS3Region ?? "ap-southeast-5"));
-                using var response = await s3Client.GetObjectAsync(_bootstrapS3Bucket, _bootstrapS3ObjectKey, cancellationToken);
-                await using (var targetStream = File.Create(tempSqlitePath))
-                {
-                    await response.ResponseStream.CopyToAsync(targetStream, cancellationToken);
-                }
-                _logger.LogInformation("Downloaded SQLite bootstrap snapshot to {BootstrapPath}.", tempSqlitePath);
-
-                await ImportSqliteSnapshotAsync(
-                    tempSqlitePath,
-                    _bootstrapSeedKey,
-                    $"s3://{_bootstrapS3Bucket}/{_bootstrapS3ObjectKey}",
-                    cancellationToken);
-            }
-
             _databaseReady = true;
             _logger.LogInformation("PostgreSQL repository is ready for use.");
         }
@@ -1016,326 +756,6 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
         }
 
         return Convert.ToInt64(value);
-    }
-
-    private async Task RebuildLocalCacheFromPostgresAsync(long remoteVersion, CancellationToken cancellationToken)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(_localCachePath) ?? ".");
-        var tempPath = $"{_localCachePath}.tmp";
-        if (File.Exists(tempPath))
-        {
-            File.Delete(tempPath);
-        }
-
-        await using var sqlite = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = tempPath,
-            Cache = SqliteCacheMode.Shared,
-            Mode = SqliteOpenMode.ReadWriteCreate
-        }.ToString());
-        await sqlite.OpenAsync(cancellationToken);
-        await using (var schemaCommand = sqlite.CreateCommand())
-        {
-            schemaCommand.CommandText = PostgresTableDefinitions.SqliteCacheSchema;
-            await schemaCommand.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await using (var pragmaCommand = sqlite.CreateCommand())
-        {
-            pragmaCommand.CommandText = """
-                pragma journal_mode = memory;
-                pragma synchronous = off;
-                pragma temp_store = memory;
-                """;
-            await pragmaCommand.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await using var postgres = new NpgsqlConnection(_connectionString);
-        await postgres.OpenAsync(cancellationToken);
-        foreach (var definition in PostgresTableDefinitions.All)
-        {
-            _logger.LogInformation("Hydrating local SQLite cache table {TableName} from PostgreSQL.", definition.Name);
-            await CopyTablePostgresToSqliteAsync(postgres, sqlite, definition, cancellationToken);
-            _logger.LogInformation("Hydrated local SQLite cache table {TableName}.", definition.Name);
-        }
-
-        sqlite.Close();
-        File.Move(tempPath, _localCachePath, true);
-        await File.WriteAllTextAsync(_localVersionPath, remoteVersion.ToString(), cancellationToken);
-        _logger.LogInformation("Hydrated local SQLite cache from PostgreSQL at data version {DataVersion}", remoteVersion);
-    }
-
-    private async Task ExecuteSyncPlanAsync(PostgresSyncPlan plan, CancellationToken cancellationToken)
-    {
-        await using var postgres = new NpgsqlConnection(_connectionString);
-        await postgres.OpenAsync(cancellationToken);
-        await using var transaction = await postgres.BeginTransactionAsync(cancellationToken);
-
-        if (plan.FullSnapshot)
-        {
-            await ReplaceTablesFromSqliteAsync(postgres, transaction, PostgresTableDefinitions.All.Select(definition => definition.Name), cancellationToken);
-        }
-        else
-        {
-            if (plan.TablesToReplace.Count > 0)
-            {
-                await ReplaceTablesFromSqliteAsync(postgres, transaction, plan.TablesToReplace, cancellationToken);
-            }
-
-            if (plan.CellUpserts.Count > 0 && !plan.TablesToReplace.Contains("planning_cells"))
-            {
-                await UpsertPlanningCellsAsync(postgres, transaction, plan.CellUpserts.Values, cancellationToken);
-            }
-        }
-
-        await UpdateDataVersionAsync(postgres, transaction, cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-        _localDataVersion = (_localDataVersion ?? 0) + 1;
-        await File.WriteAllTextAsync(_localVersionPath, _localDataVersion.Value.ToString(), cancellationToken);
-        _logger.LogInformation("Synchronized PostgreSQL persistence at data version {DataVersion}", _localDataVersion);
-    }
-
-    private async Task ReplaceTablesFromSqliteAsync(NpgsqlConnection postgres, NpgsqlTransaction transaction, IEnumerable<string> tables, CancellationToken cancellationToken)
-    {
-        await using var sqlite = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = _localCachePath,
-            Cache = SqliteCacheMode.Shared,
-            Mode = SqliteOpenMode.ReadOnly
-        }.ToString());
-        await sqlite.OpenAsync(cancellationToken);
-
-        var orderedTables = tables
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(tableName => Array.IndexOf(PostgresTableDefinitions.FullSnapshotDeleteOrder.ToArray(), tableName))
-            .ToList();
-
-        foreach (var tableName in orderedTables)
-        {
-            await using (var deleteCommand = new NpgsqlCommand($"delete from {tableName};", postgres, transaction))
-            {
-                await deleteCommand.ExecuteNonQueryAsync(cancellationToken);
-            }
-
-            var definition = PostgresTableDefinitions.Get(tableName);
-            await CopyTableSqliteToPostgresAsync(sqlite, postgres, transaction, definition, cancellationToken);
-        }
-    }
-
-    private static async Task CopyTablePostgresToSqliteAsync(NpgsqlConnection postgres, SqliteConnection sqlite, PostgresTableDefinition definition, CancellationToken cancellationToken)
-    {
-        var selectSql = $"select {string.Join(", ", definition.Columns)} from {definition.Name};";
-        await using var selectCommand = new NpgsqlCommand(selectSql, postgres);
-        await using var reader = await selectCommand.ExecuteReaderAsync(cancellationToken);
-        var insertSql = $"insert into {definition.Name} ({string.Join(", ", definition.Columns)}) values ({string.Join(", ", definition.Columns.Select((_, index) => $"@p{index}"))});";
-        await using var transaction = (SqliteTransaction)await sqlite.BeginTransactionAsync(cancellationToken);
-        await using var insertCommand = sqlite.CreateCommand();
-        insertCommand.CommandText = insertSql;
-        insertCommand.Transaction = transaction;
-        var parameters = new SqliteParameter[definition.Columns.Length];
-        for (var index = 0; index < definition.Columns.Length; index += 1)
-        {
-            var parameter = insertCommand.CreateParameter();
-            parameter.ParameterName = $"@p{index}";
-            insertCommand.Parameters.Add(parameter);
-            parameters[index] = parameter;
-        }
-
-        await insertCommand.PrepareAsync(cancellationToken);
-
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            for (var index = 0; index < definition.Columns.Length; index += 1)
-            {
-                parameters[index].Value = reader.IsDBNull(index) ? DBNull.Value : reader.GetValue(index);
-            }
-
-            await insertCommand.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await transaction.CommitAsync(cancellationToken);
-    }
-
-    private static async Task CopyTableSqliteToPostgresAsync(SqliteConnection sqlite, NpgsqlConnection postgres, NpgsqlTransaction transaction, PostgresTableDefinition definition, CancellationToken cancellationToken)
-    {
-        var existingColumns = await GetSqliteColumnsAsync(sqlite, definition.Name, cancellationToken);
-        var postgresColumnTypes = await GetPostgresColumnTypesAsync(postgres, transaction, definition.Name, cancellationToken);
-        var selectedColumns = definition.Columns
-            .Where(column => existingColumns.Contains(column))
-            .ToArray();
-
-        if (selectedColumns.Length == 0)
-        {
-            return;
-        }
-
-        try
-        {
-            var selectSql = $"select {string.Join(", ", selectedColumns)} from {definition.Name};";
-            await using var selectCommand = sqlite.CreateCommand();
-            selectCommand.CommandText = selectSql;
-            await using var reader = await selectCommand.ExecuteReaderAsync(cancellationToken);
-            var selectedIndexByColumn = selectedColumns
-                .Select((column, index) => (column, index))
-                .ToDictionary(entry => entry.column, entry => entry.index, StringComparer.OrdinalIgnoreCase);
-            var copySql = $"copy {definition.Name} ({string.Join(", ", definition.Columns)}) from stdin (format binary)";
-            await using var importer = await postgres.BeginBinaryImportAsync(copySql, cancellationToken);
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                await importer.StartRowAsync(cancellationToken);
-                for (var index = 0; index < definition.Columns.Length; index += 1)
-                {
-                    if (!selectedIndexByColumn.TryGetValue(definition.Columns[index], out var readerIndex) || reader.IsDBNull(readerIndex))
-                    {
-                        await importer.WriteNullAsync(cancellationToken);
-                        continue;
-                    }
-
-                    var postgresType = postgresColumnTypes.GetValueOrDefault(definition.Columns[index], "text");
-                    try
-                    {
-                        await WriteSqliteValueAsync(importer, reader.GetValue(readerIndex), postgresType, cancellationToken);
-                    }
-                    catch (Exception exception)
-                    {
-                        var rawValue = reader.GetValue(readerIndex);
-                        throw new InvalidOperationException(
-                            $"Failed to copy {definition.Name}.{definition.Columns[index]} as PostgreSQL type '{postgresType}'. SQLite value type was '{rawValue.GetType().FullName}' and value was '{Convert.ToString(rawValue, CultureInfo.InvariantCulture)}'.",
-                            exception);
-                    }
-                }
-            }
-
-            await importer.CompleteAsync(cancellationToken);
-        }
-        catch (Exception exception) when (exception is not InvalidOperationException)
-        {
-            throw new InvalidOperationException($"Failed to bulk copy table '{definition.Name}' from SQLite into PostgreSQL.", exception);
-        }
-    }
-
-    private static async Task<HashSet<string>> GetSqliteColumnsAsync(SqliteConnection sqlite, string tableName, CancellationToken cancellationToken)
-    {
-        await using var command = sqlite.CreateCommand();
-        command.CommandText = $"pragma table_info({tableName});";
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            if (!reader.IsDBNull(1))
-            {
-                columns.Add(reader.GetString(1));
-            }
-        }
-
-        return columns;
-    }
-
-    private static async Task<Dictionary<string, string>> GetPostgresColumnTypesAsync(NpgsqlConnection postgres, NpgsqlTransaction transaction, string tableName, CancellationToken cancellationToken)
-    {
-        const string sql = """
-            select column_name, data_type
-            from information_schema.columns
-            where table_schema = 'public' and table_name = @tableName;
-            """;
-
-        await using var command = new NpgsqlCommand(sql, postgres, transaction);
-        command.Parameters.AddWithValue("@tableName", tableName);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            result[reader.GetString(0)] = reader.GetString(1);
-        }
-
-        return result;
-    }
-
-    private static Task WriteSqliteValueAsync(NpgsqlBinaryImporter importer, object value, string postgresType, CancellationToken cancellationToken)
-    {
-        return postgresType switch
-        {
-            "bigint" => importer.WriteAsync(Convert.ToInt64(value), cancellationToken),
-            "integer" => importer.WriteAsync(Convert.ToInt32(value), cancellationToken),
-            "smallint" => importer.WriteAsync(Convert.ToInt16(value), cancellationToken),
-            "numeric" => importer.WriteAsync(Convert.ToDecimal(value), cancellationToken),
-            "double precision" => importer.WriteAsync(Convert.ToDouble(value), cancellationToken),
-            "real" => importer.WriteAsync(Convert.ToSingle(value), cancellationToken),
-            "boolean" => importer.WriteAsync(ToBoolean(value), cancellationToken),
-            "timestamp with time zone" => importer.WriteAsync(ToUtcDateTime(value), cancellationToken),
-            "timestamp without time zone" => importer.WriteAsync(ToUnspecifiedDateTime(value), cancellationToken),
-            "date" => importer.WriteAsync(ToDateOnly(value), cancellationToken),
-            "uuid" => importer.WriteAsync(ToGuid(value), cancellationToken),
-            _ => importer.WriteAsync(Convert.ToString(value, CultureInfo.InvariantCulture), cancellationToken)
-        };
-    }
-
-    private static bool ToBoolean(object value)
-    {
-        return value switch
-        {
-            bool booleanValue => booleanValue,
-            long longValue => longValue != 0,
-            int intValue => intValue != 0,
-            short shortValue => shortValue != 0,
-            byte byteValue => byteValue != 0,
-            string stringValue when bool.TryParse(stringValue, out var parsedBoolean) => parsedBoolean,
-            string stringValue when long.TryParse(stringValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedInteger) => parsedInteger != 0,
-            _ => Convert.ToInt64(value, CultureInfo.InvariantCulture) != 0
-        };
-    }
-
-    private static DateTime ToUtcDateTime(object value)
-    {
-        return value switch
-        {
-            DateTime dateTime => dateTime.Kind switch
-            {
-                DateTimeKind.Utc => dateTime,
-                DateTimeKind.Local => dateTime.ToUniversalTime(),
-                _ => DateTime.SpecifyKind(dateTime, DateTimeKind.Utc)
-            },
-            DateTimeOffset dateTimeOffset => dateTimeOffset.UtcDateTime,
-            string stringValue => DateTimeOffset.Parse(stringValue, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind).UtcDateTime,
-            _ => DateTime.SpecifyKind(Convert.ToDateTime(value, CultureInfo.InvariantCulture), DateTimeKind.Utc)
-        };
-    }
-
-    private static DateTime ToUnspecifiedDateTime(object value)
-    {
-        return value switch
-        {
-            DateTime dateTime => dateTime.Kind == DateTimeKind.Unspecified
-                ? dateTime
-                : DateTime.SpecifyKind(dateTime, DateTimeKind.Unspecified),
-            DateTimeOffset dateTimeOffset => DateTime.SpecifyKind(dateTimeOffset.DateTime, DateTimeKind.Unspecified),
-            string stringValue => DateTime.SpecifyKind(
-                DateTimeOffset.Parse(stringValue, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind).DateTime,
-                DateTimeKind.Unspecified),
-            _ => DateTime.SpecifyKind(Convert.ToDateTime(value, CultureInfo.InvariantCulture), DateTimeKind.Unspecified)
-        };
-    }
-
-    private static DateOnly ToDateOnly(object value)
-    {
-        return value switch
-        {
-            DateOnly dateOnly => dateOnly,
-            DateTime dateTime => DateOnly.FromDateTime(dateTime),
-            DateTimeOffset dateTimeOffset => DateOnly.FromDateTime(dateTimeOffset.DateTime),
-            string stringValue => DateOnly.Parse(stringValue, CultureInfo.InvariantCulture),
-            _ => DateOnly.FromDateTime(Convert.ToDateTime(value, CultureInfo.InvariantCulture))
-        };
-    }
-
-    private static Guid ToGuid(object value)
-    {
-        return value switch
-        {
-            Guid guid => guid,
-            string stringValue => Guid.Parse(stringValue),
-            _ => Guid.Parse(Convert.ToString(value, CultureInfo.InvariantCulture) ?? throw new InvalidOperationException("Cannot convert null value to GUID."))
-        };
     }
 
     private static NpgsqlParameter CreateArrayParameter(string parameterName, NpgsqlDbType elementType, Array values) =>
@@ -1559,62 +979,6 @@ public sealed partial class PostgresBackedSqlitePlanningRepository : IPlanningRe
             """;
         await using var command = new NpgsqlCommand(sql, postgres, transaction);
         await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private static string EscapeJson(string value) =>
-        value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
-
-    private sealed class PostgresSyncPlan
-    {
-        public bool FullSnapshot { get; private set; }
-        public HashSet<string> TablesToReplace { get; } = new(StringComparer.OrdinalIgnoreCase);
-        public Dictionary<string, PlanningCell> CellUpserts { get; } = new(StringComparer.Ordinal);
-        public bool HasMutations => FullSnapshot || TablesToReplace.Count > 0 || CellUpserts.Count > 0;
-
-        public void QueueFullSnapshot()
-        {
-            FullSnapshot = true;
-            TablesToReplace.Clear();
-            CellUpserts.Clear();
-        }
-
-        public void QueueTableReplace(params IEnumerable<string>[] tableNames)
-        {
-            if (FullSnapshot)
-            {
-                return;
-            }
-
-            foreach (var tableCollection in tableNames)
-            {
-                foreach (var tableName in tableCollection)
-                {
-                    TablesToReplace.Add(tableName);
-                    if (string.Equals(tableName, "planning_cells", StringComparison.OrdinalIgnoreCase))
-                    {
-                        CellUpserts.Clear();
-                    }
-                }
-            }
-        }
-
-        public void QueueTableReplace(params string[] tableNames)
-        {
-            QueueTableReplace((IEnumerable<string>)tableNames);
-        }
-
-        public void QueueCellUpserts(IEnumerable<PlanningCell> cells)
-        {
-            if (FullSnapshot || TablesToReplace.Contains("planning_cells"))
-            {
-                return;
-            }
-
-            foreach (var cell in cells)
-            {
-                CellUpserts[cell.Coordinate.Key] = cell.Clone();
-            }
-        }
     }
 
     private sealed class PostgresDirectAtomicContext(NpgsqlConnection connection, NpgsqlTransaction transaction) : IAsyncDisposable

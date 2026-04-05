@@ -3,18 +3,6 @@
   "Transform": "AWS::Serverless-2016-10-31",
   "Description": "Sales Planning demo API for test and UAT in ap-southeast-5.",
   "Parameters": {
-    "PlanningStorageMode": {
-      "Type": "String",
-      "Default": "s3-sqlite"
-    },
-    "PlanningStorageS3Bucket": {
-      "Type": "String",
-      "Default": "sales-planning-demo-files-427304877733-ap-southeast-5-an"
-    },
-    "PlanningStorageS3ObjectKey": {
-      "Type": "String",
-      "Default": "planning/demo-planning.db"
-    },
     "PlanningPostgresSecretArn": {
       "Type": "String",
       "Default": ""
@@ -22,26 +10,6 @@
     "PlanningApplyMigrationsOnStartup": {
       "Type": "String",
       "Default": "false"
-    },
-    "PlanningBootstrapS3Bucket": {
-      "Type": "String",
-      "Default": ""
-    },
-    "PlanningBootstrapS3ObjectKey": {
-      "Type": "String",
-      "Default": ""
-    },
-    "PlanningBootstrapS3Region": {
-      "Type": "String",
-      "Default": "ap-southeast-5"
-    },
-    "PlanningBootstrapSeedKey": {
-      "Type": "String",
-      "Default": ""
-    },
-    "PlanningDbPath": {
-      "Type": "String",
-      "Default": "/tmp/sales-planning-demo/planning.db"
     },
     "LambdaSubnetIds": {
       "Type": "String",
@@ -105,38 +73,11 @@
         },
         "Environment": {
           "Variables": {
-            "PlanningStorageMode": {
-              "Ref": "PlanningStorageMode"
-            },
-            "PlanningStorageS3Bucket": {
-              "Ref": "PlanningStorageS3Bucket"
-            },
-            "PlanningStorageS3ObjectKey": {
-              "Ref": "PlanningStorageS3ObjectKey"
-            },
-            "PlanningStorageS3Region": {
-              "Ref": "AWS::Region"
-            },
             "PlanningPostgresSecretArn": {
               "Ref": "PlanningPostgresSecretArn"
             },
             "PlanningApplyMigrationsOnStartup": {
               "Ref": "PlanningApplyMigrationsOnStartup"
-            },
-            "PlanningBootstrapS3Bucket": {
-              "Ref": "PlanningBootstrapS3Bucket"
-            },
-            "PlanningBootstrapS3ObjectKey": {
-              "Ref": "PlanningBootstrapS3ObjectKey"
-            },
-            "PlanningBootstrapS3Region": {
-              "Ref": "PlanningBootstrapS3Region"
-            },
-            "PlanningBootstrapSeedKey": {
-              "Ref": "PlanningBootstrapSeedKey"
-            },
-            "PlanningDbPath": {
-              "Ref": "PlanningDbPath"
             },
             "CorsAllowedOrigins": {
               "Ref": "CorsAllowedOrigins"
@@ -180,18 +121,6 @@
       "Description": "HTTP API endpoint for the demo planning API.",
       "Value": {
         "Fn::Sub": "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
-      }
-    },
-    "PlanningStorageObject": {
-      "Description": "Legacy S3 object used for the prior SQLite demo storage.",
-      "Value": {
-        "Fn::Sub": "s3://${PlanningStorageS3Bucket}/${PlanningStorageS3ObjectKey}"
-      }
-    },
-    "PlanningStorageMode": {
-      "Description": "Persistence mode used by the deployed API.",
-      "Value": {
-        "Ref": "PlanningStorageMode"
       }
     }
   }

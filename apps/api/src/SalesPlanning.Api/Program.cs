@@ -14,8 +14,6 @@ var builder = WebApplication.CreateBuilder(args);
 const string storageMode = "postgres";
 var securityMode = builder.Configuration["PlanningSecurityMode"] ?? "entra";
 var authEnabled = !string.Equals(securityMode, "disabled", StringComparison.OrdinalIgnoreCase);
-var planningDbPath = builder.Configuration["PlanningDbPath"]
-    ?? Path.Combine(Path.GetTempPath(), "sales-planning-demo", "planning.db");
 var corsAllowedOrigins = (builder.Configuration["CorsAllowedOrigins"] ?? "http://localhost:5173,https://localhost:5173,https://d22xc0mfhkv9bk.cloudfront.net")
     .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 var entraTenantId = builder.Configuration["EntraTenantId"] ?? "76ad236c-6db1-4d3d-9901-996450816c3c";
@@ -49,21 +47,16 @@ if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("AWS_LAMBDA_FU
 
 builder.Services.AddSingleton<IPlanningRepository>(serviceProvider =>
 {
-    var postgresLogger = serviceProvider.GetRequiredService<ILogger<PostgresBackedSqlitePlanningRepository>>();
+    var postgresLogger = serviceProvider.GetRequiredService<ILogger<PostgresPlanningRepository>>();
     var migrationsDirectory = Path.Combine(builder.Environment.ContentRootPath, "Infrastructure", "Postgres", "Migrations");
     var applyMigrationsOnStartup = bool.TryParse(builder.Configuration["PlanningApplyMigrationsOnStartup"], out var parsedApplyMigrations)
         ? parsedApplyMigrations
         : true;
-    return new PostgresBackedSqlitePlanningRepository(
+    return new PostgresPlanningRepository(
         postgresConnectionString,
         postgresLogger,
-        planningDbPath,
         applyMigrationsOnStartup,
-        migrationsDirectory,
-        builder.Configuration["PlanningBootstrapS3Bucket"],
-        builder.Configuration["PlanningBootstrapS3ObjectKey"],
-        builder.Configuration["PlanningBootstrapS3Region"],
-        builder.Configuration["PlanningBootstrapSeedKey"]);
+        migrationsDirectory);
 });
 builder.Services.AddSingleton<ISplashAllocator, SplashAllocator>();
 builder.Services.AddSingleton<PlanningAsyncJobManager>(serviceProvider =>

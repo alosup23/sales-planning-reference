@@ -5,7 +5,7 @@ using SalesPlanning.Api.Security;
 
 namespace SalesPlanning.Api.Infrastructure.Postgres;
 
-public sealed partial class PostgresBackedSqlitePlanningRepository
+public sealed partial class PostgresPlanningRepository
 {
     private async Task<IReadOnlyList<PlanningCell>> GetDraftCellsDirectAsync(
         long scenarioVersionId,
@@ -232,32 +232,26 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
             await importer.CompleteAsync(cancellationToken);
         }
 
-        var secondaryUserIds = userContext.CandidateUserIds
-            .Where(candidate => !string.Equals(candidate, userContext.PrimaryUserId, StringComparison.Ordinal))
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-
-        if (secondaryUserIds.Length > 0)
+        await using (var deleteExistingCommand = new NpgsqlCommand(
+                         $"""
+                         delete from planning_draft_cells as target
+                         using {stageTableName} as source
+                         where target.scenario_version_id = source.scenario_version_id
+                           and target.user_id = any(@candidateUserIds)
+                           and target.measure_id = source.measure_id
+                           and target.store_id = source.store_id
+                           and target.product_node_id = source.product_node_id
+                           and target.time_period_id = source.time_period_id;
+                         """,
+                         connection,
+                         transaction))
         {
-            await using var deleteAliasCommand = new NpgsqlCommand(
-                $"""
-                delete from planning_draft_cells as target
-                using {stageTableName} as source
-                where target.scenario_version_id = source.scenario_version_id
-                  and target.user_id = any(@secondaryUserIds)
-                  and target.measure_id = source.measure_id
-                  and target.store_id = source.store_id
-                  and target.product_node_id = source.product_node_id
-                  and target.time_period_id = source.time_period_id;
-                """,
-                connection,
-                transaction);
-            deleteAliasCommand.CommandTimeout = 300;
-            deleteAliasCommand.Parameters.Add(CreateArrayParameter("@secondaryUserIds", NpgsqlDbType.Text, secondaryUserIds));
-            await deleteAliasCommand.ExecuteNonQueryAsync(cancellationToken);
+            deleteExistingCommand.CommandTimeout = 300;
+            deleteExistingCommand.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
+            await deleteExistingCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await using (var mergeCommand = new NpgsqlCommand(
+        await using (var insertCommand = new NpgsqlCommand(
                          $"""
                          insert into planning_draft_cells (
                              scenario_version_id,
@@ -297,34 +291,14 @@ public sealed partial class PostgresBackedSqlitePlanningRepository
                              source.row_version,
                              source.cell_kind,
                              now()
-                         from {stageTableName} as source
-                         on conflict (
-                             scenario_version_id,
-                             user_id,
-                             measure_id,
-                             store_id,
-                             product_node_id,
-                             time_period_id)
-                         do update set
-                             input_value = excluded.input_value,
-                             override_value = excluded.override_value,
-                             is_system_generated_override = excluded.is_system_generated_override,
-                             derived_value = excluded.derived_value,
-                             effective_value = excluded.effective_value,
-                             growth_factor = excluded.growth_factor,
-                             is_locked = excluded.is_locked,
-                             lock_reason = excluded.lock_reason,
-                             locked_by = excluded.locked_by,
-                             row_version = excluded.row_version,
-                             cell_kind = excluded.cell_kind,
-                             updated_at = excluded.updated_at;
+                         from {stageTableName} as source;
                          """,
                          connection,
                          transaction))
         {
-            mergeCommand.CommandTimeout = 300;
-            mergeCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
-            await mergeCommand.ExecuteNonQueryAsync(cancellationToken);
+            insertCommand.CommandTimeout = 300;
+            insertCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+            await insertCommand.ExecuteNonQueryAsync(cancellationToken);
         }
     }
 

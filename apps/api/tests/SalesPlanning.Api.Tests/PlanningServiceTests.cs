@@ -10,14 +10,22 @@ using Xunit;
 namespace SalesPlanning.Api.Tests;
 
 public sealed class PlanningServiceTests
+    : IClassFixture<PostgresPlanningTestFixture>, IAsyncLifetime
 {
-    private readonly InMemoryPlanningRepository _repository = new();
+    private readonly IPlanningRepository _repository;
     private readonly PlanningService _service;
+    private readonly PostgresPlanningTestFixture _fixture;
 
-    public PlanningServiceTests()
+    public PlanningServiceTests(PostgresPlanningTestFixture fixture)
     {
-        _service = new PlanningService(_repository, new SplashAllocator());
+        _fixture = fixture;
+        _repository = fixture.Repository;
+        _service = fixture.Service;
     }
+
+    public Task InitializeAsync() => _fixture.ResetAsync();
+
+    public Task DisposeAsync() => Task.CompletedTask;
 
     private async Task<PlanningCell?> GetEffectiveCellAsync(PlanningCellCoordinate coordinate, string userId = "planner.one")
     {
@@ -889,143 +897,6 @@ public sealed class PlanningServiceTests
 
         Assert.Equal(28.5m, departmentRows.SubclassRow.Cells[202600].Measures[PlanningMeasures.GrossProfitPercent].Value);
         Assert.Equal(28.5m, storeRows.SubclassRow.Cells[202600].Measures[PlanningMeasures.GrossProfitPercent].Value);
-    }
-
-    [Fact]
-    public async Task ApplySplashAsync_OnLeafYearGrossProfitPercent_WithDirectSqliteRepository_RemainsConsistentAcrossViews()
-    {
-        var databasePath = Path.Combine(Path.GetTempPath(), $"sales-planning-sqlite-{Guid.NewGuid():N}.db");
-        try
-        {
-            var sqliteRepository = new SqlitePlanningRepository(databasePath);
-            var sqliteService = new PlanningService(sqliteRepository, new SplashAllocator());
-
-            var response = await sqliteService.ApplySplashAsync(
-                new SplashRequest(
-                    1,
-                    PlanningMeasures.GrossProfitPercent,
-                    new SplashCoordinateDto(101, 2111, 202600),
-                    28.5m,
-                    "seasonality_profile",
-                    1,
-                    "Leaf year GP% sqlite splash",
-                    null,
-                    [new SplashScopeRootDto(101, 2111)]),
-                "local.test.user",
-                CancellationToken.None);
-            Assert.NotNull(response.Patch);
-            var patchCell = Assert.Single(response.Patch!.Cells, cell =>
-                cell.StoreId == 101 &&
-                cell.ProductNodeId == 2111 &&
-                cell.TimePeriodId == 202600 &&
-                cell.MeasureId == PlanningMeasures.GrossProfitPercent);
-            Assert.Equal(28.5m, patchCell.Cell.Value);
-            await sqliteService.SaveScenarioAsync(new SaveScenarioRequest(1, "manual"), "local.test.user", CancellationToken.None);
-
-            var request = new PlanningGridViewRequest(1, "department", null, "Beverages", "department-store-class", false);
-            var departmentRows = await sqliteService.GetGridViewChildrenAsync(request, "view:department:root", "local.test.user", CancellationToken.None);
-            var beveragesRow = Assert.Single(departmentRows.Rows, row => row.Label == "Beverages");
-            var storeRows = await sqliteService.GetGridViewChildrenAsync(request, beveragesRow.ViewRowId!, "local.test.user", CancellationToken.None);
-            var storeRow = Assert.Single(storeRows.Rows, row => row.Label == "Store A");
-            var classRows = await sqliteService.GetGridViewChildrenAsync(request, storeRow.ViewRowId!, "local.test.user", CancellationToken.None);
-            var classRow = Assert.Single(classRows.Rows, row => row.Label == "Soft Drinks");
-            var subclassRows = await sqliteService.GetGridViewChildrenAsync(request, classRow.ViewRowId!, "local.test.user", CancellationToken.None);
-            var subclassRow = Assert.Single(subclassRows.Rows, row => row.Label == "Cola");
-
-            Assert.Equal(28.5m, subclassRow.Cells[202600].Measures[PlanningMeasures.GrossProfitPercent].Value);
-        }
-        finally
-        {
-            if (File.Exists(databasePath))
-            {
-                File.Delete(databasePath);
-            }
-        }
-    }
-
-    [Fact]
-    public async Task ApplySplashAsync_OnLeafYearGrossProfitPercent_WithCopiedAppDataSqliteRepository_ReturnsExactPatch()
-    {
-        var sourceDatabasePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../../api/src/SalesPlanning.Api/App_Data/planning.db"));
-        var databasePath = Path.Combine(Path.GetTempPath(), $"sales-planning-appdata-copy-{Guid.NewGuid():N}.db");
-        File.Copy(sourceDatabasePath, databasePath, true);
-
-        try
-        {
-            var sqliteRepository = new SqlitePlanningRepository(databasePath);
-            await sqliteRepository.ResetAsync(CancellationToken.None);
-            var sqliteService = new PlanningService(sqliteRepository, new SplashAllocator());
-
-            var response = await sqliteService.ApplySplashAsync(
-                new SplashRequest(
-                    1,
-                    PlanningMeasures.GrossProfitPercent,
-                    new SplashCoordinateDto(101, 2111, 202600),
-                    28.5m,
-                    "seasonality_profile",
-                    1,
-                    "Leaf year GP% copied appdata splash",
-                    null,
-                    [new SplashScopeRootDto(101, 2111)]),
-                "local.test.user",
-                CancellationToken.None);
-
-            Assert.NotNull(response.Patch);
-            var patchCell = Assert.Single(response.Patch!.Cells, cell =>
-                cell.StoreId == 101 &&
-                cell.ProductNodeId == 2111 &&
-                cell.TimePeriodId == 202600 &&
-                cell.MeasureId == PlanningMeasures.GrossProfitPercent);
-            Assert.Equal(28.5m, patchCell.Cell.Value);
-        }
-        finally
-        {
-            if (File.Exists(databasePath))
-            {
-                File.Delete(databasePath);
-            }
-        }
-    }
-
-    [Fact]
-    public async Task ApplySplashAsync_OnLeafYearGrossProfitPercent_WithDirectSqliteRepositoryAfterReset_ReturnsExactPatch()
-    {
-        var databasePath = Path.Combine(Path.GetTempPath(), $"sales-planning-sqlite-reset-{Guid.NewGuid():N}.db");
-        try
-        {
-            var sqliteRepository = new SqlitePlanningRepository(databasePath);
-            await sqliteRepository.ResetAsync(CancellationToken.None);
-            var sqliteService = new PlanningService(sqliteRepository, new SplashAllocator());
-
-            var response = await sqliteService.ApplySplashAsync(
-                new SplashRequest(
-                    1,
-                    PlanningMeasures.GrossProfitPercent,
-                    new SplashCoordinateDto(101, 2111, 202600),
-                    28.5m,
-                    "seasonality_profile",
-                    1,
-                    "Leaf year GP% sqlite splash after reset",
-                    null,
-                    [new SplashScopeRootDto(101, 2111)]),
-                "local.test.user",
-                CancellationToken.None);
-
-            Assert.NotNull(response.Patch);
-            var patchCell = Assert.Single(response.Patch!.Cells, cell =>
-                cell.StoreId == 101 &&
-                cell.ProductNodeId == 2111 &&
-                cell.TimePeriodId == 202600 &&
-                cell.MeasureId == PlanningMeasures.GrossProfitPercent);
-            Assert.Equal(28.5m, patchCell.Cell.Value);
-        }
-        finally
-        {
-            if (File.Exists(databasePath))
-            {
-                File.Delete(databasePath);
-            }
-        }
     }
 
     [Fact]

@@ -6,7 +6,6 @@ if (args.Length < 2)
     Console.WriteLine("""
         Usage:
           SalesPlanning.PostgresAdmin migrate <connectionString> [migrationsDirectory]
-          SalesPlanning.PostgresAdmin import-sqlite <connectionString> <sqliteDbPath> <seedKey> [sourceName]
           SalesPlanning.PostgresAdmin draft-stats <connectionString> [scenarioVersionId]
         """);
     return 1;
@@ -21,12 +20,6 @@ var loggerFactory = LoggerFactory.Create(builder => builder.AddSimpleConsole(opt
 var command = args[0];
 var connectionString = args[1];
 var migrationsDirectory = Path.Combine(AppContext.BaseDirectory, "Infrastructure", "Postgres", "Migrations");
-var repository = new PostgresBackedSqlitePlanningRepository(
-    connectionString,
-    loggerFactory.CreateLogger<PostgresBackedSqlitePlanningRepository>(),
-    Path.Combine(Path.GetTempPath(), "sales-planning-postgres-admin", "planning.db"),
-    applyMigrationsOnStartup: false,
-    migrationsDirectory);
 
 switch (command)
 {
@@ -36,23 +29,6 @@ switch (command)
         var migrator = new PostgresMigrationRunner(connectionString, directory, loggerFactory.CreateLogger<PostgresMigrationRunner>());
         await migrator.ApplyMigrationsAsync(CancellationToken.None);
         Console.WriteLine("PostgreSQL migrations applied successfully.");
-        return 0;
-    }
-    case "import-sqlite":
-    {
-        if (args.Length < 4)
-        {
-            Console.Error.WriteLine("Usage: SalesPlanning.PostgresAdmin import-sqlite <connectionString> <sqliteDbPath> <seedKey> [sourceName]");
-            return 2;
-        }
-
-        var sqliteDbPath = args[2];
-        var seedKey = args[3];
-        var sourceName = args.Length >= 5 ? args[4] : Path.GetFileName(sqliteDbPath);
-        var migrator = new PostgresMigrationRunner(connectionString, migrationsDirectory, loggerFactory.CreateLogger<PostgresMigrationRunner>());
-        await migrator.ApplyMigrationsAsync(CancellationToken.None);
-        await repository.ImportSqliteSnapshotAsync(sqliteDbPath, seedKey, sourceName, CancellationToken.None);
-        Console.WriteLine($"Imported SQLite snapshot '{sourceName}' into PostgreSQL using seed key '{seedKey}'.");
         return 0;
     }
     case "draft-stats":

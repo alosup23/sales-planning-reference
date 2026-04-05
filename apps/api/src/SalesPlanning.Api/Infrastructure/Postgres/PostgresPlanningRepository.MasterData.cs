@@ -4,7 +4,7 @@ using SalesPlanning.Api.Domain;
 
 namespace SalesPlanning.Api.Infrastructure.Postgres;
 
-public sealed partial class PostgresBackedSqlitePlanningRepository
+public sealed partial class PostgresPlanningRepository
 {
     private async Task<(IReadOnlyList<InventoryProfileRecord> Profiles, int TotalCount)> GetInventoryProfilesDirectAsync(
         string? searchTerm,

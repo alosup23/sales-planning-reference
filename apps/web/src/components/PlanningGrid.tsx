@@ -267,41 +267,20 @@ export function PlanningGrid({
       node.setData(nextRow);
     });
 
-    const loadedRowsByKey = new Map<string, GridRowView>();
-    api.forEachNode((node) => {
-      if (!node.data) {
-        return;
-      }
-
-      loadedRowsByKey.set(getRowKey(node.data), node.data);
-    });
-
-    const aggregateRows = [...loadedRowsByKey.values()]
-      .filter(isAggregateRow)
-      .sort((left, right) => right.path.length - left.path.length);
-
-    aggregateRows.forEach((row) => {
-      const directChildren = [...loadedRowsByKey.values()].filter((candidate) => isDirectChildRow(row, candidate));
-      if (directChildren.length === 0) {
-        return;
-      }
-
-      const recomputed = recomputeSyntheticRow(row, directChildren, data);
-      if (recomputed === row) {
-        return;
-      }
-
-      const rowKey = getRowKey(recomputed);
-      updatesByRowKey.set(rowKey, recomputed);
-      loadedRowsByKey.set(rowKey, recomputed);
-      rowCacheRef.current.set(rowKey, recomputed);
-      api.getRowNode(rowKey)?.setData(recomputed);
-    });
+    recomputeLoadedAggregateRows(api, data, rowCacheRef.current, updatesByRowKey);
 
     if (updatesByRowKey.size > 0) {
       setRowCacheVersion((current) => current + 1);
     }
   }, [patchToken, pendingPatch]);
+
+  const recomputeVisibleAggregateRows = (api: GridApi<GridRowView>) => {
+    const updatesByRowKey = new Map<string, GridRowView>();
+    recomputeLoadedAggregateRows(api, data, rowCacheRef.current, updatesByRowKey);
+    if (updatesByRowKey.size > 0) {
+      setRowCacheVersion((current) => current + 1);
+    }
+  };
 
   const selectedRow = selectedRowKey ? rowCacheRef.current.get(selectedRowKey.id) ?? null : null;
   const contextRow = contextMenu ? rowCacheRef.current.get(contextMenu.rowKey.id) ?? null : null;
@@ -435,6 +414,11 @@ export function PlanningGrid({
               rowData: patchedRows,
               rowCount: patchedRows.length,
             });
+            if (pendingPatchRef.current?.cells.length) {
+              queueMicrotask(() => {
+                recomputeVisibleAggregateRows(params.api);
+              });
+            }
           } catch (error) {
             const message = error instanceof Error ? error.message : "Unable to load planning rows.";
             onLoadError?.(message);
@@ -443,7 +427,7 @@ export function PlanningGrid({
         })();
       },
     }),
-    [loadChildRows, onLoadError],
+    [data, loadChildRows, onLoadError],
   );
 
   useEffect(() => {
@@ -1233,6 +1217,44 @@ function recomputeAggregateRows(
   });
 
   return rows.map((row) => rowsByKey.get(getRowKey(row)) ?? row);
+}
+
+function recomputeLoadedAggregateRows(
+  api: GridApi<GridRowView>,
+  data: GridSliceResponse,
+  rowCache: Map<string, GridRowView>,
+  updatesByRowKey: Map<string, GridRowView>,
+) {
+  const loadedRowsByKey = new Map<string, GridRowView>();
+  api.forEachNode((node) => {
+    if (!node.data) {
+      return;
+    }
+
+    loadedRowsByKey.set(getRowKey(node.data), node.data);
+  });
+
+  const aggregateRows = [...loadedRowsByKey.values()]
+    .filter(isAggregateRow)
+    .sort((left, right) => right.path.length - left.path.length);
+
+  aggregateRows.forEach((row) => {
+    const directChildren = [...loadedRowsByKey.values()].filter((candidate) => isDirectChildRow(row, candidate));
+    if (directChildren.length === 0) {
+      return;
+    }
+
+    const recomputed = recomputeSyntheticRow(row, directChildren, data);
+    if (recomputed === row) {
+      return;
+    }
+
+    const rowKey = getRowKey(recomputed);
+    updatesByRowKey.set(rowKey, recomputed);
+    loadedRowsByKey.set(rowKey, recomputed);
+    rowCache.set(rowKey, recomputed);
+    api.getRowNode(rowKey)?.setData(recomputed);
+  });
 }
 
 function applyPatchToRows(

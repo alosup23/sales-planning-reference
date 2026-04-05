@@ -51,7 +51,7 @@ public static class PostgresConnectionStringResolver
         var secretArn = configuration["PlanningPostgresSecretArn"];
         if (string.IsNullOrWhiteSpace(secretArn))
         {
-            throw new InvalidOperationException("PlanningPostgresConnectionString or PlanningPostgresSecretArn must be configured when PlanningStorageMode is postgres.");
+            throw new InvalidOperationException("PlanningPostgresConnectionString or PlanningPostgresSecretArn must be configured for the PostgreSQL runtime.");
         }
 
         using var secretsManager = new AmazonSecretsManagerClient();

@@ -7,7 +7,7 @@ using SalesPlanning.Api.Domain;
 
 namespace SalesPlanning.Api.Infrastructure.Postgres;
 
-public sealed partial class PostgresBackedSqlitePlanningRepository
+public sealed partial class PostgresPlanningRepository
 {
     private async Task<PlanningMetadataSnapshot> GetMetadataDirectAsync(CancellationToken cancellationToken)
     {
