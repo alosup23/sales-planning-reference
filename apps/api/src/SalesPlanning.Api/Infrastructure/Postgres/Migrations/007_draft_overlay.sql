@@ -29,6 +29,7 @@ create table if not exists planning_draft_command_batches (
     user_id text not null,
     command_kind text not null,
     command_scope_json text null,
+    deltas_json text null,
     is_undone integer not null default 0,
     superseded_by_batch_id bigint null,
     created_at timestamptz not null default now(),

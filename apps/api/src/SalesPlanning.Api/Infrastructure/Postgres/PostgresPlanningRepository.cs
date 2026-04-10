@@ -268,9 +268,18 @@ public sealed partial class PostgresPlanningRepository : IPlanningRepository
 
     public async Task AppendDraftCommandBatchAsync(PlanningCommandBatch batch, CancellationToken cancellationToken)
     {
+        var stopwatch = Stopwatch.StartNew();
         await ExecuteDirectNonVersionedMutationAsync(
             (connection, transaction, ct) => AppendDraftCommandBatchDirectAsync(connection, transaction, batch, ct),
             cancellationToken);
+        _logger.LogInformation(
+            "Appended planning draft command batch {CommandBatchId} ({CommandKind}) with {DeltaCount} deltas for scenario {ScenarioVersionId} user {UserId} in {ElapsedMs} ms.",
+            batch.CommandBatchId,
+            batch.CommandKind,
+            batch.Deltas.Count,
+            batch.ScenarioVersionId,
+            batch.UserId,
+            stopwatch.ElapsedMilliseconds);
     }
 
     public Task<PlanningUndoRedoAvailability> GetUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, int limit, CancellationToken cancellationToken) =>
@@ -339,6 +348,7 @@ public sealed partial class PostgresPlanningRepository : IPlanningRepository
         await ExecuteDirectMutationAsync(
             (connection, transaction, ct) => CommitDraftDirectAsync(connection, transaction, scenarioVersionId, userContext, ct),
             cancellationToken);
+        InvalidateReadCaches("planning_cells");
         _logger.LogInformation(
             "Committed planning draft for scenario {ScenarioVersionId} user {UserId} in {ElapsedMs} ms.",
             scenarioVersionId,
