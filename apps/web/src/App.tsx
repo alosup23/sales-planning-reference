@@ -2091,7 +2091,7 @@ export default function App() {
               onScopeRowClick={handleScopeRowClick}
               sheetLabel={activeView === "planning-store" ? "Planning - by Store" : "Planning - by Department"}
               expansionStateKey={activeView === "planning-department" ? departmentLayout : activeView}
-              defaultExpandedDepth={activeView === "planning-store" ? 0 : -1}
+              defaultExpandedDepth={0}
               initialVisibleRowTarget={activeView === "planning-store" ? 2 : 1}
               pendingPatch={pendingPlanningPatch}
               patchToken={planningPatchToken}

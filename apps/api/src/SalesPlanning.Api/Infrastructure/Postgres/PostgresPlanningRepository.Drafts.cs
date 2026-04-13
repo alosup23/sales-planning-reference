@@ -271,14 +271,6 @@ public sealed partial class PostgresPlanningRepository
                     locked_by,
                     row_version,
                     cell_kind)
-            left join planning_draft_cells as existing
-              on existing.scenario_version_id = @scenarioVersionId
-             and existing.user_id = @primaryUserId
-             and existing.measure_id = source.measure_id
-             and existing.store_id = source.store_id
-             and existing.product_node_id = source.product_node_id
-             and existing.time_period_id = source.time_period_id
-            where existing.scenario_version_id is null;
             """;
 
         foreach (var cellChunk in orderedCells.Chunk(BulkWriteChunkSize))
