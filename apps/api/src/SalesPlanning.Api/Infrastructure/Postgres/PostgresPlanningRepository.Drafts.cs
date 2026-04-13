@@ -200,79 +200,6 @@ public sealed partial class PostgresPlanningRepository
               and target.time_period_id = source.time_period_id;
             """;
 
-        const string insertPrimarySql = """
-            insert into planning_draft_cells (
-                scenario_version_id,
-                user_id,
-                measure_id,
-                store_id,
-                product_node_id,
-                time_period_id,
-                input_value,
-                override_value,
-                is_system_generated_override,
-                derived_value,
-                effective_value,
-                growth_factor,
-                is_locked,
-                lock_reason,
-                locked_by,
-                row_version,
-                cell_kind,
-                updated_at)
-            select
-                @scenarioVersionId,
-                @primaryUserId,
-                source.measure_id,
-                source.store_id,
-                source.product_node_id,
-                source.time_period_id,
-                source.input_value,
-                source.override_value,
-                source.is_system_generated_override,
-                source.derived_value,
-                source.effective_value,
-                source.growth_factor,
-                source.is_locked,
-                source.lock_reason,
-                source.locked_by,
-                source.row_version,
-                source.cell_kind,
-                now()
-            from unnest(
-                @measureIds,
-                @storeIds,
-                @productNodeIds,
-                @timePeriodIds,
-                @inputValues,
-                @overrideValues,
-                @isSystemGeneratedOverrideValues,
-                @derivedValues,
-                @effectiveValues,
-                @growthFactors,
-                @isLockedValues,
-                @lockReasons,
-                @lockedByValues,
-                @rowVersions,
-                @cellKinds)
-                as source(
-                    measure_id,
-                    store_id,
-                    product_node_id,
-                    time_period_id,
-                    input_value,
-                    override_value,
-                    is_system_generated_override,
-                    derived_value,
-                    effective_value,
-                    growth_factor,
-                    is_locked,
-                    lock_reason,
-                    locked_by,
-                    row_version,
-                    cell_kind)
-            """;
-
         const string upsertSinglePrimarySql = """
             insert into planning_draft_cells (
                 scenario_version_id,
@@ -404,31 +331,6 @@ public sealed partial class PostgresPlanningRepository
                 .ToArray();
             if (missingCells.Length == 0)
             {
-                continue;
-            }
-
-            if (updatedCount == 0 && missingCells.Length == cellChunk.Length)
-            {
-                await using var insertCommand = new NpgsqlCommand(insertPrimarySql, connection, transaction);
-                insertCommand.CommandTimeout = 300;
-                insertCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
-                insertCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
-                insertCommand.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, missingCells.Select(cell => cell.Coordinate.MeasureId).ToArray()));
-                insertCommand.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, missingCells.Select(cell => cell.Coordinate.StoreId).ToArray()));
-                insertCommand.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, missingCells.Select(cell => cell.Coordinate.ProductNodeId).ToArray()));
-                insertCommand.Parameters.Add(CreateArrayParameter("@timePeriodIds", NpgsqlDbType.Bigint, missingCells.Select(cell => cell.Coordinate.TimePeriodId).ToArray()));
-                insertCommand.Parameters.Add(CreateArrayParameter("@inputValues", NpgsqlDbType.Numeric, missingCells.Select(cell => cell.InputValue).ToArray()));
-                insertCommand.Parameters.Add(CreateArrayParameter("@overrideValues", NpgsqlDbType.Numeric, missingCells.Select(cell => cell.OverrideValue).ToArray()));
-                insertCommand.Parameters.Add(CreateArrayParameter("@isSystemGeneratedOverrideValues", NpgsqlDbType.Integer, missingCells.Select(cell => cell.IsSystemGeneratedOverride ? 1 : 0).ToArray()));
-                insertCommand.Parameters.Add(CreateArrayParameter("@derivedValues", NpgsqlDbType.Numeric, missingCells.Select(cell => cell.DerivedValue).ToArray()));
-                insertCommand.Parameters.Add(CreateArrayParameter("@effectiveValues", NpgsqlDbType.Numeric, missingCells.Select(cell => cell.EffectiveValue).ToArray()));
-                insertCommand.Parameters.Add(CreateArrayParameter("@growthFactors", NpgsqlDbType.Numeric, missingCells.Select(cell => cell.GrowthFactor).ToArray()));
-                insertCommand.Parameters.Add(CreateArrayParameter("@isLockedValues", NpgsqlDbType.Integer, missingCells.Select(cell => cell.IsLocked ? 1 : 0).ToArray()));
-                insertCommand.Parameters.Add(CreateArrayParameter("@lockReasons", NpgsqlDbType.Text, missingCells.Select(cell => cell.LockReason).ToArray()));
-                insertCommand.Parameters.Add(CreateArrayParameter("@lockedByValues", NpgsqlDbType.Text, missingCells.Select(cell => cell.LockedBy).ToArray()));
-                insertCommand.Parameters.Add(CreateArrayParameter("@rowVersions", NpgsqlDbType.Bigint, missingCells.Select(cell => cell.RowVersion).ToArray()));
-                insertCommand.Parameters.Add(CreateArrayParameter("@cellKinds", NpgsqlDbType.Text, missingCells.Select(cell => cell.CellKind).ToArray()));
-                await insertCommand.ExecuteNonQueryAsync(cancellationToken);
                 continue;
             }
 
