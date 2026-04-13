@@ -112,7 +112,12 @@ public sealed partial class PlanningService : IPlanningService
             }
 
             RecalculateImpactedCells(originalCells, workingCells, metadata, request.ScenarioVersionId, editInstructions);
-            var deltas = await PersistDraftChangesAsync(request.ScenarioVersionId, userId, originalCells, workingCells.Values, "manual-edit", ct);
+            var impactedCoordinates = BuildImpactedCoordinates(request.ScenarioVersionId, metadata, editInstructions);
+            var impactedWorkingCells = impactedCoordinates
+                .Where(coordinate => workingCells.ContainsKey(coordinate.Key))
+                .Select(coordinate => workingCells[coordinate.Key])
+                .ToList();
+            var deltas = await PersistDraftChangesAsync(request.ScenarioVersionId, userId, originalCells, impactedWorkingCells, "manual-edit", ct);
             var actionId = await AppendDraftCommandBatchAsync(
                 request.ScenarioVersionId,
                 userId,
@@ -168,7 +173,12 @@ public sealed partial class PlanningService : IPlanningService
                 metadata);
 
             RecalculateImpactedCells(originalCells, workingCells, metadata, request.ScenarioVersionId, [instruction]);
-            var deltas = await PersistDraftChangesAsync(request.ScenarioVersionId, userId, originalCells, workingCells.Values, "splash", ct);
+            var impactedCoordinates = BuildImpactedCoordinates(request.ScenarioVersionId, metadata, [instruction]);
+            var impactedWorkingCells = impactedCoordinates
+                .Where(coordinate => workingCells.ContainsKey(coordinate.Key))
+                .Select(coordinate => workingCells[coordinate.Key])
+                .ToList();
+            var deltas = await PersistDraftChangesAsync(request.ScenarioVersionId, userId, originalCells, impactedWorkingCells, "splash", ct);
             var actionId = await AppendDraftCommandBatchAsync(
                 request.ScenarioVersionId,
                 userId,
@@ -528,7 +538,12 @@ public sealed partial class PlanningService : IPlanningService
             ResetGrowthFactors(workingCells.Values, request.MeasureId);
 
             RecalculateImpactedCells(originalCells, workingCells, metadata, request.ScenarioVersionId, [instruction]);
-            var deltas = await PersistDraftChangesAsync(request.ScenarioVersionId, userId, originalCells, workingCells.Values, "growth-factor", ct);
+            var impactedCoordinates = BuildImpactedCoordinates(request.ScenarioVersionId, metadata, [instruction]);
+            var impactedWorkingCells = impactedCoordinates
+                .Where(coordinate => workingCells.ContainsKey(coordinate.Key))
+                .Select(coordinate => workingCells[coordinate.Key])
+                .ToList();
+            var deltas = await PersistDraftChangesAsync(request.ScenarioVersionId, userId, originalCells, impactedWorkingCells, "growth-factor", ct);
             var actionId = await AppendDraftCommandBatchAsync(
                 request.ScenarioVersionId,
                 userId,
@@ -557,12 +572,17 @@ public sealed partial class PlanningService : IPlanningService
 
     public async Task<SaveScenarioResponse> SaveScenarioAsync(SaveScenarioRequest request, string userId, CancellationToken cancellationToken)
     {
-        var primaryUserId = GetPrimaryPlanningUserId(userId);
-        var savedAt = DateTimeOffset.UtcNow;
-        await _repository.CommitDraftAsync(request.ScenarioVersionId, userId, cancellationToken);
-        await _repository.RecordSaveCheckpointAsync(request.ScenarioVersionId, primaryUserId, request.Mode, savedAt, cancellationToken);
-        await AppendAuditAsync("save", request.Mode, userId, $"Scenario {request.ScenarioVersionId} save checkpoint", [], cancellationToken);
-        return new SaveScenarioResponse("saved", request.Mode, savedAt);
+        return await _repository.ExecuteAtomicAsync(async ct =>
+        {
+            var primaryUserId = GetPrimaryPlanningUserId(userId);
+            var savedAt = DateTimeOffset.UtcNow;
+
+            await _repository.CommitDraftAsync(request.ScenarioVersionId, userId, ct);
+            await _repository.RecordSaveCheckpointAsync(request.ScenarioVersionId, primaryUserId, request.Mode, savedAt, ct);
+            await AppendAuditAsync("save", request.Mode, primaryUserId, $"Scenario {request.ScenarioVersionId} save checkpoint", [], ct);
+
+            return new SaveScenarioResponse("saved", request.Mode, savedAt);
+        }, cancellationToken);
     }
 
     public async Task<UndoRedoAvailabilityDto> GetUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken)
@@ -2188,32 +2208,7 @@ public sealed partial class PlanningService : IPlanningService
         string changeKind,
         CancellationToken cancellationToken)
     {
-        var originalByKey = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell);
-        var changedCells = new List<PlanningCell>();
-        var deltas = new List<PlanningCommandCellDelta>();
-
-        foreach (var cell in workingCells)
-        {
-            if (!originalByKey.TryGetValue(cell.Coordinate.Key, out var original))
-            {
-                changedCells.Add(cell);
-                continue;
-            }
-
-            if (!HasMaterialChange(original, cell))
-            {
-                continue;
-            }
-
-            var updated = cell.Clone();
-            updated.RowVersion = original.RowVersion + 1;
-            changedCells.Add(updated);
-            deltas.Add(new PlanningCommandCellDelta(
-                updated.Coordinate,
-                PlanningCellState.FromCell(original),
-                PlanningCellState.FromCell(updated),
-                changeKind));
-        }
+        var (changedCells, deltas) = BuildChangedCellsAndDeltas(originalCells, workingCells, changeKind);
 
         await _repository.UpsertCellsAsync(changedCells, cancellationToken);
         return deltas;
@@ -2227,17 +2222,26 @@ public sealed partial class PlanningService : IPlanningService
         string changeKind,
         CancellationToken cancellationToken)
     {
+        var (changedCells, deltas) = BuildChangedCellsAndDeltas(originalCells, workingCells, changeKind);
+
+        await _repository.UpsertDraftCellsAsync(scenarioVersionId, userId, changedCells, cancellationToken);
+        return deltas;
+    }
+
+    private static (List<PlanningCell> ChangedCells, List<PlanningCommandCellDelta> Deltas) BuildChangedCellsAndDeltas(
+        IReadOnlyList<PlanningCell> originalCells,
+        IEnumerable<PlanningCell> workingCells,
+        string changeKind)
+    {
         var originalByKey = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell);
         var changedCells = new List<PlanningCell>();
         var deltas = new List<PlanningCommandCellDelta>();
 
         foreach (var cell in workingCells)
         {
-            if (!originalByKey.TryGetValue(cell.Coordinate.Key, out var original))
-            {
-                changedCells.Add(cell.Clone());
-                continue;
-            }
+            var original = originalByKey.TryGetValue(cell.Coordinate.Key, out var existing)
+                ? existing
+                : CreateImplicitOriginalCell(cell);
 
             if (!HasMaterialChange(original, cell))
             {
@@ -2254,8 +2258,7 @@ public sealed partial class PlanningService : IPlanningService
                 changeKind));
         }
 
-        await _repository.UpsertDraftCellsAsync(scenarioVersionId, userId, changedCells, cancellationToken);
-        return deltas;
+        return (changedCells, deltas);
     }
 
     private async Task<long> AppendAuditAsync(
@@ -2353,6 +2356,25 @@ public sealed partial class PlanningService : IPlanningService
                left.LockReason != right.LockReason ||
                left.LockedBy != right.LockedBy ||
                left.CellKind != right.CellKind;
+    }
+
+    private static PlanningCell CreateImplicitOriginalCell(PlanningCell cell)
+    {
+        return new PlanningCell
+        {
+            Coordinate = cell.Coordinate,
+            InputValue = null,
+            OverrideValue = null,
+            IsSystemGeneratedOverride = false,
+            DerivedValue = 0m,
+            EffectiveValue = 0m,
+            GrowthFactor = 1.0m,
+            IsLocked = false,
+            LockReason = null,
+            LockedBy = null,
+            RowVersion = 0,
+            CellKind = cell.CellKind
+        };
     }
 
     private static bool IsLockedBySelfOrAncestor(

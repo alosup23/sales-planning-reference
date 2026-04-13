@@ -623,9 +623,7 @@ export default function App() {
     mutationFn: ({ mode }: { mode: "manual" | "autosave" }) => postSave({ scenarioVersionId: 1, mode }),
     onSuccess: async (result) => {
       setLastError(null);
-      clearPlanningDirty();
       setLastSavedAt(result.savedAt);
-      setPendingPlanningPatch(null);
       clearInactivePlanningSliceCaches();
       setPlanningGridRefreshToken((current) => current + 1);
       await refreshPlanningQueries({
@@ -634,6 +632,8 @@ export default function App() {
         includeUndoRedo: true,
         includeInsights: false,
       });
+      clearPlanningDirty();
+      setPendingPlanningPatch(null);
     },
     onError: (error: Error) => setLastError(error.message),
   });

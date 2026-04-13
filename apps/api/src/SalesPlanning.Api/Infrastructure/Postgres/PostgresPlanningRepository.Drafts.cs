@@ -2,6 +2,7 @@ using Npgsql;
 using NpgsqlTypes;
 using SalesPlanning.Api.Domain;
 using SalesPlanning.Api.Security;
+using System.Text;
 using System.Text.Json;
 
 namespace SalesPlanning.Api.Infrastructure.Postgres;
@@ -145,7 +146,61 @@ public sealed partial class PostgresPlanningRepository
               and target.time_period_id = source.time_period_id;
             """;
 
-        const string upsertPrimarySql = """
+        const string updatePrimarySql = """
+            update planning_draft_cells as target
+            set input_value = source.input_value,
+                override_value = source.override_value,
+                is_system_generated_override = source.is_system_generated_override,
+                derived_value = source.derived_value,
+                effective_value = source.effective_value,
+                growth_factor = source.growth_factor,
+                is_locked = source.is_locked,
+                lock_reason = source.lock_reason,
+                locked_by = source.locked_by,
+                row_version = source.row_version,
+                cell_kind = source.cell_kind,
+                updated_at = now()
+            from unnest(
+                @measureIds,
+                @storeIds,
+                @productNodeIds,
+                @timePeriodIds,
+                @inputValues,
+                @overrideValues,
+                @isSystemGeneratedOverrideValues,
+                @derivedValues,
+                @effectiveValues,
+                @growthFactors,
+                @isLockedValues,
+                @lockReasons,
+                @lockedByValues,
+                @rowVersions,
+                @cellKinds)
+                as source(
+                    measure_id,
+                    store_id,
+                    product_node_id,
+                    time_period_id,
+                    input_value,
+                    override_value,
+                    is_system_generated_override,
+                    derived_value,
+                    effective_value,
+                    growth_factor,
+                    is_locked,
+                    lock_reason,
+                    locked_by,
+                    row_version,
+                    cell_kind)
+            where target.scenario_version_id = @scenarioVersionId
+              and target.user_id = @primaryUserId
+              and target.measure_id = source.measure_id
+              and target.store_id = source.store_id
+              and target.product_node_id = source.product_node_id
+              and target.time_period_id = source.time_period_id;
+            """;
+
+        const string insertPrimarySql = """
             insert into planning_draft_cells (
                 scenario_version_id,
                 user_id,
@@ -216,20 +271,14 @@ public sealed partial class PostgresPlanningRepository
                     locked_by,
                     row_version,
                     cell_kind)
-            on conflict (scenario_version_id, user_id, measure_id, store_id, product_node_id, time_period_id)
-            do update set
-                input_value = excluded.input_value,
-                override_value = excluded.override_value,
-                is_system_generated_override = excluded.is_system_generated_override,
-                derived_value = excluded.derived_value,
-                effective_value = excluded.effective_value,
-                growth_factor = excluded.growth_factor,
-                is_locked = excluded.is_locked,
-                lock_reason = excluded.lock_reason,
-                locked_by = excluded.locked_by,
-                row_version = excluded.row_version,
-                cell_kind = excluded.cell_kind,
-                updated_at = now();
+            left join planning_draft_cells as existing
+              on existing.scenario_version_id = @scenarioVersionId
+             and existing.user_id = @primaryUserId
+             and existing.measure_id = source.measure_id
+             and existing.store_id = source.store_id
+             and existing.product_node_id = source.product_node_id
+             and existing.time_period_id = source.time_period_id
+            where existing.scenario_version_id is null;
             """;
 
         foreach (var cellChunk in orderedCells.Chunk(BulkWriteChunkSize))
@@ -252,27 +301,62 @@ public sealed partial class PostgresPlanningRepository
                 await deleteAliasCommand.ExecuteNonQueryAsync(cancellationToken);
             }
 
-            await using (var upsertCommand = new NpgsqlCommand(upsertPrimarySql, connection, transaction))
+            var inputValues = cellChunk.Select(cell => cell.InputValue).ToArray();
+            var overrideValues = cellChunk.Select(cell => cell.OverrideValue).ToArray();
+            var isSystemGeneratedOverrideValues = cellChunk.Select(cell => cell.IsSystemGeneratedOverride ? 1 : 0).ToArray();
+            var derivedValues = cellChunk.Select(cell => cell.DerivedValue).ToArray();
+            var effectiveValues = cellChunk.Select(cell => cell.EffectiveValue).ToArray();
+            var growthFactors = cellChunk.Select(cell => cell.GrowthFactor).ToArray();
+            var isLockedValues = cellChunk.Select(cell => cell.IsLocked ? 1 : 0).ToArray();
+            var lockReasons = cellChunk.Select(cell => cell.LockReason).ToArray();
+            var lockedByValues = cellChunk.Select(cell => cell.LockedBy).ToArray();
+            var rowVersions = cellChunk.Select(cell => cell.RowVersion).ToArray();
+            var cellKinds = cellChunk.Select(cell => cell.CellKind).ToArray();
+
+            await using (var updateCommand = new NpgsqlCommand(updatePrimarySql, connection, transaction))
             {
-                upsertCommand.CommandTimeout = 300;
-                upsertCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
-                upsertCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
-                upsertCommand.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, measureIds));
-                upsertCommand.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, storeIds));
-                upsertCommand.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, productNodeIds));
-                upsertCommand.Parameters.Add(CreateArrayParameter("@timePeriodIds", NpgsqlDbType.Bigint, timePeriodIds));
-                upsertCommand.Parameters.Add(CreateArrayParameter("@inputValues", NpgsqlDbType.Numeric, cellChunk.Select(cell => cell.InputValue).ToArray()));
-                upsertCommand.Parameters.Add(CreateArrayParameter("@overrideValues", NpgsqlDbType.Numeric, cellChunk.Select(cell => cell.OverrideValue).ToArray()));
-                upsertCommand.Parameters.Add(CreateArrayParameter("@isSystemGeneratedOverrideValues", NpgsqlDbType.Integer, cellChunk.Select(cell => cell.IsSystemGeneratedOverride ? 1 : 0).ToArray()));
-                upsertCommand.Parameters.Add(CreateArrayParameter("@derivedValues", NpgsqlDbType.Numeric, cellChunk.Select(cell => cell.DerivedValue).ToArray()));
-                upsertCommand.Parameters.Add(CreateArrayParameter("@effectiveValues", NpgsqlDbType.Numeric, cellChunk.Select(cell => cell.EffectiveValue).ToArray()));
-                upsertCommand.Parameters.Add(CreateArrayParameter("@growthFactors", NpgsqlDbType.Numeric, cellChunk.Select(cell => cell.GrowthFactor).ToArray()));
-                upsertCommand.Parameters.Add(CreateArrayParameter("@isLockedValues", NpgsqlDbType.Integer, cellChunk.Select(cell => cell.IsLocked ? 1 : 0).ToArray()));
-                upsertCommand.Parameters.Add(CreateArrayParameter("@lockReasons", NpgsqlDbType.Text, cellChunk.Select(cell => cell.LockReason).ToArray()));
-                upsertCommand.Parameters.Add(CreateArrayParameter("@lockedByValues", NpgsqlDbType.Text, cellChunk.Select(cell => cell.LockedBy).ToArray()));
-                upsertCommand.Parameters.Add(CreateArrayParameter("@rowVersions", NpgsqlDbType.Bigint, cellChunk.Select(cell => cell.RowVersion).ToArray()));
-                upsertCommand.Parameters.Add(CreateArrayParameter("@cellKinds", NpgsqlDbType.Text, cellChunk.Select(cell => cell.CellKind).ToArray()));
-                await upsertCommand.ExecuteNonQueryAsync(cancellationToken);
+                updateCommand.CommandTimeout = 300;
+                updateCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+                updateCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+                updateCommand.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, measureIds));
+                updateCommand.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, storeIds));
+                updateCommand.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, productNodeIds));
+                updateCommand.Parameters.Add(CreateArrayParameter("@timePeriodIds", NpgsqlDbType.Bigint, timePeriodIds));
+                updateCommand.Parameters.Add(CreateArrayParameter("@inputValues", NpgsqlDbType.Numeric, inputValues));
+                updateCommand.Parameters.Add(CreateArrayParameter("@overrideValues", NpgsqlDbType.Numeric, overrideValues));
+                updateCommand.Parameters.Add(CreateArrayParameter("@isSystemGeneratedOverrideValues", NpgsqlDbType.Integer, isSystemGeneratedOverrideValues));
+                updateCommand.Parameters.Add(CreateArrayParameter("@derivedValues", NpgsqlDbType.Numeric, derivedValues));
+                updateCommand.Parameters.Add(CreateArrayParameter("@effectiveValues", NpgsqlDbType.Numeric, effectiveValues));
+                updateCommand.Parameters.Add(CreateArrayParameter("@growthFactors", NpgsqlDbType.Numeric, growthFactors));
+                updateCommand.Parameters.Add(CreateArrayParameter("@isLockedValues", NpgsqlDbType.Integer, isLockedValues));
+                updateCommand.Parameters.Add(CreateArrayParameter("@lockReasons", NpgsqlDbType.Text, lockReasons));
+                updateCommand.Parameters.Add(CreateArrayParameter("@lockedByValues", NpgsqlDbType.Text, lockedByValues));
+                updateCommand.Parameters.Add(CreateArrayParameter("@rowVersions", NpgsqlDbType.Bigint, rowVersions));
+                updateCommand.Parameters.Add(CreateArrayParameter("@cellKinds", NpgsqlDbType.Text, cellKinds));
+                await updateCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await using (var insertCommand = new NpgsqlCommand(insertPrimarySql, connection, transaction))
+            {
+                insertCommand.CommandTimeout = 300;
+                insertCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+                insertCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+                insertCommand.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, measureIds));
+                insertCommand.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, storeIds));
+                insertCommand.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, productNodeIds));
+                insertCommand.Parameters.Add(CreateArrayParameter("@timePeriodIds", NpgsqlDbType.Bigint, timePeriodIds));
+                insertCommand.Parameters.Add(CreateArrayParameter("@inputValues", NpgsqlDbType.Numeric, inputValues));
+                insertCommand.Parameters.Add(CreateArrayParameter("@overrideValues", NpgsqlDbType.Numeric, overrideValues));
+                insertCommand.Parameters.Add(CreateArrayParameter("@isSystemGeneratedOverrideValues", NpgsqlDbType.Integer, isSystemGeneratedOverrideValues));
+                insertCommand.Parameters.Add(CreateArrayParameter("@derivedValues", NpgsqlDbType.Numeric, derivedValues));
+                insertCommand.Parameters.Add(CreateArrayParameter("@effectiveValues", NpgsqlDbType.Numeric, effectiveValues));
+                insertCommand.Parameters.Add(CreateArrayParameter("@growthFactors", NpgsqlDbType.Numeric, growthFactors));
+                insertCommand.Parameters.Add(CreateArrayParameter("@isLockedValues", NpgsqlDbType.Integer, isLockedValues));
+                insertCommand.Parameters.Add(CreateArrayParameter("@lockReasons", NpgsqlDbType.Text, lockReasons));
+                insertCommand.Parameters.Add(CreateArrayParameter("@lockedByValues", NpgsqlDbType.Text, lockedByValues));
+                insertCommand.Parameters.Add(CreateArrayParameter("@rowVersions", NpgsqlDbType.Bigint, rowVersions));
+                insertCommand.Parameters.Add(CreateArrayParameter("@cellKinds", NpgsqlDbType.Text, cellKinds));
+                await insertCommand.ExecuteNonQueryAsync(cancellationToken);
             }
         }
     }
@@ -328,7 +412,7 @@ public sealed partial class PostgresPlanningRepository
             headerCommand.Parameters.AddWithValue("@userId", batch.UserId);
             headerCommand.Parameters.AddWithValue("@commandKind", batch.CommandKind);
             headerCommand.Parameters.AddWithValue("@commandScopeJson", (object?)batch.CommandScopeJson ?? DBNull.Value);
-            headerCommand.Parameters.AddWithValue("@deltasJson", batch.Deltas.Count == 0 ? DBNull.Value : JsonSerializer.Serialize(batch.Deltas));
+            headerCommand.Parameters.AddWithValue("@deltasJson", batch.Deltas.Count == 0 ? DBNull.Value : SerializeDraftBatchDeltas(batch.Deltas));
             headerCommand.Parameters.AddWithValue("@isUndone", batch.IsUndone ? 1 : 0);
             headerCommand.Parameters.AddWithValue("@supersededByBatchId", (object?)batch.SupersededByBatchId ?? DBNull.Value);
             headerCommand.Parameters.AddWithValue("@createdAt", batch.CreatedAt);
@@ -604,7 +688,7 @@ public sealed partial class PostgresPlanningRepository
         List<PlanningCommandCellDelta> deltas;
         if (!string.IsNullOrWhiteSpace(deltasJson))
         {
-            deltas = JsonSerializer.Deserialize<List<PlanningCommandCellDelta>>(deltasJson) ?? [];
+            deltas = DeserializeDraftBatchDeltas(deltasJson);
         }
         else
         {
@@ -694,6 +778,145 @@ public sealed partial class PostgresPlanningRepository
             createdAt,
             undoneAt,
             deltas);
+    }
+
+    internal static string SerializeDraftBatchDeltas(IReadOnlyList<PlanningCommandCellDelta> deltas)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            writer.WriteNumber("v", 2);
+            writer.WritePropertyName("d");
+            writer.WriteStartArray();
+
+            foreach (var delta in deltas)
+            {
+                writer.WriteStartArray();
+                writer.WriteNumberValue(delta.Coordinate.ScenarioVersionId);
+                writer.WriteNumberValue(delta.Coordinate.MeasureId);
+                writer.WriteNumberValue(delta.Coordinate.StoreId);
+                writer.WriteNumberValue(delta.Coordinate.ProductNodeId);
+                writer.WriteNumberValue(delta.Coordinate.TimePeriodId);
+                WriteCompactCellState(writer, delta.OldState);
+                WriteCompactCellState(writer, delta.NewState);
+                writer.WriteStringValue(delta.ChangeKind);
+                writer.WriteEndArray();
+            }
+
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    internal static List<PlanningCommandCellDelta> DeserializeDraftBatchDeltas(string deltasJson)
+    {
+        using var document = JsonDocument.Parse(deltasJson);
+        var root = document.RootElement;
+
+        if (root.ValueKind == JsonValueKind.Object
+            && root.TryGetProperty("v", out var versionElement)
+            && versionElement.ValueKind == JsonValueKind.Number
+            && versionElement.GetInt32() == 2
+            && root.TryGetProperty("d", out var deltasElement)
+            && deltasElement.ValueKind == JsonValueKind.Array)
+        {
+            var deltas = new List<PlanningCommandCellDelta>(deltasElement.GetArrayLength());
+            foreach (var element in deltasElement.EnumerateArray())
+            {
+                if (element.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                var items = element.EnumerateArray().ToArray();
+                if (items.Length != 8)
+                {
+                    continue;
+                }
+
+                var coordinate = new PlanningCellCoordinate(
+                    items[0].GetInt64(),
+                    items[1].GetInt64(),
+                    items[2].GetInt64(),
+                    items[3].GetInt64(),
+                    items[4].GetInt64());
+                deltas.Add(new PlanningCommandCellDelta(
+                    coordinate,
+                    ReadCompactCellState(items[5]),
+                    ReadCompactCellState(items[6]),
+                    items[7].GetString() ?? string.Empty));
+            }
+
+            return deltas;
+        }
+
+        return JsonSerializer.Deserialize<List<PlanningCommandCellDelta>>(deltasJson) ?? [];
+    }
+
+    private static void WriteCompactCellState(Utf8JsonWriter writer, PlanningCellState state)
+    {
+        writer.WriteStartArray();
+        WriteNullableDecimal(writer, state.InputValue);
+        WriteNullableDecimal(writer, state.OverrideValue);
+        writer.WriteBooleanValue(state.IsSystemGeneratedOverride);
+        writer.WriteNumberValue(state.DerivedValue);
+        writer.WriteNumberValue(state.EffectiveValue);
+        writer.WriteNumberValue(state.GrowthFactor);
+        writer.WriteBooleanValue(state.IsLocked);
+        WriteNullableString(writer, state.LockReason);
+        WriteNullableString(writer, state.LockedBy);
+        writer.WriteNumberValue(state.RowVersion);
+        writer.WriteStringValue(state.CellKind);
+        writer.WriteEndArray();
+    }
+
+    private static PlanningCellState ReadCompactCellState(JsonElement element)
+    {
+        var items = element.EnumerateArray().ToArray();
+        return new PlanningCellState(
+            ReadNullableDecimal(items[0]),
+            ReadNullableDecimal(items[1]),
+            items[2].GetBoolean(),
+            items[3].GetDecimal(),
+            items[4].GetDecimal(),
+            items[5].GetDecimal(),
+            items[6].GetBoolean(),
+            items[7].ValueKind == JsonValueKind.Null ? null : items[7].GetString(),
+            items[8].ValueKind == JsonValueKind.Null ? null : items[8].GetString(),
+            items[9].GetInt64(),
+            items[10].GetString() ?? "input");
+    }
+
+    private static void WriteNullableDecimal(Utf8JsonWriter writer, decimal? value)
+    {
+        if (value.HasValue)
+        {
+            writer.WriteNumberValue(value.Value);
+            return;
+        }
+
+        writer.WriteNullValue();
+    }
+
+    private static decimal? ReadNullableDecimal(JsonElement element)
+    {
+        return element.ValueKind == JsonValueKind.Null
+            ? null
+            : element.GetDecimal();
+    }
+
+    private static void WriteNullableString(Utf8JsonWriter writer, string? value)
+    {
+        if (value is not null)
+        {
+            writer.WriteStringValue(value);
+            return;
+        }
+
+        writer.WriteNullValue();
     }
 
     private static async Task CommitDraftDirectAsync(

@@ -189,6 +189,48 @@ public sealed partial class PlanningService
         return coordinates;
     }
 
+    private static IReadOnlyList<PlanningCellCoordinate> BuildImpactedCoordinates(
+        long scenarioVersionId,
+        PlanningMetadataSnapshot metadata,
+        IReadOnlyCollection<PlanningMutationInstruction> instructions)
+    {
+        var productNodeIds = instructions
+            .SelectMany(instruction => instruction.TargetLeafProductIds.Concat(instruction.AggregateProductNodeIds))
+            .Distinct()
+            .OrderBy(id => id)
+            .ToList();
+        var timePeriodIds = instructions
+            .SelectMany(instruction => instruction.TargetLeafTimeIds.Concat(instruction.AggregateTimePeriodIds))
+            .Distinct()
+            .OrderBy(id => id)
+            .ToList();
+
+        return BuildCoordinatesForMeasures(scenarioVersionId, metadata, productNodeIds, timePeriodIds, PlanningMeasures.SupportedMeasureIds);
+    }
+
+    private static IReadOnlyList<PlanningCellCoordinate> BuildCoordinatesForMeasures(
+        long scenarioVersionId,
+        PlanningMetadataSnapshot metadata,
+        IReadOnlyList<long> productNodeIds,
+        IReadOnlyList<long> timePeriodIds,
+        IReadOnlyList<long> measureIds)
+    {
+        var coordinates = new List<PlanningCellCoordinate>(productNodeIds.Count * timePeriodIds.Count * measureIds.Count);
+        foreach (var productNodeId in productNodeIds)
+        {
+            var storeId = metadata.ProductNodes[productNodeId].StoreId;
+            foreach (var timePeriodId in timePeriodIds)
+            {
+                foreach (var measureId in measureIds)
+                {
+                    coordinates.Add(new PlanningCellCoordinate(scenarioVersionId, measureId, storeId, productNodeId, timePeriodId));
+                }
+            }
+        }
+
+        return coordinates;
+    }
+
     private static void RecalculateImpactedCells(
         IReadOnlyList<PlanningCell> originalCells,
         IDictionary<string, PlanningCell> workingCells,
