@@ -313,6 +313,7 @@ public sealed partial class PostgresPlanningRepository
             var rowVersions = cellChunk.Select(cell => cell.RowVersion).ToArray();
             var cellKinds = cellChunk.Select(cell => cell.CellKind).ToArray();
 
+            var updatedCount = 0;
             await using (var updateCommand = new NpgsqlCommand(updatePrimarySql, connection, transaction))
             {
                 updateCommand.CommandTimeout = 300;
@@ -333,7 +334,30 @@ public sealed partial class PostgresPlanningRepository
                 updateCommand.Parameters.Add(CreateArrayParameter("@lockedByValues", NpgsqlDbType.Text, lockedByValues));
                 updateCommand.Parameters.Add(CreateArrayParameter("@rowVersions", NpgsqlDbType.Bigint, rowVersions));
                 updateCommand.Parameters.Add(CreateArrayParameter("@cellKinds", NpgsqlDbType.Text, cellKinds));
-                await updateCommand.ExecuteNonQueryAsync(cancellationToken);
+                updatedCount = await updateCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            if (updatedCount >= cellChunk.Length)
+            {
+                continue;
+            }
+
+            var existingKeys = await GetExistingPrimaryDraftCellKeysAsync(
+                connection,
+                transaction,
+                scenarioVersionId,
+                userContext.PrimaryUserId,
+                measureIds,
+                storeIds,
+                productNodeIds,
+                timePeriodIds,
+                cancellationToken);
+            var missingCells = cellChunk
+                .Where(cell => !existingKeys.Contains(cell.Coordinate.Key))
+                .ToArray();
+            if (missingCells.Length == 0)
+            {
+                continue;
             }
 
             await using (var insertCommand = new NpgsqlCommand(insertPrimarySql, connection, transaction))
@@ -341,24 +365,87 @@ public sealed partial class PostgresPlanningRepository
                 insertCommand.CommandTimeout = 300;
                 insertCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
                 insertCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
-                insertCommand.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, measureIds));
-                insertCommand.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, storeIds));
-                insertCommand.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, productNodeIds));
-                insertCommand.Parameters.Add(CreateArrayParameter("@timePeriodIds", NpgsqlDbType.Bigint, timePeriodIds));
-                insertCommand.Parameters.Add(CreateArrayParameter("@inputValues", NpgsqlDbType.Numeric, inputValues));
-                insertCommand.Parameters.Add(CreateArrayParameter("@overrideValues", NpgsqlDbType.Numeric, overrideValues));
-                insertCommand.Parameters.Add(CreateArrayParameter("@isSystemGeneratedOverrideValues", NpgsqlDbType.Integer, isSystemGeneratedOverrideValues));
-                insertCommand.Parameters.Add(CreateArrayParameter("@derivedValues", NpgsqlDbType.Numeric, derivedValues));
-                insertCommand.Parameters.Add(CreateArrayParameter("@effectiveValues", NpgsqlDbType.Numeric, effectiveValues));
-                insertCommand.Parameters.Add(CreateArrayParameter("@growthFactors", NpgsqlDbType.Numeric, growthFactors));
-                insertCommand.Parameters.Add(CreateArrayParameter("@isLockedValues", NpgsqlDbType.Integer, isLockedValues));
-                insertCommand.Parameters.Add(CreateArrayParameter("@lockReasons", NpgsqlDbType.Text, lockReasons));
-                insertCommand.Parameters.Add(CreateArrayParameter("@lockedByValues", NpgsqlDbType.Text, lockedByValues));
-                insertCommand.Parameters.Add(CreateArrayParameter("@rowVersions", NpgsqlDbType.Bigint, rowVersions));
-                insertCommand.Parameters.Add(CreateArrayParameter("@cellKinds", NpgsqlDbType.Text, cellKinds));
+                insertCommand.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, missingCells.Select(cell => cell.Coordinate.MeasureId).ToArray()));
+                insertCommand.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, missingCells.Select(cell => cell.Coordinate.StoreId).ToArray()));
+                insertCommand.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, missingCells.Select(cell => cell.Coordinate.ProductNodeId).ToArray()));
+                insertCommand.Parameters.Add(CreateArrayParameter("@timePeriodIds", NpgsqlDbType.Bigint, missingCells.Select(cell => cell.Coordinate.TimePeriodId).ToArray()));
+                insertCommand.Parameters.Add(CreateArrayParameter("@inputValues", NpgsqlDbType.Numeric, missingCells.Select(cell => cell.InputValue).ToArray()));
+                insertCommand.Parameters.Add(CreateArrayParameter("@overrideValues", NpgsqlDbType.Numeric, missingCells.Select(cell => cell.OverrideValue).ToArray()));
+                insertCommand.Parameters.Add(CreateArrayParameter("@isSystemGeneratedOverrideValues", NpgsqlDbType.Integer, missingCells.Select(cell => cell.IsSystemGeneratedOverride ? 1 : 0).ToArray()));
+                insertCommand.Parameters.Add(CreateArrayParameter("@derivedValues", NpgsqlDbType.Numeric, missingCells.Select(cell => cell.DerivedValue).ToArray()));
+                insertCommand.Parameters.Add(CreateArrayParameter("@effectiveValues", NpgsqlDbType.Numeric, missingCells.Select(cell => cell.EffectiveValue).ToArray()));
+                insertCommand.Parameters.Add(CreateArrayParameter("@growthFactors", NpgsqlDbType.Numeric, missingCells.Select(cell => cell.GrowthFactor).ToArray()));
+                insertCommand.Parameters.Add(CreateArrayParameter("@isLockedValues", NpgsqlDbType.Integer, missingCells.Select(cell => cell.IsLocked ? 1 : 0).ToArray()));
+                insertCommand.Parameters.Add(CreateArrayParameter("@lockReasons", NpgsqlDbType.Text, missingCells.Select(cell => cell.LockReason).ToArray()));
+                insertCommand.Parameters.Add(CreateArrayParameter("@lockedByValues", NpgsqlDbType.Text, missingCells.Select(cell => cell.LockedBy).ToArray()));
+                insertCommand.Parameters.Add(CreateArrayParameter("@rowVersions", NpgsqlDbType.Bigint, missingCells.Select(cell => cell.RowVersion).ToArray()));
+                insertCommand.Parameters.Add(CreateArrayParameter("@cellKinds", NpgsqlDbType.Text, missingCells.Select(cell => cell.CellKind).ToArray()));
                 await insertCommand.ExecuteNonQueryAsync(cancellationToken);
             }
         }
+    }
+
+    private static async Task<HashSet<string>> GetExistingPrimaryDraftCellKeysAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        long scenarioVersionId,
+        string primaryUserId,
+        long[] measureIds,
+        long[] storeIds,
+        long[] productNodeIds,
+        long[] timePeriodIds,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            select
+                existing.scenario_version_id,
+                existing.measure_id,
+                existing.store_id,
+                existing.product_node_id,
+                existing.time_period_id
+            from planning_draft_cells as existing
+            inner join unnest(
+                @measureIds,
+                @storeIds,
+                @productNodeIds,
+                @timePeriodIds)
+                as source(
+                    measure_id,
+                    store_id,
+                    product_node_id,
+                    time_period_id)
+                on existing.measure_id = source.measure_id
+               and existing.store_id = source.store_id
+               and existing.product_node_id = source.product_node_id
+               and existing.time_period_id = source.time_period_id
+            where existing.scenario_version_id = @scenarioVersionId
+              and existing.user_id = @primaryUserId;
+            """;
+
+        var existingKeys = new HashSet<string>(StringComparer.Ordinal);
+        await using var command = new NpgsqlCommand(sql, connection, transaction)
+        {
+            CommandTimeout = 300
+        };
+        command.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+        command.Parameters.AddWithValue("@primaryUserId", primaryUserId);
+        command.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, measureIds));
+        command.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, storeIds));
+        command.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, productNodeIds));
+        command.Parameters.Add(CreateArrayParameter("@timePeriodIds", NpgsqlDbType.Bigint, timePeriodIds));
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            existingKeys.Add(new PlanningCellCoordinate(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.GetInt64(2),
+                reader.GetInt64(3),
+                reader.GetInt64(4)).Key);
+        }
+
+        return existingKeys;
     }
 
     private Task<long> GetNextDraftCommandBatchIdDirectAsync(CancellationToken cancellationToken) =>
