@@ -167,47 +167,6 @@ public sealed partial class PostgresPlanningRepository
               and target.time_period_id = source.time_period_id;
             """;
 
-        const string insertPrimarySql = """
-            insert into planning_draft_cells (
-                scenario_version_id,
-                user_id,
-                measure_id,
-                store_id,
-                product_node_id,
-                time_period_id,
-                input_value,
-                override_value,
-                is_system_generated_override,
-                derived_value,
-                effective_value,
-                growth_factor,
-                is_locked,
-                lock_reason,
-                locked_by,
-                row_version,
-                cell_kind,
-                updated_at)
-            values (
-                @scenarioVersionId,
-                @primaryUserId,
-                @measureId,
-                @storeId,
-                @productNodeId,
-                @timePeriodId,
-                @inputValue,
-                @overrideValue,
-                @isSystemGeneratedOverride,
-                @derivedValue,
-                @effectiveValue,
-                @growthFactor,
-                @isLocked,
-                @lockReason,
-                @lockedBy,
-                @rowVersion,
-                @cellKind,
-                now());
-            """;
-
         foreach (var cellChunk in orderedCells.Chunk(BulkWriteChunkSize))
         {
             var chunkStopwatch = Stopwatch.StartNew();
@@ -215,6 +174,123 @@ public sealed partial class PostgresPlanningRepository
             var storeIds = cellChunk.Select(cell => cell.Coordinate.StoreId).ToArray();
             var productNodeIds = cellChunk.Select(cell => cell.Coordinate.ProductNodeId).ToArray();
             var timePeriodIds = cellChunk.Select(cell => cell.Coordinate.TimePeriodId).ToArray();
+            var stageTableName = $"planning_draft_cells_stage_{Guid.NewGuid():N}";
+
+            var stageCreateStopwatch = Stopwatch.StartNew();
+            await using (var createStageCommand = new NpgsqlCommand(
+                $"""
+                create temp table {stageTableName} (
+                    scenario_version_id bigint not null,
+                    user_id text not null,
+                    measure_id bigint not null,
+                    store_id bigint not null,
+                    product_node_id bigint not null,
+                    time_period_id bigint not null,
+                    input_value numeric null,
+                    override_value numeric null,
+                    is_system_generated_override integer not null,
+                    derived_value numeric not null,
+                    effective_value numeric not null,
+                    growth_factor numeric not null,
+                    is_locked integer not null,
+                    lock_reason text null,
+                    locked_by text null,
+                    row_version bigint not null,
+                    cell_kind text not null
+                ) on commit drop;
+                """,
+                connection,
+                transaction))
+            {
+                createStageCommand.CommandTimeout = 300;
+                await createStageCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
+            stageCreateStopwatch.Stop();
+
+            var stageImportStopwatch = Stopwatch.StartNew();
+            await using (var importer = await connection.BeginBinaryImportAsync(
+                             $"""
+                              copy {stageTableName} (
+                                  scenario_version_id,
+                                  user_id,
+                                  measure_id,
+                                  store_id,
+                                  product_node_id,
+                                  time_period_id,
+                                  input_value,
+                                  override_value,
+                                  is_system_generated_override,
+                                  derived_value,
+                                  effective_value,
+                                  growth_factor,
+                                  is_locked,
+                                  lock_reason,
+                                  locked_by,
+                                  row_version,
+                                  cell_kind)
+                              from stdin (format binary)
+                              """,
+                             cancellationToken))
+            {
+                foreach (var cell in cellChunk)
+                {
+                    await importer.StartRowAsync(cancellationToken);
+                    await importer.WriteAsync(scenarioVersionId, NpgsqlDbType.Bigint, cancellationToken);
+                    await importer.WriteAsync(userContext.PrimaryUserId, NpgsqlDbType.Text, cancellationToken);
+                    await importer.WriteAsync(cell.Coordinate.MeasureId, NpgsqlDbType.Bigint, cancellationToken);
+                    await importer.WriteAsync(cell.Coordinate.StoreId, NpgsqlDbType.Bigint, cancellationToken);
+                    await importer.WriteAsync(cell.Coordinate.ProductNodeId, NpgsqlDbType.Bigint, cancellationToken);
+                    await importer.WriteAsync(cell.Coordinate.TimePeriodId, NpgsqlDbType.Bigint, cancellationToken);
+
+                    if (cell.InputValue is { } inputValue)
+                    {
+                        await importer.WriteAsync(inputValue, NpgsqlDbType.Numeric, cancellationToken);
+                    }
+                    else
+                    {
+                        await importer.WriteNullAsync(cancellationToken);
+                    }
+
+                    if (cell.OverrideValue is { } overrideValue)
+                    {
+                        await importer.WriteAsync(overrideValue, NpgsqlDbType.Numeric, cancellationToken);
+                    }
+                    else
+                    {
+                        await importer.WriteNullAsync(cancellationToken);
+                    }
+
+                    await importer.WriteAsync(cell.IsSystemGeneratedOverride ? 1 : 0, NpgsqlDbType.Integer, cancellationToken);
+                    await importer.WriteAsync(cell.DerivedValue, NpgsqlDbType.Numeric, cancellationToken);
+                    await importer.WriteAsync(cell.EffectiveValue, NpgsqlDbType.Numeric, cancellationToken);
+                    await importer.WriteAsync(cell.GrowthFactor, NpgsqlDbType.Numeric, cancellationToken);
+                    await importer.WriteAsync(cell.IsLocked ? 1 : 0, NpgsqlDbType.Integer, cancellationToken);
+
+                    if (cell.LockReason is { } lockReason)
+                    {
+                        await importer.WriteAsync(lockReason, NpgsqlDbType.Text, cancellationToken);
+                    }
+                    else
+                    {
+                        await importer.WriteNullAsync(cancellationToken);
+                    }
+
+                    if (cell.LockedBy is { } lockedBy)
+                    {
+                        await importer.WriteAsync(lockedBy, NpgsqlDbType.Text, cancellationToken);
+                    }
+                    else
+                    {
+                        await importer.WriteNullAsync(cancellationToken);
+                    }
+
+                    await importer.WriteAsync(cell.RowVersion, NpgsqlDbType.Bigint, cancellationToken);
+                    await importer.WriteAsync(cell.CellKind, NpgsqlDbType.Text, cancellationToken);
+                }
+
+                await importer.CompleteAsync(cancellationToken);
+            }
+            stageImportStopwatch.Stop();
 
             var aliasDeleteStopwatch = Stopwatch.StartNew();
             await using (var deleteAliasCommand = new NpgsqlCommand(deleteAliasSql, connection, transaction))
@@ -246,46 +322,53 @@ public sealed partial class PostgresPlanningRepository
             primaryDeleteStopwatch.Stop();
 
             var insertStopwatch = Stopwatch.StartNew();
-            await using (var insertPrimaryCommand = new NpgsqlCommand(insertPrimarySql, connection, transaction))
+            await using (var insertPrimaryCommand = new NpgsqlCommand(
+                $"""
+                insert into planning_draft_cells (
+                    scenario_version_id,
+                    user_id,
+                    measure_id,
+                    store_id,
+                    product_node_id,
+                    time_period_id,
+                    input_value,
+                    override_value,
+                    is_system_generated_override,
+                    derived_value,
+                    effective_value,
+                    growth_factor,
+                    is_locked,
+                    lock_reason,
+                    locked_by,
+                    row_version,
+                    cell_kind,
+                    updated_at)
+                select
+                    scenario_version_id,
+                    user_id,
+                    measure_id,
+                    store_id,
+                    product_node_id,
+                    time_period_id,
+                    input_value,
+                    override_value,
+                    is_system_generated_override,
+                    derived_value,
+                    effective_value,
+                    growth_factor,
+                    is_locked,
+                    lock_reason,
+                    locked_by,
+                    row_version,
+                    cell_kind,
+                    now()
+                from {stageTableName};
+                """,
+                connection,
+                transaction))
             {
                 insertPrimaryCommand.CommandTimeout = 300;
-                insertPrimaryCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
-                insertPrimaryCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
-                insertPrimaryCommand.Parameters.Add("@measureId", NpgsqlDbType.Bigint);
-                insertPrimaryCommand.Parameters.Add("@storeId", NpgsqlDbType.Bigint);
-                insertPrimaryCommand.Parameters.Add("@productNodeId", NpgsqlDbType.Bigint);
-                insertPrimaryCommand.Parameters.Add("@timePeriodId", NpgsqlDbType.Bigint);
-                insertPrimaryCommand.Parameters.Add("@inputValue", NpgsqlDbType.Numeric);
-                insertPrimaryCommand.Parameters.Add("@overrideValue", NpgsqlDbType.Numeric);
-                insertPrimaryCommand.Parameters.Add("@isSystemGeneratedOverride", NpgsqlDbType.Integer);
-                insertPrimaryCommand.Parameters.Add("@derivedValue", NpgsqlDbType.Numeric);
-                insertPrimaryCommand.Parameters.Add("@effectiveValue", NpgsqlDbType.Numeric);
-                insertPrimaryCommand.Parameters.Add("@growthFactor", NpgsqlDbType.Numeric);
-                insertPrimaryCommand.Parameters.Add("@isLocked", NpgsqlDbType.Integer);
-                insertPrimaryCommand.Parameters.Add("@lockReason", NpgsqlDbType.Text);
-                insertPrimaryCommand.Parameters.Add("@lockedBy", NpgsqlDbType.Text);
-                insertPrimaryCommand.Parameters.Add("@rowVersion", NpgsqlDbType.Bigint);
-                insertPrimaryCommand.Parameters.Add("@cellKind", NpgsqlDbType.Text);
-
-                foreach (var cell in cellChunk)
-                {
-                    insertPrimaryCommand.Parameters["@measureId"].Value = cell.Coordinate.MeasureId;
-                    insertPrimaryCommand.Parameters["@storeId"].Value = cell.Coordinate.StoreId;
-                    insertPrimaryCommand.Parameters["@productNodeId"].Value = cell.Coordinate.ProductNodeId;
-                    insertPrimaryCommand.Parameters["@timePeriodId"].Value = cell.Coordinate.TimePeriodId;
-                    insertPrimaryCommand.Parameters["@inputValue"].Value = (object?)cell.InputValue ?? DBNull.Value;
-                    insertPrimaryCommand.Parameters["@overrideValue"].Value = (object?)cell.OverrideValue ?? DBNull.Value;
-                    insertPrimaryCommand.Parameters["@isSystemGeneratedOverride"].Value = cell.IsSystemGeneratedOverride ? 1 : 0;
-                    insertPrimaryCommand.Parameters["@derivedValue"].Value = cell.DerivedValue;
-                    insertPrimaryCommand.Parameters["@effectiveValue"].Value = cell.EffectiveValue;
-                    insertPrimaryCommand.Parameters["@growthFactor"].Value = cell.GrowthFactor;
-                    insertPrimaryCommand.Parameters["@isLocked"].Value = cell.IsLocked ? 1 : 0;
-                    insertPrimaryCommand.Parameters["@lockReason"].Value = (object?)cell.LockReason ?? DBNull.Value;
-                    insertPrimaryCommand.Parameters["@lockedBy"].Value = (object?)cell.LockedBy ?? DBNull.Value;
-                    insertPrimaryCommand.Parameters["@rowVersion"].Value = cell.RowVersion;
-                    insertPrimaryCommand.Parameters["@cellKind"].Value = cell.CellKind;
-                    await insertPrimaryCommand.ExecuteNonQueryAsync(cancellationToken);
-                }
+                await insertPrimaryCommand.ExecuteNonQueryAsync(cancellationToken);
             }
             insertStopwatch.Stop();
             chunkStopwatch.Stop();
@@ -293,11 +376,12 @@ public sealed partial class PostgresPlanningRepository
             if (chunkStopwatch.ElapsedMilliseconds >= 500)
             {
                 _logger.LogInformation(
-                    "Draft replace chunk for scenario {ScenarioVersionId} user {UserId} touched {DraftCellCount} cells in {ElapsedMs} ms (alias delete {AliasDeleteMs} ms, primary delete {PrimaryDeleteMs} ms, insert {InsertMs} ms).",
+                    "Draft replace chunk for scenario {ScenarioVersionId} user {UserId} touched {DraftCellCount} cells in {ElapsedMs} ms (stage {StageMs} ms, alias delete {AliasDeleteMs} ms, primary delete {PrimaryDeleteMs} ms, insert {InsertMs} ms).",
                     scenarioVersionId,
                     userContext.PrimaryUserId,
                     cellChunk.Length,
                     chunkStopwatch.ElapsedMilliseconds,
+                    stageCreateStopwatch.ElapsedMilliseconds + stageImportStopwatch.ElapsedMilliseconds,
                     aliasDeleteStopwatch.ElapsedMilliseconds,
                     primaryDeleteStopwatch.ElapsedMilliseconds,
                     insertStopwatch.ElapsedMilliseconds);
