@@ -273,8 +273,8 @@ public sealed partial class PostgresPlanningRepository
                     insertPrimaryCommand.Parameters["@storeId"].Value = cell.Coordinate.StoreId;
                     insertPrimaryCommand.Parameters["@productNodeId"].Value = cell.Coordinate.ProductNodeId;
                     insertPrimaryCommand.Parameters["@timePeriodId"].Value = cell.Coordinate.TimePeriodId;
-                    insertPrimaryCommand.Parameters["@inputValue"].Value = cell.InputValue;
-                    insertPrimaryCommand.Parameters["@overrideValue"].Value = cell.OverrideValue;
+                    insertPrimaryCommand.Parameters["@inputValue"].Value = (object?)cell.InputValue ?? DBNull.Value;
+                    insertPrimaryCommand.Parameters["@overrideValue"].Value = (object?)cell.OverrideValue ?? DBNull.Value;
                     insertPrimaryCommand.Parameters["@isSystemGeneratedOverride"].Value = cell.IsSystemGeneratedOverride ? 1 : 0;
                     insertPrimaryCommand.Parameters["@derivedValue"].Value = cell.DerivedValue;
                     insertPrimaryCommand.Parameters["@effectiveValue"].Value = cell.EffectiveValue;
