@@ -147,20 +147,23 @@ public sealed partial class PostgresPlanningRepository
               and target.time_period_id = source.time_period_id;
             """;
 
-        const string deletePrimarySql = """
-            delete from planning_draft_cells as target
-            using unnest(
-                @measureIds,
-                @storeIds,
-                @productNodeIds,
-                @timePeriodIds)
-                as source(
-                    measure_id,
-                    store_id,
-                    product_node_id,
-                    time_period_id)
-            where target.scenario_version_id = @scenarioVersionId
-              and target.user_id = @primaryUserId
+        const string updatePrimarySql = """
+            update planning_draft_cells as target
+            set input_value = source.input_value,
+                override_value = source.override_value,
+                is_system_generated_override = source.is_system_generated_override,
+                derived_value = source.derived_value,
+                effective_value = source.effective_value,
+                growth_factor = source.growth_factor,
+                is_locked = source.is_locked,
+                lock_reason = source.lock_reason,
+                locked_by = source.locked_by,
+                row_version = source.row_version,
+                cell_kind = source.cell_kind,
+                updated_at = now()
+            from %STAGE_TABLE% as source
+            where target.scenario_version_id = source.scenario_version_id
+              and target.user_id = source.user_id
               and target.measure_id = source.measure_id
               and target.store_id = source.store_id
               and target.product_node_id = source.product_node_id
@@ -307,21 +310,20 @@ public sealed partial class PostgresPlanningRepository
             }
             aliasDeleteStopwatch.Stop();
 
-            var primaryDeleteStopwatch = Stopwatch.StartNew();
-            await using (var deletePrimaryCommand = new NpgsqlCommand(deletePrimarySql, connection, transaction))
+            var primaryUpdateStopwatch = Stopwatch.StartNew();
+            var updatedPrimaryRowCount = 0;
+            await using (var updatePrimaryCommand = new NpgsqlCommand(
+                updatePrimarySql.Replace("%STAGE_TABLE%", stageTableName, StringComparison.Ordinal),
+                connection,
+                transaction))
             {
-                deletePrimaryCommand.CommandTimeout = 300;
-                deletePrimaryCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
-                deletePrimaryCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
-                deletePrimaryCommand.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, measureIds));
-                deletePrimaryCommand.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, storeIds));
-                deletePrimaryCommand.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, productNodeIds));
-                deletePrimaryCommand.Parameters.Add(CreateArrayParameter("@timePeriodIds", NpgsqlDbType.Bigint, timePeriodIds));
-                await deletePrimaryCommand.ExecuteNonQueryAsync(cancellationToken);
+                updatePrimaryCommand.CommandTimeout = 300;
+                updatedPrimaryRowCount = await updatePrimaryCommand.ExecuteNonQueryAsync(cancellationToken);
             }
-            primaryDeleteStopwatch.Stop();
+            primaryUpdateStopwatch.Stop();
 
             var insertStopwatch = Stopwatch.StartNew();
+            var insertedPrimaryRowCount = 0;
             await using (var insertPrimaryCommand = new NpgsqlCommand(
                 $"""
                 insert into planning_draft_cells (
@@ -344,31 +346,39 @@ public sealed partial class PostgresPlanningRepository
                     cell_kind,
                     updated_at)
                 select
-                    scenario_version_id,
-                    user_id,
-                    measure_id,
-                    store_id,
-                    product_node_id,
-                    time_period_id,
-                    input_value,
-                    override_value,
-                    is_system_generated_override,
-                    derived_value,
-                    effective_value,
-                    growth_factor,
-                    is_locked,
-                    lock_reason,
-                    locked_by,
-                    row_version,
-                    cell_kind,
+                    source.scenario_version_id,
+                    source.user_id,
+                    source.measure_id,
+                    source.store_id,
+                    source.product_node_id,
+                    source.time_period_id,
+                    source.input_value,
+                    source.override_value,
+                    source.is_system_generated_override,
+                    source.derived_value,
+                    source.effective_value,
+                    source.growth_factor,
+                    source.is_locked,
+                    source.lock_reason,
+                    source.locked_by,
+                    source.row_version,
+                    source.cell_kind,
                     now()
-                from {stageTableName};
+                from {stageTableName} as source
+                left join planning_draft_cells as target
+                  on target.scenario_version_id = source.scenario_version_id
+                 and target.user_id = source.user_id
+                 and target.measure_id = source.measure_id
+                 and target.store_id = source.store_id
+                 and target.product_node_id = source.product_node_id
+                 and target.time_period_id = source.time_period_id
+                where target.scenario_version_id is null;
                 """,
                 connection,
                 transaction))
             {
                 insertPrimaryCommand.CommandTimeout = 300;
-                await insertPrimaryCommand.ExecuteNonQueryAsync(cancellationToken);
+                insertedPrimaryRowCount = await insertPrimaryCommand.ExecuteNonQueryAsync(cancellationToken);
             }
             insertStopwatch.Stop();
             chunkStopwatch.Stop();
@@ -376,15 +386,17 @@ public sealed partial class PostgresPlanningRepository
             if (chunkStopwatch.ElapsedMilliseconds >= 500)
             {
                 _logger.LogInformation(
-                    "Draft replace chunk for scenario {ScenarioVersionId} user {UserId} touched {DraftCellCount} cells in {ElapsedMs} ms (stage {StageMs} ms, alias delete {AliasDeleteMs} ms, primary delete {PrimaryDeleteMs} ms, insert {InsertMs} ms).",
+                    "Draft replace chunk for scenario {ScenarioVersionId} user {UserId} touched {DraftCellCount} cells in {ElapsedMs} ms (stage {StageMs} ms, alias delete {AliasDeleteMs} ms, primary update {PrimaryUpdateMs} ms/{UpdatedPrimaryRowCount} rows, insert {InsertMs} ms/{InsertedPrimaryRowCount} rows).",
                     scenarioVersionId,
                     userContext.PrimaryUserId,
                     cellChunk.Length,
                     chunkStopwatch.ElapsedMilliseconds,
                     stageCreateStopwatch.ElapsedMilliseconds + stageImportStopwatch.ElapsedMilliseconds,
                     aliasDeleteStopwatch.ElapsedMilliseconds,
-                    primaryDeleteStopwatch.ElapsedMilliseconds,
-                    insertStopwatch.ElapsedMilliseconds);
+                    primaryUpdateStopwatch.ElapsedMilliseconds,
+                    updatedPrimaryRowCount,
+                    insertStopwatch.ElapsedMilliseconds,
+                    insertedPrimaryRowCount);
             }
         }
     }
