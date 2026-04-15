@@ -46,18 +46,7 @@ public sealed partial class PostgresPlanningRepository
                        p.row_version,
                        p.cell_kind
                 from planning_draft_cells p
-                inner join unnest(
-                    @scenarioVersionIds,
-                    @measureIds,
-                    @storeIds,
-                    @productNodeIds,
-                    @timePeriodIds)
-                    as requested(
-                        scenario_version_id,
-                        measure_id,
-                        store_id,
-                        product_node_id,
-                        time_period_id)
+                inner join %STAGE_TABLE% as requested
                     on requested.scenario_version_id = p.scenario_version_id
                    and requested.measure_id = p.measure_id
                    and requested.store_id = p.store_id
@@ -74,25 +63,73 @@ public sealed partial class PostgresPlanningRepository
                     p.updated_at desc,
                     p.row_version desc;
                 """;
+            const string countUserDraftRowsSql = """
+                select count(*)
+                from planning_draft_cells
+                where scenario_version_id = @scenarioVersionId
+                  and user_id = any(@candidateUserIds);
+                """;
 
             foreach (var coordinateChunk in coordinateList.Chunk(BulkWriteChunkSize))
             {
-                await using var command = new NpgsqlCommand(sql, connection, transaction)
-                {
-                    CommandTimeout = 300
-                };
-                command.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
-                command.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
-                command.Parameters.Add(CreateArrayParameter("@scenarioVersionIds", NpgsqlDbType.Bigint, coordinateChunk.Select(coordinate => coordinate.ScenarioVersionId).ToArray()));
-                command.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, coordinateChunk.Select(coordinate => coordinate.MeasureId).ToArray()));
-                command.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, coordinateChunk.Select(coordinate => coordinate.StoreId).ToArray()));
-                command.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, coordinateChunk.Select(coordinate => coordinate.ProductNodeId).ToArray()));
-                command.Parameters.Add(CreateArrayParameter("@timePeriodIds", NpgsqlDbType.Bigint, coordinateChunk.Select(coordinate => coordinate.TimePeriodId).ToArray()));
+                var stageTableName = $"planning_draft_request_stage_{Guid.NewGuid():N}";
 
-                await using var reader = await command.ExecuteReaderAsync(ct);
-                while (await reader.ReadAsync(ct))
+                await using (var createStageCommand = new NpgsqlCommand(
+                                 $"""
+                                 create temp table {stageTableName} (
+                                     scenario_version_id bigint not null,
+                                     measure_id bigint not null,
+                                     store_id bigint not null,
+                                     product_node_id bigint not null,
+                                     time_period_id bigint not null
+                                 ) on commit drop;
+                                 """,
+                                 connection,
+                                 transaction))
                 {
-                    cells.Add(ReadPlanningCellDirect(reader));
+                    createStageCommand.CommandTimeout = 300;
+                    await createStageCommand.ExecuteNonQueryAsync(ct);
+                }
+
+                await using (var importer = await connection.BeginBinaryImportAsync(
+                                 $"""
+                                 copy {stageTableName} (
+                                     scenario_version_id,
+                                     measure_id,
+                                     store_id,
+                                     product_node_id,
+                                     time_period_id)
+                                 from stdin (format binary)
+                                 """,
+                                 ct))
+                {
+                    foreach (var coordinate in coordinateChunk)
+                    {
+                        await importer.StartRowAsync(ct);
+                        await importer.WriteAsync(coordinate.ScenarioVersionId, NpgsqlDbType.Bigint, ct);
+                        await importer.WriteAsync(coordinate.MeasureId, NpgsqlDbType.Bigint, ct);
+                        await importer.WriteAsync(coordinate.StoreId, NpgsqlDbType.Bigint, ct);
+                        await importer.WriteAsync(coordinate.ProductNodeId, NpgsqlDbType.Bigint, ct);
+                        await importer.WriteAsync(coordinate.TimePeriodId, NpgsqlDbType.Bigint, ct);
+                    }
+
+                    await importer.CompleteAsync(ct);
+                }
+
+                await using (var command = new NpgsqlCommand(
+                                 sql.Replace("%STAGE_TABLE%", stageTableName, StringComparison.Ordinal),
+                                 connection,
+                                 transaction))
+                {
+                    command.CommandTimeout = 300;
+                    command.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+                    command.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
+
+                    await using var reader = await command.ExecuteReaderAsync(ct);
+                    while (await reader.ReadAsync(ct))
+                    {
+                        cells.Add(ReadPlanningCellDirect(reader));
+                    }
                 }
             }
 
@@ -103,12 +140,25 @@ public sealed partial class PostgresPlanningRepository
 
             if (coordinateList.Count <= 500)
             {
+                long totalDraftRowsForUser = -1;
+                if (distinctCells.Count == 0)
+                {
+                    await using var countCommand = new NpgsqlCommand(countUserDraftRowsSql, connection, transaction)
+                    {
+                        CommandTimeout = 300
+                    };
+                    countCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+                    countCommand.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
+                    totalDraftRowsForUser = (long)(await countCommand.ExecuteScalarAsync(ct) ?? 0L);
+                }
+
                 _logger.LogInformation(
-                    "Loaded {DraftCellCount} draft cells for scenario {ScenarioVersionId} user {UserId} from {RequestedCoordinateCount} requested coordinates.",
+                    "Loaded {DraftCellCount} draft cells for scenario {ScenarioVersionId} user {UserId} from {RequestedCoordinateCount} requested coordinates. Total draft rows for user: {TotalDraftRowsForUser}.",
                     distinctCells.Count,
                     scenarioVersionId,
                     userContext.PrimaryUserId,
-                    coordinateList.Count);
+                    coordinateList.Count,
+                    totalDraftRowsForUser);
             }
 
             return distinctCells;
