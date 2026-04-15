@@ -96,10 +96,22 @@ public sealed partial class PostgresPlanningRepository
                 }
             }
 
-            return cells
+            var distinctCells = cells
                 .DistinctBy(cell => cell.Coordinate.Key)
                 .Select(cell => cell.Clone())
                 .ToList();
+
+            if (coordinateList.Count <= 500)
+            {
+                _logger.LogInformation(
+                    "Loaded {DraftCellCount} draft cells for scenario {ScenarioVersionId} user {UserId} from {RequestedCoordinateCount} requested coordinates.",
+                    distinctCells.Count,
+                    scenarioVersionId,
+                    userContext.PrimaryUserId,
+                    coordinateList.Count);
+            }
+
+            return distinctCells;
         }, cancellationToken);
     }
 
@@ -517,13 +529,15 @@ public sealed partial class PostgresPlanningRepository
             insertStopwatch.Stop();
             chunkStopwatch.Stop();
 
-            if (chunkStopwatch.ElapsedMilliseconds >= 500)
+            if (chunkStopwatch.ElapsedMilliseconds >= 500 || (existingCells.Length > 0 && missingCells.Length > 0))
             {
                 _logger.LogInformation(
-                    "Draft replace chunk for scenario {ScenarioVersionId} user {UserId} touched {DraftCellCount} cells in {ElapsedMs} ms (stage {StageMs} ms, alias delete {AliasDeleteMs} ms, primary update {PrimaryUpdateMs} ms/{UpdatedPrimaryRowCount} rows, insert {InsertMs} ms/{InsertedPrimaryRowCount} rows).",
+                    "Draft replace chunk for scenario {ScenarioVersionId} user {UserId} touched {DraftCellCount} cells ({ExistingCellCount} existing, {MissingCellCount} missing) in {ElapsedMs} ms (stage {StageMs} ms, alias delete {AliasDeleteMs} ms, primary update {PrimaryUpdateMs} ms/{UpdatedPrimaryRowCount} rows, insert {InsertMs} ms/{InsertedPrimaryRowCount} rows).",
                     scenarioVersionId,
                     userContext.PrimaryUserId,
                     cellChunk.Length,
+                    existingCells.Length,
+                    missingCells.Length,
                     chunkStopwatch.ElapsedMilliseconds,
                     stageCreateStopwatch.ElapsedMilliseconds + stageImportStopwatch.ElapsedMilliseconds,
                     aliasDeleteStopwatch.ElapsedMilliseconds,
