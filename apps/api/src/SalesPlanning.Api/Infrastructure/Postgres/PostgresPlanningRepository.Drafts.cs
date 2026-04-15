@@ -322,63 +322,66 @@ public sealed partial class PostgresPlanningRepository
             }
             primaryUpdateStopwatch.Stop();
 
-            var insertStopwatch = Stopwatch.StartNew();
             var insertedPrimaryRowCount = 0;
-            await using (var insertPrimaryCommand = new NpgsqlCommand(
-                $"""
-                insert into planning_draft_cells (
-                    scenario_version_id,
-                    user_id,
-                    measure_id,
-                    store_id,
-                    product_node_id,
-                    time_period_id,
-                    input_value,
-                    override_value,
-                    is_system_generated_override,
-                    derived_value,
-                    effective_value,
-                    growth_factor,
-                    is_locked,
-                    lock_reason,
-                    locked_by,
-                    row_version,
-                    cell_kind,
-                    updated_at)
-                select
-                    source.scenario_version_id,
-                    source.user_id,
-                    source.measure_id,
-                    source.store_id,
-                    source.product_node_id,
-                    source.time_period_id,
-                    source.input_value,
-                    source.override_value,
-                    source.is_system_generated_override,
-                    source.derived_value,
-                    source.effective_value,
-                    source.growth_factor,
-                    source.is_locked,
-                    source.lock_reason,
-                    source.locked_by,
-                    source.row_version,
-                    source.cell_kind,
-                    now()
-                from {stageTableName} as source
-                left join planning_draft_cells as target
-                  on target.scenario_version_id = source.scenario_version_id
-                 and target.user_id = source.user_id
-                 and target.measure_id = source.measure_id
-                 and target.store_id = source.store_id
-                 and target.product_node_id = source.product_node_id
-                 and target.time_period_id = source.time_period_id
-                where target.scenario_version_id is null;
-                """,
-                connection,
-                transaction))
+            var insertStopwatch = Stopwatch.StartNew();
+            if (updatedPrimaryRowCount < cellChunk.Length)
             {
-                insertPrimaryCommand.CommandTimeout = 300;
-                insertedPrimaryRowCount = await insertPrimaryCommand.ExecuteNonQueryAsync(cancellationToken);
+                await using (var insertPrimaryCommand = new NpgsqlCommand(
+                    $"""
+                    insert into planning_draft_cells (
+                        scenario_version_id,
+                        user_id,
+                        measure_id,
+                        store_id,
+                        product_node_id,
+                        time_period_id,
+                        input_value,
+                        override_value,
+                        is_system_generated_override,
+                        derived_value,
+                        effective_value,
+                        growth_factor,
+                        is_locked,
+                        lock_reason,
+                        locked_by,
+                        row_version,
+                        cell_kind,
+                        updated_at)
+                    select
+                        source.scenario_version_id,
+                        source.user_id,
+                        source.measure_id,
+                        source.store_id,
+                        source.product_node_id,
+                        source.time_period_id,
+                        source.input_value,
+                        source.override_value,
+                        source.is_system_generated_override,
+                        source.derived_value,
+                        source.effective_value,
+                        source.growth_factor,
+                        source.is_locked,
+                        source.lock_reason,
+                        source.locked_by,
+                        source.row_version,
+                        source.cell_kind,
+                        now()
+                    from {stageTableName} as source
+                    left join planning_draft_cells as target
+                      on target.scenario_version_id = source.scenario_version_id
+                     and target.user_id = source.user_id
+                     and target.measure_id = source.measure_id
+                     and target.store_id = source.store_id
+                     and target.product_node_id = source.product_node_id
+                     and target.time_period_id = source.time_period_id
+                    where target.scenario_version_id is null;
+                    """,
+                    connection,
+                    transaction))
+                {
+                    insertPrimaryCommand.CommandTimeout = 300;
+                    insertedPrimaryRowCount = await insertPrimaryCommand.ExecuteNonQueryAsync(cancellationToken);
+                }
             }
             insertStopwatch.Stop();
             chunkStopwatch.Stop();
