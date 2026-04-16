@@ -10,6 +10,8 @@ namespace SalesPlanning.Api.Infrastructure.Postgres;
 
 public sealed partial class PostgresPlanningRepository
 {
+    private const string DirectTraceCoordinateKey = "1:2:228:257:202600";
+
     private async Task<IReadOnlyList<PlanningCell>> GetDraftCellsDirectAsync(
         long scenarioVersionId,
         PlanningUserIdentity.PlanningUserContext userContext,
@@ -80,6 +82,15 @@ public sealed partial class PostgresPlanningRepository
                 .Where(cell => requestedKeys.Contains(cell.Coordinate.Key))
                 .Select(cell => cell.Clone())
                 .ToList();
+
+            if (requestedKeys.Contains(DirectTraceCoordinateKey))
+            {
+                _logger.LogInformation(
+                    "Draft read trace for {CoordinateKey}: scenarioDraftPresent={ScenarioDraftPresent}, filteredDraftPresent={FilteredDraftPresent}.",
+                    DirectTraceCoordinateKey,
+                    scenarioDraftCells.Any(cell => string.Equals(cell.Coordinate.Key, DirectTraceCoordinateKey, StringComparison.Ordinal)),
+                    distinctCells.Any(cell => string.Equals(cell.Coordinate.Key, DirectTraceCoordinateKey, StringComparison.Ordinal)));
+            }
 
             if (coordinateList.Count <= 500)
             {
@@ -224,6 +235,16 @@ public sealed partial class PostgresPlanningRepository
                 @rowVersion,
                 @cellKind,
                 now());
+            """;
+        const string probeDraftCellSql = """
+            select effective_value
+            from planning_draft_cells
+            where scenario_version_id = @scenarioVersionId
+              and user_id = @primaryUserId
+              and measure_id = 2
+              and store_id = 228
+              and product_node_id = 257
+              and time_period_id = 202600;
             """;
 
         foreach (var cellChunk in orderedCells.Chunk(BulkWriteChunkSize))
@@ -526,6 +547,21 @@ public sealed partial class PostgresPlanningRepository
                     updatedPrimaryRowCount,
                     insertStopwatch.ElapsedMilliseconds,
                     insertedPrimaryRowCount);
+            }
+
+            if (cellChunk.Any(cell => string.Equals(cell.Coordinate.Key, DirectTraceCoordinateKey, StringComparison.Ordinal)))
+            {
+                await using var probeCommand = new NpgsqlCommand(probeDraftCellSql, connection, transaction)
+                {
+                    CommandTimeout = 300
+                };
+                probeCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+                probeCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+                var probeValue = await probeCommand.ExecuteScalarAsync(cancellationToken);
+                _logger.LogInformation(
+                    "Draft write trace for {CoordinateKey}: probeValue={ProbeValue}.",
+                    DirectTraceCoordinateKey,
+                    probeValue ?? "<missing>");
             }
         }
     }
