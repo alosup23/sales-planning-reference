@@ -27,6 +27,10 @@ public sealed partial class PostgresPlanningRepository
 
         return await ExecuteDirectReadAsync(async (connection, transaction, ct) =>
         {
+            await using var ownedTransaction = transaction is null
+                ? await connection.BeginTransactionAsync(ct)
+                : null;
+            var effectiveTransaction = transaction ?? ownedTransaction;
             var cells = new List<PlanningCell>();
             const string sql = """
                 select p.scenario_version_id,
@@ -85,7 +89,7 @@ public sealed partial class PostgresPlanningRepository
                                  ) on commit drop;
                                  """,
                                  connection,
-                                 transaction))
+                                 effectiveTransaction))
                 {
                     createStageCommand.CommandTimeout = 300;
                     await createStageCommand.ExecuteNonQueryAsync(ct);
@@ -119,7 +123,7 @@ public sealed partial class PostgresPlanningRepository
                 await using (var command = new NpgsqlCommand(
                                  sql.Replace("%STAGE_TABLE%", stageTableName, StringComparison.Ordinal),
                                  connection,
-                                 transaction))
+                                 effectiveTransaction))
                 {
                     command.CommandTimeout = 300;
                     command.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
@@ -143,7 +147,7 @@ public sealed partial class PostgresPlanningRepository
                 long totalDraftRowsForUser = -1;
                 if (distinctCells.Count == 0)
                 {
-                    await using var countCommand = new NpgsqlCommand(countUserDraftRowsSql, connection, transaction)
+                    await using var countCommand = new NpgsqlCommand(countUserDraftRowsSql, connection, effectiveTransaction)
                     {
                         CommandTimeout = 300
                     };
@@ -159,6 +163,11 @@ public sealed partial class PostgresPlanningRepository
                     userContext.PrimaryUserId,
                     coordinateList.Count,
                     totalDraftRowsForUser);
+            }
+
+            if (ownedTransaction is not null)
+            {
+                await ownedTransaction.CommitAsync(ct);
             }
 
             return distinctCells;
