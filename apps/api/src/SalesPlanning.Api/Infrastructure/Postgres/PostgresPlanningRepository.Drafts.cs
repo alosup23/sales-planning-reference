@@ -10,6 +10,7 @@ namespace SalesPlanning.Api.Infrastructure.Postgres;
 
 public sealed partial class PostgresPlanningRepository
 {
+    private const int DraftWriteChunkSize = 64;
     private const string DirectTraceCoordinateKey = "1:2:228:257:202600";
 
     private async Task<IReadOnlyList<PlanningCell>> GetDraftCellsDirectAsync(
@@ -254,7 +255,7 @@ public sealed partial class PostgresPlanningRepository
               and time_period_id = 202600;
             """;
 
-        foreach (var cellChunk in orderedCells.Chunk(BulkWriteChunkSize))
+        foreach (var cellChunk in orderedCells.Chunk(DraftWriteChunkSize))
         {
             var chunkStopwatch = Stopwatch.StartNew();
             var measureIds = cellChunk.Select(cell => cell.Coordinate.MeasureId).ToArray();
@@ -303,16 +304,14 @@ public sealed partial class PostgresPlanningRepository
                     source.cell_kind,
                     now()
                 from {stageTableName} as source
-                where not exists (
-                    select 1
-                    from planning_draft_cells as target
-                    where target.scenario_version_id = source.scenario_version_id
-                      and target.user_id = source.user_id
-                      and target.measure_id = source.measure_id
-                      and target.store_id = source.store_id
-                      and target.product_node_id = source.product_node_id
-                      and target.time_period_id = source.time_period_id
-                );
+                left join planning_draft_cells as target
+                  on target.scenario_version_id = source.scenario_version_id
+                 and target.user_id = source.user_id
+                 and target.measure_id = source.measure_id
+                 and target.store_id = source.store_id
+                 and target.product_node_id = source.product_node_id
+                 and target.time_period_id = source.time_period_id
+                where target.scenario_version_id is null;
                 """;
 
             var stageCreateStopwatch = Stopwatch.StartNew();
