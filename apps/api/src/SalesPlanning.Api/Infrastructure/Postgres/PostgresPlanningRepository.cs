@@ -564,9 +564,11 @@ public sealed partial class PostgresPlanningRepository : IPlanningRepository
     private async Task<T> ExecuteAtomicCoreAsync<T>(Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken)
     {
         var isOutermost = _atomicDepth.Value == 0;
+        PostgresDirectAtomicContext? outerContext = null;
         if (isOutermost)
         {
             _directAtomicContext.Value = null;
+            outerContext = await GetOrCreateDirectAtomicContextAsync(cancellationToken);
         }
 
         _atomicDepth.Value += 1;
@@ -583,7 +585,7 @@ public sealed partial class PostgresPlanningRepository : IPlanningRepository
             _atomicDepth.Value -= 1;
             if (isOutermost)
             {
-                var directContext = _directAtomicContext.Value;
+                var directContext = outerContext ?? _directAtomicContext.Value;
                 _directAtomicContext.Value = null;
                 try
                 {
