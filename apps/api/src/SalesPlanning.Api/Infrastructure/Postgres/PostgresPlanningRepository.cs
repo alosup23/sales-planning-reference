@@ -593,14 +593,14 @@ public sealed partial class PostgresPlanningRepository : IPlanningRepository
                         {
                             if (directContext.HasMutations)
                             {
-                                await UpdateDataVersionAsync(directContext.Connection, directContext.Transaction, cancellationToken);
+                                await UpdateDataVersionAsync(directContext.Connection, directContext.Transaction, CancellationToken.None);
                             }
 
-                            await directContext.Transaction.CommitAsync(cancellationToken);
+                            await directContext.Transaction.CommitAsync(CancellationToken.None);
                         }
                         else
                         {
-                            await directContext.Transaction.RollbackAsync(cancellationToken);
+                            await directContext.Transaction.RollbackAsync(CancellationToken.None);
                         }
                     }
                 }
@@ -665,8 +665,8 @@ public sealed partial class PostgresPlanningRepository : IPlanningRepository
         await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await action(connection, transaction, cancellationToken);
-        await UpdateDataVersionAsync(connection, transaction, cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
+        await UpdateDataVersionAsync(connection, transaction, CancellationToken.None);
+        await transaction.CommitAsync(CancellationToken.None);
     }
 
     private async Task ExecuteDirectNonVersionedMutationAsync(Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task> action, CancellationToken cancellationToken)
@@ -682,7 +682,7 @@ public sealed partial class PostgresPlanningRepository : IPlanningRepository
         await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await action(connection, transaction, cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
+        await transaction.CommitAsync(CancellationToken.None);
     }
 
     private async Task<T> ExecuteDirectNonVersionedMutationAsync<T>(Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task<T>> action, CancellationToken cancellationToken)
@@ -697,7 +697,7 @@ public sealed partial class PostgresPlanningRepository : IPlanningRepository
         await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         var result = await action(connection, transaction, cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
+        await transaction.CommitAsync(CancellationToken.None);
         return result;
     }
 
@@ -715,8 +715,8 @@ public sealed partial class PostgresPlanningRepository : IPlanningRepository
         await using var connection = await OpenPostgresConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         var directResult = await action(connection, transaction, cancellationToken);
-        await UpdateDataVersionAsync(connection, transaction, cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
+        await UpdateDataVersionAsync(connection, transaction, CancellationToken.None);
+        await transaction.CommitAsync(CancellationToken.None);
         return directResult;
     }
 
