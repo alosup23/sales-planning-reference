@@ -430,6 +430,37 @@ public sealed partial class PostgresPlanningRepository
             }
             stageImportStopwatch.Stop();
 
+            var stageIndexStopwatch = Stopwatch.StartNew();
+            await using (var createStageIndexCommand = new NpgsqlCommand(
+                             $"""
+                             create unique index on {stageTableName} (
+                                 scenario_version_id,
+                                 user_id,
+                                 measure_id,
+                                 store_id,
+                                 product_node_id,
+                                 time_period_id
+                             );
+                             """,
+                             connection,
+                             transaction))
+            {
+                createStageIndexCommand.CommandTimeout = 300;
+                await createStageIndexCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await using (var analyzeStageCommand = new NpgsqlCommand(
+                             $"""
+                             analyze {stageTableName};
+                             """,
+                             connection,
+                             transaction))
+            {
+                analyzeStageCommand.CommandTimeout = 300;
+                await analyzeStageCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
+            stageIndexStopwatch.Stop();
+
             var aliasDeleteStopwatch = Stopwatch.StartNew();
             await using (var deleteAliasCommand = new NpgsqlCommand(deleteAliasSql, connection, transaction))
             {
@@ -475,7 +506,7 @@ public sealed partial class PostgresPlanningRepository
                     userContext.PrimaryUserId,
                     cellChunk.Length,
                     chunkStopwatch.ElapsedMilliseconds,
-                    stageCreateStopwatch.ElapsedMilliseconds + stageImportStopwatch.ElapsedMilliseconds,
+                    stageCreateStopwatch.ElapsedMilliseconds + stageImportStopwatch.ElapsedMilliseconds + stageIndexStopwatch.ElapsedMilliseconds,
                     aliasDeleteStopwatch.ElapsedMilliseconds,
                     primaryUpdateStopwatch.ElapsedMilliseconds,
                     updatedPrimaryRowCount,
@@ -1161,6 +1192,34 @@ public sealed partial class PostgresPlanningRepository
             createStageCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
             createStageCommand.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
             await createStageCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var createStageIndexCommand = new NpgsqlCommand(
+                         $"""
+                         create unique index on {stageTableName} (
+                             scenario_version_id,
+                             measure_id,
+                             store_id,
+                             product_node_id,
+                             time_period_id
+                         );
+                         """,
+                         connection,
+                         transaction))
+        {
+            createStageIndexCommand.CommandTimeout = 300;
+            await createStageIndexCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var analyzeStageCommand = new NpgsqlCommand(
+                         $"""
+                         analyze {stageTableName};
+                         """,
+                         connection,
+                         transaction))
+        {
+            analyzeStageCommand.CommandTimeout = 300;
+            await analyzeStageCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
         await using (var deleteCommittedCommand = new NpgsqlCommand(
