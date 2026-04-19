@@ -1058,7 +1058,7 @@ public sealed partial class PostgresPlanningRepository
         writer.WriteNullValue();
     }
 
-    private static async Task CommitDraftDirectAsync(
+    private async Task CommitDraftDirectAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         long scenarioVersionId,
@@ -1178,44 +1178,143 @@ public sealed partial class PostgresPlanningRepository
             await insertCommittedCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await using var deleteCommand = new NpgsqlCommand(
-            """
+        var aliasUserIds = userContext.CandidateUserIds
+            .Where(candidate => !string.Equals(candidate, userContext.PrimaryUserId, StringComparison.Ordinal))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        const string deletePrimaryDraftSql = """
             delete from planning_draft_cells
             where scenario_version_id = @scenarioVersionId
-              and user_id = any(@candidateUserIds);
-            """,
-            connection,
-            transaction);
-        deleteCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
-        deleteCommand.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
-        await deleteCommand.ExecuteNonQueryAsync(cancellationToken);
-
-        await using var deleteDeltaCommand = new NpgsqlCommand(
-            """
+              and user_id = @primaryUserId;
+            """;
+        const string deleteAliasDraftSql = """
+            delete from planning_draft_cells
+            where scenario_version_id = @scenarioVersionId
+              and user_id = any(@aliasUserIds);
+            """;
+        const string deletePrimaryDeltaSql = """
             delete from planning_draft_command_cell_deltas
             where command_batch_id in (
                 select command_batch_id
                 from planning_draft_command_batches
                 where scenario_version_id = @scenarioVersionId
-                  and user_id = any(@candidateUserIds)
+                  and user_id = @primaryUserId
             );
-            """,
-            connection,
-            transaction);
-        deleteDeltaCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
-        deleteDeltaCommand.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
-        await deleteDeltaCommand.ExecuteNonQueryAsync(cancellationToken);
-
-        await using var deleteBatchCommand = new NpgsqlCommand(
-            """
+            """;
+        const string deleteAliasDeltaSql = """
+            delete from planning_draft_command_cell_deltas
+            where command_batch_id in (
+                select command_batch_id
+                from planning_draft_command_batches
+                where scenario_version_id = @scenarioVersionId
+                  and user_id = any(@aliasUserIds)
+            );
+            """;
+        const string deletePrimaryBatchSql = """
             delete from planning_draft_command_batches
             where scenario_version_id = @scenarioVersionId
-              and user_id = any(@candidateUserIds);
-            """,
-            connection,
-            transaction);
-        deleteBatchCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
-        deleteBatchCommand.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
-        await deleteBatchCommand.ExecuteNonQueryAsync(cancellationToken);
+              and user_id = @primaryUserId;
+            """;
+        const string deleteAliasBatchSql = """
+            delete from planning_draft_command_batches
+            where scenario_version_id = @scenarioVersionId
+              and user_id = any(@aliasUserIds);
+            """;
+        const string remainingDraftSql = """
+            select count(*)
+            from planning_draft_cells
+            where scenario_version_id = @scenarioVersionId
+              and user_id = @userId;
+            """;
+
+        var deletedPrimaryDraftRows = 0;
+        await using (var deletePrimaryDraftCommand = new NpgsqlCommand(deletePrimaryDraftSql, connection, transaction))
+        {
+            deletePrimaryDraftCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+            deletePrimaryDraftCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+            deletedPrimaryDraftRows = await deletePrimaryDraftCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var deletedAliasDraftRows = 0;
+        if (aliasUserIds.Length > 0)
+        {
+            await using var deleteAliasDraftCommand = new NpgsqlCommand(deleteAliasDraftSql, connection, transaction);
+            deleteAliasDraftCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+            deleteAliasDraftCommand.Parameters.Add(CreateArrayParameter("@aliasUserIds", NpgsqlDbType.Text, aliasUserIds));
+            deletedAliasDraftRows = await deleteAliasDraftCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var deletedPrimaryDeltaRows = 0;
+        await using (var deletePrimaryDeltaCommand = new NpgsqlCommand(deletePrimaryDeltaSql, connection, transaction))
+        {
+            deletePrimaryDeltaCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+            deletePrimaryDeltaCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+            deletedPrimaryDeltaRows = await deletePrimaryDeltaCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var deletedAliasDeltaRows = 0;
+        if (aliasUserIds.Length > 0)
+        {
+            await using var deleteAliasDeltaCommand = new NpgsqlCommand(deleteAliasDeltaSql, connection, transaction);
+            deleteAliasDeltaCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+            deleteAliasDeltaCommand.Parameters.Add(CreateArrayParameter("@aliasUserIds", NpgsqlDbType.Text, aliasUserIds));
+            deletedAliasDeltaRows = await deleteAliasDeltaCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var deletedPrimaryBatchRows = 0;
+        await using (var deletePrimaryBatchCommand = new NpgsqlCommand(deletePrimaryBatchSql, connection, transaction))
+        {
+            deletePrimaryBatchCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+            deletePrimaryBatchCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+            deletedPrimaryBatchRows = await deletePrimaryBatchCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var deletedAliasBatchRows = 0;
+        if (aliasUserIds.Length > 0)
+        {
+            await using var deleteAliasBatchCommand = new NpgsqlCommand(deleteAliasBatchSql, connection, transaction);
+            deleteAliasBatchCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+            deleteAliasBatchCommand.Parameters.Add(CreateArrayParameter("@aliasUserIds", NpgsqlDbType.Text, aliasUserIds));
+            deletedAliasBatchRows = await deleteAliasBatchCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        long remainingPrimaryDraftRows;
+        await using (var remainingPrimaryDraftCommand = new NpgsqlCommand(remainingDraftSql, connection, transaction))
+        {
+            remainingPrimaryDraftCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+            remainingPrimaryDraftCommand.Parameters.AddWithValue("@userId", userContext.PrimaryUserId);
+            remainingPrimaryDraftRows = Convert.ToInt64(await remainingPrimaryDraftCommand.ExecuteScalarAsync(cancellationToken) ?? 0L);
+        }
+
+        long remainingAliasDraftRows = 0;
+        if (aliasUserIds.Length > 0)
+        {
+            await using var remainingAliasDraftCommand = new NpgsqlCommand(
+                """
+                select count(*)
+                from planning_draft_cells
+                where scenario_version_id = @scenarioVersionId
+                  and user_id = any(@aliasUserIds);
+                """,
+                connection,
+                transaction);
+            remainingAliasDraftCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+            remainingAliasDraftCommand.Parameters.Add(CreateArrayParameter("@aliasUserIds", NpgsqlDbType.Text, aliasUserIds));
+            remainingAliasDraftRows = Convert.ToInt64(await remainingAliasDraftCommand.ExecuteScalarAsync(cancellationToken) ?? 0L);
+        }
+
+        _logger.LogInformation(
+            "Draft commit cleanup for scenario {ScenarioVersionId} user {UserId}: primary drafts deleted {DeletedPrimaryDraftRows}, alias drafts deleted {DeletedAliasDraftRows}, primary deltas deleted {DeletedPrimaryDeltaRows}, alias deltas deleted {DeletedAliasDeltaRows}, primary batches deleted {DeletedPrimaryBatchRows}, alias batches deleted {DeletedAliasBatchRows}, remaining primary drafts {RemainingPrimaryDraftRows}, remaining alias drafts {RemainingAliasDraftRows}.",
+            scenarioVersionId,
+            userContext.PrimaryUserId,
+            deletedPrimaryDraftRows,
+            deletedAliasDraftRows,
+            deletedPrimaryDeltaRows,
+            deletedAliasDeltaRows,
+            deletedPrimaryBatchRows,
+            deletedAliasBatchRows,
+            remainingPrimaryDraftRows,
+            remainingAliasDraftRows);
     }
 }
