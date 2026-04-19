@@ -1066,20 +1066,10 @@ public sealed partial class PostgresPlanningRepository
         CancellationToken cancellationToken)
     {
         var stageTableName = $"planning_cells_commit_stage_{Guid.NewGuid():N}";
-        const string updateCommittedSql = """
-            update planning_cells as target
-            set input_value = source.input_value,
-                override_value = source.override_value,
-                is_system_generated_override = source.is_system_generated_override,
-                derived_value = source.derived_value,
-                effective_value = source.effective_value,
-                growth_factor = source.growth_factor,
-                is_locked = source.is_locked,
-                lock_reason = source.lock_reason,
-                locked_by = source.locked_by,
-                row_version = source.row_version,
-                cell_kind = source.cell_kind
-            from %STAGE_TABLE% as source
+        var deleteCommittedSql =
+            $"""
+            delete from planning_cells as target
+            using {stageTableName} as source
             where target.scenario_version_id = source.scenario_version_id
               and target.measure_id = source.measure_id
               and target.store_id = source.store_id
@@ -1123,14 +1113,7 @@ public sealed partial class PostgresPlanningRepository
                 source.locked_by,
                 source.row_version,
                 source.cell_kind
-            from {stageTableName} as source
-            left join planning_cells as target
-              on target.scenario_version_id = source.scenario_version_id
-             and target.measure_id = source.measure_id
-             and target.store_id = source.store_id
-             and target.product_node_id = source.product_node_id
-             and target.time_period_id = source.time_period_id
-            where target.scenario_version_id is null;
+            from {stageTableName} as source;
             """;
 
         await using (var createStageCommand = new NpgsqlCommand(
@@ -1180,13 +1163,13 @@ public sealed partial class PostgresPlanningRepository
             await createStageCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await using (var updateCommittedCommand = new NpgsqlCommand(
-                         updateCommittedSql.Replace("%STAGE_TABLE%", stageTableName, StringComparison.Ordinal),
+        await using (var deleteCommittedCommand = new NpgsqlCommand(
+                         deleteCommittedSql,
                          connection,
                          transaction))
         {
-            updateCommittedCommand.CommandTimeout = 300;
-            await updateCommittedCommand.ExecuteNonQueryAsync(cancellationToken);
+            deleteCommittedCommand.CommandTimeout = 300;
+            await deleteCommittedCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
         await using (var insertCommittedCommand = new NpgsqlCommand(insertCommittedSql, connection, transaction))
