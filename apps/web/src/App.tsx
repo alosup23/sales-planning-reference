@@ -1229,45 +1229,6 @@ export default function App() {
   }, [activeAsyncJob, activeView, departmentScopeQuery.error, departmentScopeQuery.isLoading, gridQuery.error, gridQuery.isLoading, hasUnsavedChanges, hierarchyQuery.error, hierarchyQuery.isLoading, inventoryProfileQuery.error, inventoryProfileQuery.isLoading, isMutating, lastError, lastSavedAt, planningStoreScopeQuery.error, planningStoreScopeQuery.isLoading, pricingPolicyQuery.error, pricingPolicyQuery.isLoading, productHierarchyQuery.error, productHierarchyQuery.isLoading, productProfileOptionsQuery.error, productProfileOptionsQuery.isLoading, productProfileQuery.error, productProfileQuery.isLoading, seasonalityEventQuery.error, seasonalityEventQuery.isLoading, storeProfileOptionsQuery.error, storeProfileOptionsQuery.isLoading, storeProfileQuery.error, storeProfileQuery.isLoading, vendorSupplyQuery.error, vendorSupplyQuery.isLoading]);
 
   const activeGridData = gridQuery.data ?? null;
-
-  const planningReady = (activeView !== "planning-store" && activeView !== "planning-department")
-    || (!!planningStoreScopeQuery.data
-      && (activeView !== "planning-department" || !!departmentScopeQuery.data)
-      && (activeView !== "planning-store" || selectedPlanningStoreId !== null)
-      && !!gridQuery.data);
-  const hierarchyReady = activeView !== "hierarchy" || !!hierarchyQuery.data;
-  const storeProfileReady = activeView !== "store-profile" || (!!storeProfileQuery.data && !!storeProfileOptionsQuery.data);
-  const productMaintenanceReady = activeView !== "product-profile" || (productProfileQuery.data && productProfileOptionsQuery.data && productHierarchyQuery.data);
-  const inventoryMaintenanceReady = activeView !== "inventory-profile" || !!inventoryProfileQuery.data;
-  const pricingMaintenanceReady = activeView !== "pricing-policy" || !!pricingPolicyQuery.data;
-  const seasonalityMaintenanceReady = activeView !== "seasonality-event" || !!seasonalityEventQuery.data;
-  const vendorSupplyMaintenanceReady = activeView !== "vendor-supply" || !!vendorSupplyQuery.data;
-
-  if (!planningReady || !hierarchyReady || !storeProfileReady || !productMaintenanceReady || !inventoryMaintenanceReady || !pricingMaintenanceReady || !seasonalityMaintenanceReady || !vendorSupplyMaintenanceReady) {
-    return (
-      <main className="app-shell">
-        <section className="hero">
-          <div>
-            <div className="eyebrow">Enterprise planning skeleton</div>
-            <h1>Sales Budget & Planning</h1>
-            <p>
-              Excel-like planning with store-first and department-first sheets backed by the same live planning data.
-            </p>
-          </div>
-          <div className="hero-sidecar">
-            {authEnabled ? <SignedInUserMenu /> : null}
-            <div className={`status-card${lastError ? " status-card-error" : ""}`} aria-live="polite">
-              {statusText}
-            </div>
-          </div>
-        </section>
-        <section className="planning-shell planning-shell-loading" aria-live="polite">
-          Preparing planning workspace...
-        </section>
-      </main>
-    );
-  }
-
   const planningData = gridQuery.data ?? null;
   const yearPeriods = planningData?.periods.filter((period) => period.grain === "year") ?? [];
   const measureLookup = new Map((planningData?.measures ?? []).map((measure) => [measure.measureId, measure]));
@@ -1324,6 +1285,44 @@ export default function App() {
   const handleShowAllMeasures = useCallback(() => {
     setVisibleMeasureIds(planningData?.measures.map((measure) => measure.measureId) ?? []);
   }, [planningData]);
+
+  const planningReady = (activeView !== "planning-store" && activeView !== "planning-department")
+    || (!!planningStoreScopeQuery.data
+      && (activeView !== "planning-department" || !!departmentScopeQuery.data)
+      && (activeView !== "planning-store" || selectedPlanningStoreId !== null)
+      && !!gridQuery.data);
+  const hierarchyReady = activeView !== "hierarchy" || !!hierarchyQuery.data;
+  const storeProfileReady = activeView !== "store-profile" || (!!storeProfileQuery.data && !!storeProfileOptionsQuery.data);
+  const productMaintenanceReady = activeView !== "product-profile" || (productProfileQuery.data && productProfileOptionsQuery.data && productHierarchyQuery.data);
+  const inventoryMaintenanceReady = activeView !== "inventory-profile" || !!inventoryProfileQuery.data;
+  const pricingMaintenanceReady = activeView !== "pricing-policy" || !!pricingPolicyQuery.data;
+  const seasonalityMaintenanceReady = activeView !== "seasonality-event" || !!seasonalityEventQuery.data;
+  const vendorSupplyMaintenanceReady = activeView !== "vendor-supply" || !!vendorSupplyQuery.data;
+
+  if (!planningReady || !hierarchyReady || !storeProfileReady || !productMaintenanceReady || !inventoryMaintenanceReady || !pricingMaintenanceReady || !seasonalityMaintenanceReady || !vendorSupplyMaintenanceReady) {
+    return (
+      <main className="app-shell">
+        <section className="hero">
+          <div>
+            <div className="eyebrow">Enterprise planning skeleton</div>
+            <h1>Sales Budget & Planning</h1>
+            <p>
+              Excel-like planning with store-first and department-first sheets backed by the same live planning data.
+            </p>
+          </div>
+          <div className="hero-sidecar">
+            {authEnabled ? <SignedInUserMenu /> : null}
+            <div className={`status-card${lastError ? " status-card-error" : ""}`} aria-live="polite">
+              {statusText}
+            </div>
+          </div>
+        </section>
+        <section className="planning-shell planning-shell-loading" aria-live="polite">
+          Preparing planning workspace...
+        </section>
+      </main>
+    );
+  }
 
   const handleCellEdit = async (row: GridRow, timePeriodId: number, measureId: number, newValue: number) => {
     if (!planningData) {
