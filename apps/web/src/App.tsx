@@ -129,6 +129,25 @@ type ActiveView =
   | "vendor-supply";
 type DepartmentLayout = "department-store-class" | "department-class-store";
 type PlanningStoreScopeSelection = number | "all" | null;
+const VISIBLE_MEASURE_IDS_STORAGE_KEY = "planning.visibleMeasureIds";
+
+function loadVisibleMeasureIdsPreference(): number[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(VISIBLE_MEASURE_IDS_STORAGE_KEY);
+    if (!rawValue) {
+      return [];
+    }
+
+    const parsed = JSON.parse(rawValue);
+    return Array.isArray(parsed) ? parsed.filter((value): value is number => typeof value === "number") : [];
+  } catch {
+    return [];
+  }
+}
 
 function mergePlanningPatches(
   existingPatch: PlanningGridPatch | null,
@@ -180,6 +199,7 @@ export default function App() {
   const [pendingPlanningPatch, setPendingPlanningPatch] = useState<PlanningGridPatch | null>(null);
   const [planningPatchToken, setPlanningPatchToken] = useState(0);
   const [expandAllBranches, setExpandAllBranches] = useState(false);
+  const [visibleMeasureIds, setVisibleMeasureIds] = useState<number[]>(() => loadVisibleMeasureIdsPreference());
   const hasUnsavedChangesRef = useRef(false);
   const savePromiseRef = useRef<Promise<unknown> | null>(null);
   const pendingPlanningPatchRef = useRef<PlanningGridPatch | null>(null);
@@ -1253,6 +1273,58 @@ export default function App() {
   const measureLookup = new Map((planningData?.measures ?? []).map((measure) => [measure.measureId, measure]));
   const undoRedoAvailability: UndoRedoAvailability | null = undoRedoAvailabilityQuery.data ?? null;
 
+  useEffect(() => {
+    if (!planningData) {
+      return;
+    }
+
+    const availableMeasureIds = planningData.measures.map((measure) => measure.measureId);
+    setVisibleMeasureIds((current) => {
+      if (current.length === 0) {
+        return availableMeasureIds;
+      }
+
+      const currentSet = new Set(current);
+      const preserved = availableMeasureIds.filter((measureId) => currentSet.has(measureId));
+      const appended = availableMeasureIds.filter((measureId) => !currentSet.has(measureId));
+      const next = [...preserved, ...appended];
+
+      if (next.length === current.length && next.every((measureId, index) => measureId === current[index])) {
+        return current;
+      }
+
+      return next;
+    });
+  }, [planningData]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(VISIBLE_MEASURE_IDS_STORAGE_KEY, JSON.stringify(visibleMeasureIds));
+  }, [visibleMeasureIds]);
+
+  const handleToggleMeasureVisibility = useCallback((measureId: number) => {
+    setVisibleMeasureIds((current) => {
+      if (current.includes(measureId)) {
+        if (current.length === 1) {
+          return current;
+        }
+
+        return current.filter((id) => id !== measureId);
+      }
+
+      const availableMeasureIds = planningData?.measures.map((measure) => measure.measureId) ?? [];
+      const next = [...current, measureId];
+      return availableMeasureIds.filter((id) => next.includes(id));
+    });
+  }, [planningData]);
+
+  const handleShowAllMeasures = useCallback(() => {
+    setVisibleMeasureIds(planningData?.measures.map((measure) => measure.measureId) ?? []);
+  }, [planningData]);
+
   const handleCellEdit = async (row: GridRow, timePeriodId: number, measureId: number, newValue: number) => {
     if (!planningData) {
       return;
@@ -2088,6 +2160,9 @@ export default function App() {
               onExpandAllBranches={handleExpandAllBranches}
               onCollapseAllBranches={handleCollapseAllBranches}
               expandAllBranches={expandAllBranches}
+              visibleMeasureIds={visibleMeasureIds}
+              onToggleMeasureVisibility={handleToggleMeasureVisibility}
+              onShowAllMeasures={handleShowAllMeasures}
               onScopeRowClick={handleScopeRowClick}
               sheetLabel={activeView === "planning-store" ? "Planning - by Store" : "Planning - by Department"}
               expansionStateKey={activeView === "planning-department" ? departmentLayout : activeView}

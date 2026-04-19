@@ -52,6 +52,9 @@ type PlanningGridProps = {
   onExpandAllBranches: () => void;
   onCollapseAllBranches: () => void;
   expandAllBranches: boolean;
+  visibleMeasureIds: number[];
+  onToggleMeasureVisibility: (measureId: number) => void;
+  onShowAllMeasures: () => void;
   onScopeRowClick?: (row: GridRow) => void;
   sheetLabel: string;
   expansionStateKey?: string;
@@ -94,6 +97,25 @@ type SelectedCellState = {
   measureId: number;
 };
 
+const COMPACT_MODE_STORAGE_KEY = "planning.compactMode";
+
+function loadCompactModePreference(): boolean {
+  if (typeof window === "undefined") {
+    return true;
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(COMPACT_MODE_STORAGE_KEY);
+    if (rawValue === null) {
+      return true;
+    }
+
+    return rawValue === "true";
+  } catch {
+    return true;
+  }
+}
+
 function formatValue(params: ValueFormatterParams<GridRowView>, measure: GridMeasure): string {
   const value = Number(params.value ?? 0);
   const formatted = new Intl.NumberFormat("en-US", {
@@ -123,6 +145,9 @@ export function PlanningGrid({
   onExpandAllBranches,
   onCollapseAllBranches,
   expandAllBranches,
+  visibleMeasureIds,
+  onToggleMeasureVisibility,
+  onShowAllMeasures,
   onScopeRowClick,
   sheetLabel,
   expansionStateKey,
@@ -139,7 +164,7 @@ export function PlanningGrid({
   const [selectedRowKey, setSelectedRowKey] = useState<RowKey | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [selectedCell, setSelectedCell] = useState<SelectedCellState | null>(null);
-  const [compactMode, setCompactMode] = useState(false);
+  const [compactMode, setCompactMode] = useState<boolean>(() => loadCompactModePreference());
   const [showGrowthFactors, setShowGrowthFactors] = useState(false);
   const [rowCacheVersion, setRowCacheVersion] = useState(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -177,6 +202,12 @@ export function PlanningGrid({
     return indexByPeriod;
   }, [data.periods, yearPeriods]);
 
+  const visibleMeasureIdSet = useMemo(() => new Set(visibleMeasureIds), [visibleMeasureIds]);
+  const visibleMeasures = useMemo(
+    () => data.measures.filter((measure) => visibleMeasureIdSet.has(measure.measureId)),
+    [data.measures, visibleMeasureIdSet],
+  );
+
   const rootRows = useMemo<GridRowView[]>(
     () => data.rows.map((row) => ({ ...row })),
     [data.rows],
@@ -189,6 +220,24 @@ export function PlanningGrid({
   useEffect(() => {
     pendingPatchRef.current = pendingPatch;
   }, [pendingPatch]);
+
+  useEffect(() => {
+    if (selectedCell && !visibleMeasureIdSet.has(selectedCell.measureId)) {
+      setSelectedCell(null);
+    }
+
+    if (contextMenu?.measureId && !visibleMeasureIdSet.has(contextMenu.measureId)) {
+      setContextMenu(null);
+    }
+  }, [contextMenu, selectedCell, visibleMeasureIdSet]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(COMPACT_MODE_STORAGE_KEY, String(compactMode));
+  }, [compactMode]);
 
   const registerRows = (rows: GridRowView[]) => {
     let didChange = false;
@@ -356,17 +405,17 @@ export function PlanningGrid({
         children: [
           {
             headerName: "Total",
-            children: data.measures.map((measure) => buildMeasureColumn(yearPeriod, measure)),
+            children: visibleMeasures.map((measure) => buildMeasureColumn(yearPeriod, measure)),
           },
           ...monthPeriods.map<ColGroupDef<GridRowView>>((monthPeriod) => ({
             headerName: monthPeriod.label,
             columnGroupShow: "open",
-            children: data.measures.map((measure) => buildMeasureColumn(monthPeriod, measure)),
+            children: visibleMeasures.map((measure) => buildMeasureColumn(monthPeriod, measure)),
           })),
         ],
       };
     });
-  }, [data.measures, data.periods, editingLocked, onApplyGrowthFactor, showGrowthFactors, yearIndexByTimePeriodId, yearPeriods]);
+  }, [data.periods, editingLocked, onApplyGrowthFactor, showGrowthFactors, visibleMeasures, yearIndexByTimePeriodId, yearPeriods]);
 
   const defaultColDef = useMemo<ColDef<GridRowView>>(
     () => ({
@@ -899,6 +948,40 @@ export function PlanningGrid({
           <button type="button" className="secondary-button" onClick={() => importInputRef.current?.click()}>
             Upload Workbook
           </button>
+          <details className="measure-picker">
+            <summary className="secondary-button">
+              Measures ({visibleMeasures.length}/{data.measures.length})
+            </summary>
+            <div className="measure-picker-panel" onPointerDown={(event) => event.stopPropagation()}>
+              <div className="measure-picker-header">
+                <strong>Visible measures</strong>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={visibleMeasures.length === data.measures.length}
+                  onClick={onShowAllMeasures}
+                >
+                  Show all
+                </button>
+              </div>
+              <div className="measure-picker-options">
+                {data.measures.map((measure) => {
+                  const checked = visibleMeasureIdSet.has(measure.measureId);
+                  return (
+                    <label key={measure.measureId} className="measure-picker-option">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => onToggleMeasureVisibility(measure.measureId)}
+                        disabled={checked && visibleMeasures.length === 1}
+                      />
+                      <span>{measure.label}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          </details>
           <button
             type="button"
             className={`secondary-button${compactMode ? " secondary-button-active" : ""}`}
