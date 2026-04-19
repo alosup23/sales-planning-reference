@@ -34,6 +34,7 @@ public interface IPlanningRepository
     Task EnsureYearAsync(long scenarioVersionId, int fiscalYear, CancellationToken cancellationToken);
     Task CommitDraftAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken);
     Task RecordSaveCheckpointAsync(long scenarioVersionId, string userId, string mode, DateTimeOffset savedAt, CancellationToken cancellationToken);
+    Task SaveScenarioAsync(long scenarioVersionId, string userId, string mode, DateTimeOffset savedAt, PlanningActionAudit audit, CancellationToken cancellationToken);
     Task<IReadOnlyList<StoreNodeMetadata>> GetStoresAsync(CancellationToken cancellationToken);
     Task<IReadOnlyDictionary<long, long>> GetStoreRootProductNodeIdsAsync(CancellationToken cancellationToken);
     Task<StoreNodeMetadata> UpsertStoreProfileAsync(long scenarioVersionId, StoreNodeMetadata storeProfile, CancellationToken cancellationToken);

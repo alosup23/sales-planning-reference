@@ -359,6 +359,56 @@ public sealed partial class PostgresPlanningRepository : IPlanningRepository
     public Task RecordSaveCheckpointAsync(long scenarioVersionId, string userId, string mode, DateTimeOffset savedAt, CancellationToken cancellationToken) =>
         RecordSaveCheckpointDirectAsync(scenarioVersionId, userId, mode, savedAt, cancellationToken);
 
+    public async Task SaveScenarioAsync(long scenarioVersionId, string userId, string mode, DateTimeOffset savedAt, PlanningActionAudit audit, CancellationToken cancellationToken)
+    {
+        var userContext = PlanningUserIdentity.ParsePlanningUserToken(userId);
+        var stopwatch = Stopwatch.StartNew();
+
+        await ExecuteDirectMutationAsync(
+            async (connection, transaction, ct) =>
+            {
+                await CommitDraftDirectAsync(connection, transaction, scenarioVersionId, userContext, ct);
+                await RecordSaveCheckpointDirectAsync(connection, transaction, scenarioVersionId, userContext.PrimaryUserId, mode, savedAt, ct);
+                await AppendAuditDirectAsync(connection, transaction, audit, ct);
+            },
+            cancellationToken);
+
+        var remainingDraftRows = await ExecuteDirectReadAsync(
+            async (connection, transaction, ct) =>
+            {
+                await using var command = new NpgsqlCommand(
+                    """
+                    select count(*)
+                    from planning_draft_cells
+                    where scenario_version_id = @scenarioVersionId
+                      and user_id = any(@candidateUserIds);
+                    """,
+                    connection,
+                    transaction);
+                command.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+                command.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
+                return Convert.ToInt64(await command.ExecuteScalarAsync(ct) ?? 0L);
+            },
+            cancellationToken);
+
+        if (remainingDraftRows != 0)
+        {
+            _logger.LogError(
+                "Save verification failed for scenario {ScenarioVersionId} user {UserId}; {RemainingDraftRows} draft rows remained visible after commit.",
+                scenarioVersionId,
+                userContext.PrimaryUserId,
+                remainingDraftRows);
+            throw new InvalidOperationException($"Draft rows remained visible after save for scenario {scenarioVersionId}.");
+        }
+
+        InvalidateReadCaches("planning_cells");
+        _logger.LogInformation(
+            "Saved scenario {ScenarioVersionId} for user {UserId} in {ElapsedMs} ms.",
+            scenarioVersionId,
+            userContext.PrimaryUserId,
+            stopwatch.ElapsedMilliseconds);
+    }
+
     public Task<IReadOnlyList<StoreNodeMetadata>> GetStoresAsync(CancellationToken cancellationToken) =>
         GetStoresDirectAsync(cancellationToken);
 

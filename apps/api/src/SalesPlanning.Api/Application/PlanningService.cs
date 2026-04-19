@@ -304,17 +304,19 @@ public sealed partial class PlanningService : IPlanningService
 
     public async Task<SaveScenarioResponse> SaveScenarioAsync(SaveScenarioRequest request, string userId, CancellationToken cancellationToken)
     {
-        return await _repository.ExecuteAtomicAsync(async ct =>
-        {
-            var primaryUserId = GetPrimaryPlanningUserId(userId);
-            var savedAt = DateTimeOffset.UtcNow;
+        var primaryUserId = GetPrimaryPlanningUserId(userId);
+        var savedAt = DateTimeOffset.UtcNow;
+        var audit = new PlanningActionAudit(
+            await _repository.GetNextActionIdAsync(cancellationToken),
+            "save",
+            request.Mode,
+            primaryUserId,
+            $"Scenario {request.ScenarioVersionId} save checkpoint",
+            DateTimeOffset.UtcNow,
+            []);
 
-            await _repository.CommitDraftAsync(request.ScenarioVersionId, userId, ct);
-            await _repository.RecordSaveCheckpointAsync(request.ScenarioVersionId, primaryUserId, request.Mode, savedAt, ct);
-            await AppendAuditAsync("save", request.Mode, primaryUserId, $"Scenario {request.ScenarioVersionId} save checkpoint", [], ct);
-
-            return new SaveScenarioResponse("saved", request.Mode, savedAt);
-        }, cancellationToken);
+        await _repository.SaveScenarioAsync(request.ScenarioVersionId, userId, request.Mode, savedAt, audit, cancellationToken);
+        return new SaveScenarioResponse("saved", request.Mode, savedAt);
     }
 
     public async Task<UndoRedoAvailabilityDto> GetUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken)
