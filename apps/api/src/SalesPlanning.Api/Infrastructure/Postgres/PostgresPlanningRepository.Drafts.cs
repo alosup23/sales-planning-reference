@@ -1065,8 +1065,30 @@ public sealed partial class PostgresPlanningRepository
         PlanningUserIdentity.PlanningUserContext userContext,
         CancellationToken cancellationToken)
     {
-        await using (var mergeCommand = new NpgsqlCommand(
-            """
+        var stageTableName = $"planning_cells_commit_stage_{Guid.NewGuid():N}";
+        const string updateCommittedSql = """
+            update planning_cells as target
+            set input_value = source.input_value,
+                override_value = source.override_value,
+                is_system_generated_override = source.is_system_generated_override,
+                derived_value = source.derived_value,
+                effective_value = source.effective_value,
+                growth_factor = source.growth_factor,
+                is_locked = source.is_locked,
+                lock_reason = source.lock_reason,
+                locked_by = source.locked_by,
+                row_version = source.row_version,
+                cell_kind = source.cell_kind
+            from %STAGE_TABLE% as source
+            where target.scenario_version_id = source.scenario_version_id
+              and target.measure_id = source.measure_id
+              and target.store_id = source.store_id
+              and target.product_node_id = source.product_node_id
+              and target.time_period_id = source.time_period_id;
+            """;
+
+        var insertCommittedSql =
+            $"""
             insert into planning_cells (
                 scenario_version_id,
                 measure_id,
@@ -1084,61 +1106,93 @@ public sealed partial class PostgresPlanningRepository
                 locked_by,
                 row_version,
                 cell_kind)
-            select distinct on (
-                scenario_version_id,
-                measure_id,
-                store_id,
-                product_node_id,
-                time_period_id)
-                scenario_version_id,
-                measure_id,
-                store_id,
-                product_node_id,
-                time_period_id,
-                input_value,
-                override_value,
-                is_system_generated_override,
-                derived_value,
-                effective_value,
-                growth_factor,
-                is_locked,
-                lock_reason,
-                locked_by,
-                row_version,
-                cell_kind
-            from planning_draft_cells
-            where scenario_version_id = @scenarioVersionId
-              and user_id = any(@candidateUserIds)
-            order by
-                scenario_version_id,
-                measure_id,
-                store_id,
-                product_node_id,
-                time_period_id,
-                case when user_id = @primaryUserId then 0 else 1 end,
-                updated_at desc,
-                row_version desc
-            on conflict (scenario_version_id, measure_id, store_id, product_node_id, time_period_id)
-            do update set
-                input_value = excluded.input_value,
-                override_value = excluded.override_value,
-                is_system_generated_override = excluded.is_system_generated_override,
-                derived_value = excluded.derived_value,
-                effective_value = excluded.effective_value,
-                growth_factor = excluded.growth_factor,
-                is_locked = excluded.is_locked,
-                lock_reason = excluded.lock_reason,
-                locked_by = excluded.locked_by,
-                row_version = excluded.row_version,
-                cell_kind = excluded.cell_kind;
-            """,
-            connection,
-            transaction))
+            select
+                source.scenario_version_id,
+                source.measure_id,
+                source.store_id,
+                source.product_node_id,
+                source.time_period_id,
+                source.input_value,
+                source.override_value,
+                source.is_system_generated_override,
+                source.derived_value,
+                source.effective_value,
+                source.growth_factor,
+                source.is_locked,
+                source.lock_reason,
+                source.locked_by,
+                source.row_version,
+                source.cell_kind
+            from {stageTableName} as source
+            left join planning_cells as target
+              on target.scenario_version_id = source.scenario_version_id
+             and target.measure_id = source.measure_id
+             and target.store_id = source.store_id
+             and target.product_node_id = source.product_node_id
+             and target.time_period_id = source.time_period_id
+            where target.scenario_version_id is null;
+            """;
+
+        await using (var createStageCommand = new NpgsqlCommand(
+                         $"""
+                         create temp table {stageTableName} on commit drop as
+                         select distinct on (
+                             scenario_version_id,
+                             measure_id,
+                             store_id,
+                             product_node_id,
+                             time_period_id)
+                             scenario_version_id,
+                             measure_id,
+                             store_id,
+                             product_node_id,
+                             time_period_id,
+                             input_value,
+                             override_value,
+                             is_system_generated_override,
+                             derived_value,
+                             effective_value,
+                             growth_factor,
+                             is_locked,
+                             lock_reason,
+                             locked_by,
+                             row_version,
+                             cell_kind
+                         from planning_draft_cells
+                         where scenario_version_id = @scenarioVersionId
+                           and user_id = any(@candidateUserIds)
+                         order by
+                             scenario_version_id,
+                             measure_id,
+                             store_id,
+                             product_node_id,
+                             time_period_id,
+                             case when user_id = @primaryUserId then 0 else 1 end,
+                             updated_at desc,
+                             row_version desc;
+                         """,
+                         connection,
+                         transaction))
         {
-            mergeCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
-            mergeCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
-            mergeCommand.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
-            await mergeCommand.ExecuteNonQueryAsync(cancellationToken);
+            createStageCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+            createStageCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+            createStageCommand.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
+            await createStageCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var updateCommittedCommand = new NpgsqlCommand(
+                         updateCommittedSql.Replace("%STAGE_TABLE%", stageTableName, StringComparison.Ordinal),
+                         connection,
+                         transaction))
+        {
+            updateCommittedCommand.CommandTimeout = 300;
+            await updateCommittedCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var insertCommittedCommand = new NpgsqlCommand(insertCommittedSql, connection, transaction))
+        {
+            insertCommittedCommand.CommandTimeout = 300;
+            await insertCommittedCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
         await using var deleteCommand = new NpgsqlCommand(
