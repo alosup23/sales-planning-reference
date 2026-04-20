@@ -200,6 +200,7 @@ export default function App() {
   const [planningPatchToken, setPlanningPatchToken] = useState(0);
   const [expandAllBranches, setExpandAllBranches] = useState(false);
   const [visibleMeasureIds, setVisibleMeasureIds] = useState<number[]>(() => loadVisibleMeasureIdsPreference());
+  const knownMeasureIdsRef = useRef<number[]>([]);
   const hasUnsavedChangesRef = useRef(false);
   const savePromiseRef = useRef<Promise<unknown> | null>(null);
   const pendingPlanningPatchRef = useRef<PlanningGridPatch | null>(null);
@@ -1247,8 +1248,15 @@ export default function App() {
 
       const currentSet = new Set(current);
       const preserved = availableMeasureIds.filter((measureId) => currentSet.has(measureId));
-      const appended = availableMeasureIds.filter((measureId) => !currentSet.has(measureId));
-      const next = [...preserved, ...appended];
+      if (knownMeasureIdsRef.current.length === 0) {
+        return preserved.length > 0 ? preserved : availableMeasureIds;
+      }
+
+      const knownSet = new Set(knownMeasureIdsRef.current);
+      const newlyIntroduced = availableMeasureIds.filter(
+        (measureId) => !knownSet.has(measureId) && !currentSet.has(measureId),
+      );
+      const next = preserved.length > 0 ? [...preserved, ...newlyIntroduced] : availableMeasureIds;
 
       if (next.length === current.length && next.every((measureId, index) => measureId === current[index])) {
         return current;
@@ -1256,6 +1264,7 @@ export default function App() {
 
       return next;
     });
+    knownMeasureIdsRef.current = availableMeasureIds;
   }, [planningData]);
 
   useEffect(() => {
