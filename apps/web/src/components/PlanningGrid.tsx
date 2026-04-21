@@ -176,6 +176,7 @@ export function PlanningGrid({
   const initialRowsRenderedRef = useRef(false);
   const rootRowsRef = useRef<GridRowView[]>([]);
   const pendingPatchRef = useRef<PlanningGridPatch | null | undefined>(pendingPatch);
+  const gridRefreshIdentityRef = useRef<string | null>(null);
 
   useEffect(() => {
     expandedRowStateRef.current.clear();
@@ -486,8 +487,17 @@ export function PlanningGrid({
     }
 
     api.setGridOption("serverSideDatasource", serverSideDatasource);
-    api.refreshServerSide({ purge: true });
-  }, [refreshToken, serverSideDatasource]);
+
+    const nextRefreshIdentity = JSON.stringify({
+      expansionStateKey: expansionStateKey ?? null,
+      refreshToken,
+      sheetLabel,
+    });
+    const shouldPurge = gridRefreshIdentityRef.current !== nextRefreshIdentity;
+    gridRefreshIdentityRef.current = nextRefreshIdentity;
+
+    api.refreshServerSide({ purge: shouldPurge });
+  }, [expansionStateKey, refreshToken, serverSideDatasource, sheetLabel]);
 
   useEffect(() => {
     const api = gridRef.current?.api;
