@@ -442,7 +442,7 @@ export default function App() {
         includeStoreScopes: false,
         includeUndoRedo: false,
         includeInsights: false,
-        includeGrid: true,
+        includeGrid: false,
         includeInactiveGrid: true,
       }).catch(() => undefined);
     }
