@@ -681,6 +681,24 @@ public sealed partial class PostgresPlanningRepository
         {
             return;
         }
+
+        var tracedAppendedDelta = deltas.FirstOrDefault(delta =>
+            delta.Coordinate.ScenarioVersionId == 1 &&
+            delta.Coordinate.MeasureId == 2 &&
+            delta.Coordinate.StoreId == 228 &&
+            delta.Coordinate.ProductNodeId == 254 &&
+            delta.Coordinate.TimePeriodId == 202600);
+        if (tracedAppendedDelta is not null)
+        {
+            _logger.LogInformation(
+                "Draft batch {CommandBatchId} appended for scenario {ScenarioVersionId} user {UserId}: traced coordinate {CoordinateKey} old {OldEffectiveValue} new {NewEffectiveValue}.",
+                batch.CommandBatchId,
+                batch.ScenarioVersionId,
+                batch.UserId,
+                tracedAppendedDelta.Coordinate.Key,
+                tracedAppendedDelta.OldState.EffectiveValue,
+                tracedAppendedDelta.NewState.EffectiveValue);
+        }
     }
 
     private Task<PlanningUndoRedoAvailability> GetDraftUndoRedoAvailabilityDirectAsync(
@@ -766,6 +784,21 @@ public sealed partial class PostgresPlanningRepository
         var cells = batch.Deltas
             .Select(delta => (applyOldState ? delta.OldState : delta.NewState).ToPlanningCell(delta.Coordinate))
             .ToList();
+        var tracedDelta = batch.Deltas.FirstOrDefault(delta =>
+            delta.Coordinate.ScenarioVersionId == 1 &&
+            delta.Coordinate.MeasureId == 2 &&
+            delta.Coordinate.StoreId == 228 &&
+            delta.Coordinate.ProductNodeId == 254 &&
+            delta.Coordinate.TimePeriodId == 202600);
+        if (tracedDelta is not null)
+        {
+            _logger.LogInformation(
+                "Draft {Operation} loading traced coordinate {CoordinateKey}: old {OldEffectiveValue} new {NewEffectiveValue}.",
+                applyOldState ? "undo" : "redo",
+                tracedDelta.Coordinate.Key,
+                tracedDelta.OldState.EffectiveValue,
+                tracedDelta.NewState.EffectiveValue);
+        }
         await RestoreDraftPlanningCellsAsync(
             connection,
             transaction,
