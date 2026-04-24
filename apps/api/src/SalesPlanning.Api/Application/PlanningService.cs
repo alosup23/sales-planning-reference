@@ -330,11 +330,15 @@ public sealed partial class PlanningService : IPlanningService
         return _repository.ExecuteAtomicAsync(async ct =>
         {
             var primaryUserId = GetPrimaryPlanningUserId(userId);
-            var draftAvailability = await _repository.GetDraftUndoRedoAvailabilityAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
-            var batch = draftAvailability.CanUndo
-                ? await _repository.UndoLatestDraftCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct)
-                : await _repository.UndoLatestCommandAsync(scenarioVersionId, primaryUserId, UndoRedoLimit, ct);
-            if (batch is not null && !draftAvailability.CanUndo)
+            var batch = await _repository.UndoLatestDraftCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
+            var usedCommittedHistory = false;
+            if (batch is null)
+            {
+                batch = await _repository.UndoLatestCommandAsync(scenarioVersionId, primaryUserId, UndoRedoLimit, ct);
+                usedCommittedHistory = batch is not null;
+            }
+
+            if (batch is not null && usedCommittedHistory)
             {
                 await AppendAuditAsync("undo", "undo", userId, $"Undo {batch.CommandKind}", InvertCommandDeltas(batch.Deltas), ct);
             }
@@ -349,11 +353,15 @@ public sealed partial class PlanningService : IPlanningService
         return _repository.ExecuteAtomicAsync(async ct =>
         {
             var primaryUserId = GetPrimaryPlanningUserId(userId);
-            var draftAvailability = await _repository.GetDraftUndoRedoAvailabilityAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
-            var batch = draftAvailability.CanRedo
-                ? await _repository.RedoLatestDraftCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct)
-                : await _repository.RedoLatestCommandAsync(scenarioVersionId, primaryUserId, UndoRedoLimit, ct);
-            if (batch is not null && !draftAvailability.CanRedo)
+            var batch = await _repository.RedoLatestDraftCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
+            var usedCommittedHistory = false;
+            if (batch is null)
+            {
+                batch = await _repository.RedoLatestCommandAsync(scenarioVersionId, primaryUserId, UndoRedoLimit, ct);
+                usedCommittedHistory = batch is not null;
+            }
+
+            if (batch is not null && usedCommittedHistory)
             {
                 await AppendAuditAsync("redo", "redo", userId, $"Redo {batch.CommandKind}", batch.Deltas, ct);
             }

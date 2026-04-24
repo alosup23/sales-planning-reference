@@ -215,6 +215,49 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
+    public async Task UndoAndRedoAsync_ReversesLeafYearSplashAndRestoresAvailability()
+    {
+        var beforeDepartment = await GetDepartmentPathRowsAsync("Beverages", "Soft Drinks", "Cola");
+        var beforeYearQuantity = beforeDepartment.SubclassRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value;
+
+        var splashResult = await _service.ApplySplashAsync(
+            new SplashRequest(
+                1,
+                PlanningMeasures.SoldQuantity,
+                new SplashCoordinateDto(101, 2111, 202600),
+                beforeYearQuantity + 35m,
+                "seasonality_profile",
+                0,
+                "Undo yearly quantity splash",
+                null,
+                [new SplashScopeRootDto(101, 2111)]),
+            "planner.one",
+            CancellationToken.None);
+
+        Assert.Equal("applied", splashResult.Status);
+        Assert.True(splashResult.Availability.CanUndo);
+
+        var afterSplash = await GetDepartmentPathRowsAsync("Beverages", "Soft Drinks", "Cola");
+        Assert.Equal(beforeYearQuantity + 35m, afterSplash.SubclassRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value);
+
+        var undoResult = await _service.UndoAsync(1, "planner.one", CancellationToken.None);
+        var afterUndo = await GetDepartmentPathRowsAsync("Beverages", "Soft Drinks", "Cola");
+
+        Assert.Equal("applied", undoResult.Status);
+        Assert.Equal(beforeYearQuantity, afterUndo.SubclassRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value);
+        Assert.False(undoResult.Availability.CanUndo);
+        Assert.True(undoResult.Availability.CanRedo);
+
+        var redoResult = await _service.RedoAsync(1, "planner.one", CancellationToken.None);
+        var afterRedo = await GetDepartmentPathRowsAsync("Beverages", "Soft Drinks", "Cola");
+
+        Assert.Equal("applied", redoResult.Status);
+        Assert.Equal(beforeYearQuantity + 35m, afterRedo.SubclassRow.Cells[202600].Measures[PlanningMeasures.SoldQuantity].Value);
+        Assert.True(redoResult.Availability.CanUndo);
+        Assert.False(redoResult.Availability.CanRedo);
+    }
+
+    [Fact]
     public async Task ImportWorkbookAsync_LoadsValidRowsAndReturnsExceptionWorkbookForInvalidRows()
     {
         using var workbook = new XLWorkbook();
