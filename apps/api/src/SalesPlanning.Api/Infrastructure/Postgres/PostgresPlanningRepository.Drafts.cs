@@ -11,7 +11,6 @@ namespace SalesPlanning.Api.Infrastructure.Postgres;
 public sealed partial class PostgresPlanningRepository
 {
     private const int DraftWriteChunkSize = 64;
-    private const string DirectTraceCoordinateKey = "1:2:228:257:202600";
 
     private async Task<IReadOnlyList<PlanningCell>> GetDraftCellsDirectAsync(
         long scenarioVersionId,
@@ -33,6 +32,10 @@ public sealed partial class PostgresPlanningRepository
             var requestedKeys = coordinateList
                 .Select(coordinate => coordinate.Key)
                 .ToHashSet(StringComparer.Ordinal);
+            var measureIds = coordinateList.Select(coordinate => coordinate.MeasureId).ToArray();
+            var storeIds = coordinateList.Select(coordinate => coordinate.StoreId).ToArray();
+            var productNodeIds = coordinateList.Select(coordinate => coordinate.ProductNodeId).ToArray();
+            var timePeriodIds = coordinateList.Select(coordinate => coordinate.TimePeriodId).ToArray();
             const string primarySql = """
                 select p.scenario_version_id,
                        p.measure_id,
@@ -51,6 +54,20 @@ public sealed partial class PostgresPlanningRepository
                        p.row_version,
                        p.cell_kind
                 from planning_draft_cells p
+                join unnest(
+                    @measureIds,
+                    @storeIds,
+                    @productNodeIds,
+                    @timePeriodIds)
+                    as source(
+                        measure_id,
+                        store_id,
+                        product_node_id,
+                        time_period_id)
+                  on p.measure_id = source.measure_id
+                 and p.store_id = source.store_id
+                 and p.product_node_id = source.product_node_id
+                 and p.time_period_id = source.time_period_id
                 where p.scenario_version_id = @scenarioVersionId
                   and p.user_id = @primaryUserId
                 order by
@@ -80,6 +97,20 @@ public sealed partial class PostgresPlanningRepository
                        p.row_version,
                        p.cell_kind
                 from planning_draft_cells p
+                join unnest(
+                    @measureIds,
+                    @storeIds,
+                    @productNodeIds,
+                    @timePeriodIds)
+                    as source(
+                        measure_id,
+                        store_id,
+                        product_node_id,
+                        time_period_id)
+                  on p.measure_id = source.measure_id
+                 and p.store_id = source.store_id
+                 and p.product_node_id = source.product_node_id
+                 and p.time_period_id = source.time_period_id
                 where p.scenario_version_id = @scenarioVersionId
                   and p.user_id = any(@candidateUserIds)
                   and p.user_id <> @primaryUserId
@@ -93,7 +124,7 @@ public sealed partial class PostgresPlanningRepository
                     p.row_version desc;
                 """;
 
-            static async Task<List<PlanningCell>> ReadDraftCellsAsync(
+            async Task<List<PlanningCell>> ReadDraftCellsAsync(
                 NpgsqlConnection connection,
                 NpgsqlTransaction? transaction,
                 string sql,
@@ -109,6 +140,10 @@ public sealed partial class PostgresPlanningRepository
                 };
                 command.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
                 command.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+                command.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, measureIds));
+                command.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, storeIds));
+                command.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, productNodeIds));
+                command.Parameters.Add(CreateArrayParameter("@timePeriodIds", NpgsqlDbType.Bigint, timePeriodIds));
                 if (includeCandidateArray)
                 {
                     command.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
@@ -132,10 +167,14 @@ public sealed partial class PostgresPlanningRepository
                 includeCandidateArray: false,
                 ct);
 
+            var distinctCells = scenarioDraftCells
+                .DistinctBy(cell => cell.Coordinate.Key)
+                .ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone(), StringComparer.Ordinal);
+
             var usedAliasFallback = false;
-            if (scenarioDraftCells.Count == 0 && userContext.CandidateUserIds.Count > 1)
+            if (userContext.CandidateUserIds.Count > 1 && distinctCells.Count < requestedKeys.Count)
             {
-                scenarioDraftCells = await ReadDraftCellsAsync(
+                var aliasDraftCells = await ReadDraftCellsAsync(
                     connection,
                     transaction,
                     aliasFallbackSql,
@@ -143,29 +182,17 @@ public sealed partial class PostgresPlanningRepository
                     userContext,
                     includeCandidateArray: true,
                     ct);
-                usedAliasFallback = scenarioDraftCells.Count > 0;
-            }
-
-            var distinctCells = scenarioDraftCells
-                .DistinctBy(cell => cell.Coordinate.Key)
-                .Where(cell => requestedKeys.Contains(cell.Coordinate.Key))
-                .Select(cell => cell.Clone())
-                .ToList();
-
-            if (requestedKeys.Contains(DirectTraceCoordinateKey))
-            {
-                _logger.LogInformation(
-                    "Draft read trace for {CoordinateKey}: scenarioDraftPresent={ScenarioDraftPresent}, filteredDraftPresent={FilteredDraftPresent}, usedAliasFallback={UsedAliasFallback}.",
-                    DirectTraceCoordinateKey,
-                    scenarioDraftCells.Any(cell => string.Equals(cell.Coordinate.Key, DirectTraceCoordinateKey, StringComparison.Ordinal)),
-                    distinctCells.Any(cell => string.Equals(cell.Coordinate.Key, DirectTraceCoordinateKey, StringComparison.Ordinal)),
-                    usedAliasFallback);
+                foreach (var aliasDraftCell in aliasDraftCells.DistinctBy(cell => cell.Coordinate.Key))
+                {
+                    distinctCells.TryAdd(aliasDraftCell.Coordinate.Key, aliasDraftCell.Clone());
+                }
+                usedAliasFallback = aliasDraftCells.Count > 0;
             }
 
             if (coordinateList.Count <= 500)
             {
                 _logger.LogInformation(
-                    "Loaded {DraftCellCount} draft cells for scenario {ScenarioVersionId} user {UserId} from {RequestedCoordinateCount} requested coordinates. Total draft rows for user: {TotalDraftRowsForUser}. Alias fallback used: {UsedAliasFallback}.",
+                    "Loaded {DraftCellCount} draft cells for scenario {ScenarioVersionId} user {UserId} from {RequestedCoordinateCount} requested coordinates. Primary rows loaded: {PrimaryDraftRowsLoaded}. Alias fallback used: {UsedAliasFallback}.",
                     distinctCells.Count,
                     scenarioVersionId,
                     userContext.PrimaryUserId,
@@ -174,7 +201,9 @@ public sealed partial class PostgresPlanningRepository
                     usedAliasFallback);
             }
 
-            return distinctCells;
+            return distinctCells.Values
+                .Where(cell => requestedKeys.Contains(cell.Coordinate.Key))
+                .ToList();
         }, cancellationToken);
     }
 
@@ -243,16 +272,6 @@ public sealed partial class PostgresPlanningRepository
               and target.store_id = source.store_id
               and target.product_node_id = source.product_node_id
               and target.time_period_id = source.time_period_id;
-            """;
-        const string probeDraftCellSql = """
-            select effective_value
-            from planning_draft_cells
-            where scenario_version_id = @scenarioVersionId
-              and user_id = @primaryUserId
-              and measure_id = 2
-              and store_id = 228
-              and product_node_id = 257
-              and time_period_id = 202600;
             """;
 
         foreach (var cellChunk in orderedCells.Chunk(DraftWriteChunkSize))
@@ -512,21 +531,6 @@ public sealed partial class PostgresPlanningRepository
                     updatedPrimaryRowCount,
                     insertStopwatch.ElapsedMilliseconds,
                     insertedPrimaryRowCount);
-            }
-
-            if (cellChunk.Any(cell => string.Equals(cell.Coordinate.Key, DirectTraceCoordinateKey, StringComparison.Ordinal)))
-            {
-                await using var probeCommand = new NpgsqlCommand(probeDraftCellSql, connection, transaction)
-                {
-                    CommandTimeout = 300
-                };
-                probeCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
-                probeCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
-                var probeValue = await probeCommand.ExecuteScalarAsync(cancellationToken);
-                _logger.LogInformation(
-                    "Draft write trace for {CoordinateKey}: probeValue={ProbeValue}.",
-                    DirectTraceCoordinateKey,
-                    probeValue ?? "<missing>");
             }
         }
     }

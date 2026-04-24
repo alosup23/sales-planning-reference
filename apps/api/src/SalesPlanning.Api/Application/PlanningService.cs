@@ -1049,6 +1049,41 @@ public sealed partial class PlanningService : IPlanningService
             case PlanningMeasures.TotalCosts:
                 unitCost = PlanningMath.ResolveUnitCostForTotalCosts(quantity, newValue);
                 break;
+            case PlanningMeasures.GrossProfit:
+            {
+                var normalizedGrossProfit = PlanningMath.NormalizeGrossProfit(newValue);
+                var currentTotalCosts = PlanningMath.CalculateTotalCosts(quantity, unitCost);
+                var targetRevenue = PlanningMath.NormalizeRevenue(currentTotalCosts + normalizedGrossProfit);
+
+                if (quantity > 0m)
+                {
+                    ApplyExactRevenueLeafStatePreservingQuantity(
+                        coordinate,
+                        targetRevenue,
+                        quantityCell,
+                        aspCell,
+                        unitCostCell,
+                        revenueCell,
+                        totalCostsCell,
+                        grossProfitCell,
+                        grossProfitPercentCell);
+                }
+                else
+                {
+                    ApplyExactRevenueLeafState(
+                        coordinate,
+                        targetRevenue,
+                        quantityCell,
+                        aspCell,
+                        unitCostCell,
+                        revenueCell,
+                        totalCostsCell,
+                        grossProfitCell,
+                        grossProfitPercentCell);
+                }
+
+                return;
+            }
             case PlanningMeasures.GrossProfitPercent:
                 (asp, unitCost) = PlanningMath.ResolveLeafStateForGrossProfitPercent(asp, unitCost, newValue);
                 break;
@@ -1397,7 +1432,7 @@ public sealed partial class PlanningService : IPlanningService
             if (normalizedMethod == "seasonality_profile" && (manualWeights is null || manualWeights.Count == 0))
             {
                 var defaultTimeWeights = BuildDefaultSeasonalityWeights(sourceTimePeriodId, metadata);
-                var defaultProductWeights = BuildProductWeights(measureId, targetCells);
+                var defaultProductWeights = BuildProductWeights(targetCells);
                 return targetCells.ToDictionary(
                     cell => cell.Coordinate.Key,
                     cell => defaultTimeWeights[cell.Coordinate.TimePeriodId] * defaultProductWeights[cell.Coordinate.ProductNodeId]);
@@ -1424,7 +1459,7 @@ public sealed partial class PlanningService : IPlanningService
                     return weight;
                 });
 
-            var productWeights = BuildProductWeights(measureId, targetCells);
+            var productWeights = BuildProductWeights(targetCells);
             return targetCells.ToDictionary(
                 cell => cell.Coordinate.Key,
                 cell => timeWeights[cell.Coordinate.TimePeriodId] * productWeights[cell.Coordinate.ProductNodeId]);
@@ -1439,7 +1474,7 @@ public sealed partial class PlanningService : IPlanningService
             : targetCells.ToDictionary(cell => cell.Coordinate.Key, _ => 1m);
     }
 
-    private static Dictionary<long, decimal> BuildProductWeights(long measureId, IReadOnlyList<PlanningCell> targetCells)
+    private static Dictionary<long, decimal> BuildProductWeights(IReadOnlyList<PlanningCell> targetCells)
     {
         var productWeights = targetCells
             .GroupBy(cell => cell.Coordinate.ProductNodeId)
@@ -1450,7 +1485,7 @@ public sealed partial class PlanningService : IPlanningService
             return productWeights;
         }
 
-        return productWeights.Keys.ToDictionary(key => key, _ => measureId == PlanningMeasures.AverageSellingPrice ? 1m : 1m);
+        return productWeights.Keys.ToDictionary(key => key, _ => 1m);
     }
 
     private static Dictionary<long, decimal> BuildDefaultSeasonalityWeights(long yearTimePeriodId, PlanningMetadataSnapshot metadata)

@@ -303,7 +303,7 @@ public sealed partial class PlanningService
 
             foreach (var timePeriodId in impactedTimeIds)
             {
-                foreach (var measureId in new[] { PlanningMeasures.SalesRevenue, PlanningMeasures.SoldQuantity, PlanningMeasures.TotalCosts, PlanningMeasures.GrossProfit })
+                foreach (var measureId in PlanningMeasures.RollupMeasureIds)
                 {
                     var leafCoordinate = new PlanningCellCoordinate(
                         scenarioVersionId,
@@ -349,7 +349,7 @@ public sealed partial class PlanningService
                 .OrderBy(timeId => metadata.TimePeriods[timeId].SortOrder))
             {
                 var storeId = metadata.ProductNodes[productNodeId].StoreId;
-                foreach (var measureId in new[] { PlanningMeasures.SalesRevenue, PlanningMeasures.SoldQuantity, PlanningMeasures.TotalCosts, PlanningMeasures.GrossProfit })
+                foreach (var measureId in PlanningMeasures.RollupMeasureIds)
                 {
                     var coordinate = new PlanningCellCoordinate(scenarioVersionId, measureId, storeId, productNodeId, timePeriodId);
                     if (!originalCells.TryGetValue(coordinate.Key, out var originalCell))
@@ -415,7 +415,7 @@ public sealed partial class PlanningService
         long aggregateTimePeriodId,
         IReadOnlyList<long> childTimeIds)
     {
-        foreach (var measureId in new[] { PlanningMeasures.SalesRevenue, PlanningMeasures.SoldQuantity, PlanningMeasures.TotalCosts, PlanningMeasures.GrossProfit })
+        foreach (var measureId in PlanningMeasures.RollupMeasureIds)
         {
             var cell = workingCells[new PlanningCellCoordinate(scenarioVersionId, measureId, storeId, productNodeId, aggregateTimePeriodId).Key];
             var value = childTimeIds.Sum(childTimeId => workingCells[new PlanningCellCoordinate(
@@ -436,7 +436,7 @@ public sealed partial class PlanningService
         long timePeriodId,
         IReadOnlyList<long> childProductIds)
     {
-        foreach (var measureId in new[] { PlanningMeasures.SalesRevenue, PlanningMeasures.SoldQuantity, PlanningMeasures.TotalCosts, PlanningMeasures.GrossProfit })
+        foreach (var measureId in PlanningMeasures.RollupMeasureIds)
         {
             var cell = workingCells[new PlanningCellCoordinate(scenarioVersionId, measureId, storeId, productNodeId, timePeriodId).Key];
             var value = childProductIds.Sum(childProductId => workingCells[new PlanningCellCoordinate(

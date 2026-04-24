@@ -1191,12 +1191,29 @@ function isAggregateRow(row: GridRowView): boolean {
   return !row.isLeaf;
 }
 
-function isDirectChildRow(parent: GridRowView, child: GridRowView): boolean {
-  if (child.path.length !== parent.path.length + 1) {
-    return false;
+function getPathKey(path: readonly string[]): string {
+  return path.join("\u001f");
+}
+
+function buildDirectChildrenMap(rows: Iterable<GridRowView>): Map<string, GridRowView[]> {
+  const directChildrenByParentPath = new Map<string, GridRowView[]>();
+
+  for (const row of rows) {
+    if (row.path.length <= 1) {
+      continue;
+    }
+
+    const parentPathKey = getPathKey(row.path.slice(0, -1));
+    const directChildren = directChildrenByParentPath.get(parentPathKey);
+    if (directChildren) {
+      directChildren.push(row);
+      continue;
+    }
+
+    directChildrenByParentPath.set(parentPathKey, [row]);
   }
 
-  return parent.path.every((segment, index) => child.path[index] === segment);
+  return directChildrenByParentPath;
 }
 
 function roundAwayFromZero(value: number, decimalPlaces: number): number {
@@ -1295,12 +1312,13 @@ function recomputeAggregateRows(
   }
 
   const rowsByKey = new Map(rows.map((row) => [getRowKey(row), row] as const));
+  const directChildrenByParentPath = buildDirectChildrenMap(rowsByKey.values());
   const aggregateRows = [...rowsByKey.values()]
     .filter(isAggregateRow)
     .sort((left, right) => right.path.length - left.path.length);
 
   aggregateRows.forEach((row) => {
-    const directChildren = [...rowsByKey.values()].filter((candidate) => isDirectChildRow(row, candidate));
+    const directChildren = directChildrenByParentPath.get(getPathKey(row.path)) ?? [];
     if (directChildren.length === 0) {
       return;
     }
@@ -1327,12 +1345,13 @@ function recomputeLoadedAggregateRows(
     loadedRowsByKey.set(getRowKey(node.data), node.data);
   });
 
+  const directChildrenByParentPath = buildDirectChildrenMap(loadedRowsByKey.values());
   const aggregateRows = [...loadedRowsByKey.values()]
     .filter(isAggregateRow)
     .sort((left, right) => right.path.length - left.path.length);
 
   aggregateRows.forEach((row) => {
-    const directChildren = [...loadedRowsByKey.values()].filter((candidate) => isDirectChildRow(row, candidate));
+    const directChildren = directChildrenByParentPath.get(getPathKey(row.path)) ?? [];
     if (directChildren.length === 0) {
       return;
     }

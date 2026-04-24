@@ -1340,10 +1340,10 @@ export default function App() {
 
     const measureCell = row.cells[timePeriodId]?.measures[measureId];
     const period = planningData.periods.find((item) => item.timePeriodId === timePeriodId);
-    const isLeafMonth = row.isLeaf && period?.grain === "month";
+    const isLeafCoordinate = row.isLeaf && Boolean(row.bindingProductNodeId);
     const scopeRoots = row.splashRoots ?? [];
 
-    if (isLeafMonth && row.bindingProductNodeId) {
+    if (isLeafCoordinate && row.bindingProductNodeId) {
       await editMutation.mutateAsync({
         scenarioVersionId: planningData.scenarioVersionId,
         measureId,
@@ -1354,8 +1354,8 @@ export default function App() {
             productNodeId: row.bindingProductNodeId,
             timePeriodId,
             newValue,
-            editMode: "input",
-            rowVersion: measureCell?.rowVersion ?? 0,
+            editMode: period?.grain === "month" ? "input" : "override",
+            rowVersion: measureCell?.rowVersion ?? null,
           },
         ],
       });

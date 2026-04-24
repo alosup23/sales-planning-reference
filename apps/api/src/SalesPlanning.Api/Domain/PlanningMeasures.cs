@@ -16,12 +16,13 @@ public static class PlanningMeasures
         new(SoldQuantity, "Sold Qty", 0, false, false, true, true),
         new(AverageSellingPrice, "ASP", 2, true, false, true, true),
         new(UnitCost, "Unit Cost", 2, true, false, true, true),
-        new(TotalCosts, "Total Costs", 0, false, false, false, false),
-        new(GrossProfit, "GP", 0, false, false, false, false),
+        new(TotalCosts, "Total Costs", 0, false, false, true, true),
+        new(GrossProfit, "GP", 0, false, false, true, true),
         new(GrossProfitPercent, "GP%", 1, true, true, true, true)
     ];
 
     public static IReadOnlyList<long> SupportedMeasureIds => Definitions.Select(definition => definition.MeasureId).ToList();
+    public static IReadOnlyList<long> RollupMeasureIds { get; } = [SalesRevenue, SoldQuantity, TotalCosts, GrossProfit];
 
     public static PlanningMeasureDefinition GetDefinition(long measureId)
     {
