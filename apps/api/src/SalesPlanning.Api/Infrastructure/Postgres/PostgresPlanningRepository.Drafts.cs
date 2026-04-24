@@ -766,7 +766,7 @@ public sealed partial class PostgresPlanningRepository
         var cells = batch.Deltas
             .Select(delta => (applyOldState ? delta.OldState : delta.NewState).ToPlanningCell(delta.Coordinate))
             .ToList();
-        await UpsertDraftPlanningCellsAsync(
+        await RestoreDraftPlanningCellsAsync(
             connection,
             transaction,
             scenarioVersionId,
@@ -812,6 +812,268 @@ public sealed partial class PostgresPlanningRepository
         return applyOldState
             ? batch with { IsUndone = true, UndoneAt = DateTimeOffset.UtcNow }
             : batch with { IsUndone = false, UndoneAt = null };
+    }
+
+    private async Task RestoreDraftPlanningCellsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        long scenarioVersionId,
+        PlanningUserIdentity.PlanningUserContext userContext,
+        IReadOnlyList<PlanningCell> cells,
+        CancellationToken cancellationToken)
+    {
+        if (cells.Count == 0)
+        {
+            return;
+        }
+
+        var orderedCells = cells
+            .GroupBy(cell => cell.Coordinate.Key, StringComparer.Ordinal)
+            .Select(group => group.Last())
+            .OrderBy(cell => cell.Coordinate.MeasureId)
+            .ThenBy(cell => cell.Coordinate.StoreId)
+            .ThenBy(cell => cell.Coordinate.ProductNodeId)
+            .ThenBy(cell => cell.Coordinate.TimePeriodId)
+            .ToList();
+        var deletionCells = orderedCells
+            .Where(ShouldDeleteDraftCell)
+            .ToList();
+        var upsertCells = orderedCells
+            .Where(cell => !ShouldDeleteDraftCell(cell))
+            .ToList();
+
+        var measureIds = orderedCells.Select(cell => cell.Coordinate.MeasureId).ToArray();
+        var storeIds = orderedCells.Select(cell => cell.Coordinate.StoreId).ToArray();
+        var productNodeIds = orderedCells.Select(cell => cell.Coordinate.ProductNodeId).ToArray();
+        var timePeriodIds = orderedCells.Select(cell => cell.Coordinate.TimePeriodId).ToArray();
+
+        const string deleteAliasSql = """
+            delete from planning_draft_cells as target
+            using unnest(
+                @measureIds,
+                @storeIds,
+                @productNodeIds,
+                @timePeriodIds)
+                as source(
+                    measure_id,
+                    store_id,
+                    product_node_id,
+                    time_period_id)
+            where target.scenario_version_id = @scenarioVersionId
+              and target.user_id = any(@candidateUserIds)
+              and target.user_id <> @primaryUserId
+              and target.measure_id = source.measure_id
+              and target.store_id = source.store_id
+              and target.product_node_id = source.product_node_id
+              and target.time_period_id = source.time_period_id;
+            """;
+
+        await using (var deleteAliasCommand = new NpgsqlCommand(deleteAliasSql, connection, transaction))
+        {
+            deleteAliasCommand.CommandTimeout = 300;
+            deleteAliasCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+            deleteAliasCommand.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
+            deleteAliasCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+            deleteAliasCommand.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, measureIds));
+            deleteAliasCommand.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, storeIds));
+            deleteAliasCommand.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, productNodeIds));
+            deleteAliasCommand.Parameters.Add(CreateArrayParameter("@timePeriodIds", NpgsqlDbType.Bigint, timePeriodIds));
+            await deleteAliasCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        if (deletionCells.Count > 0)
+        {
+            const string deletePrimarySql = """
+                delete from planning_draft_cells as target
+                using unnest(
+                    @measureIds,
+                    @storeIds,
+                    @productNodeIds,
+                    @timePeriodIds)
+                    as source(
+                        measure_id,
+                        store_id,
+                        product_node_id,
+                        time_period_id)
+                where target.scenario_version_id = @scenarioVersionId
+                  and target.user_id = @primaryUserId
+                  and target.measure_id = source.measure_id
+                  and target.store_id = source.store_id
+                  and target.product_node_id = source.product_node_id
+                  and target.time_period_id = source.time_period_id;
+                """;
+            await using var deletePrimaryCommand = new NpgsqlCommand(deletePrimarySql, connection, transaction);
+            deletePrimaryCommand.CommandTimeout = 300;
+            deletePrimaryCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+            deletePrimaryCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+            deletePrimaryCommand.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, deletionCells.Select(cell => cell.Coordinate.MeasureId).ToArray()));
+            deletePrimaryCommand.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, deletionCells.Select(cell => cell.Coordinate.StoreId).ToArray()));
+            deletePrimaryCommand.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, deletionCells.Select(cell => cell.Coordinate.ProductNodeId).ToArray()));
+            deletePrimaryCommand.Parameters.Add(CreateArrayParameter("@timePeriodIds", NpgsqlDbType.Bigint, deletionCells.Select(cell => cell.Coordinate.TimePeriodId).ToArray()));
+            await deletePrimaryCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        if (upsertCells.Count == 0)
+        {
+            return;
+        }
+
+        const string updatePrimarySql = """
+            update planning_draft_cells
+            set input_value = @inputValue,
+                override_value = @overrideValue,
+                is_system_generated_override = @isSystemGeneratedOverride,
+                derived_value = @derivedValue,
+                effective_value = @effectiveValue,
+                growth_factor = @growthFactor,
+                is_locked = @isLocked,
+                lock_reason = @lockReason,
+                locked_by = @lockedBy,
+                row_version = @rowVersion,
+                cell_kind = @cellKind,
+                updated_at = now()
+            where scenario_version_id = @scenarioVersionId
+              and user_id = @userId
+              and measure_id = @measureId
+              and store_id = @storeId
+              and product_node_id = @productNodeId
+              and time_period_id = @timePeriodId;
+            """;
+        const string insertPrimarySql = """
+            insert into planning_draft_cells (
+                scenario_version_id,
+                user_id,
+                measure_id,
+                store_id,
+                product_node_id,
+                time_period_id,
+                input_value,
+                override_value,
+                is_system_generated_override,
+                derived_value,
+                effective_value,
+                growth_factor,
+                is_locked,
+                lock_reason,
+                locked_by,
+                row_version,
+                cell_kind,
+                created_at,
+                updated_at)
+            values (
+                @scenarioVersionId,
+                @userId,
+                @measureId,
+                @storeId,
+                @productNodeId,
+                @timePeriodId,
+                @inputValue,
+                @overrideValue,
+                @isSystemGeneratedOverride,
+                @derivedValue,
+                @effectiveValue,
+                @growthFactor,
+                @isLocked,
+                @lockReason,
+                @lockedBy,
+                @rowVersion,
+                @cellKind,
+                now(),
+                now());
+            """;
+
+        await using var updatePrimaryCommand = new NpgsqlCommand(updatePrimarySql, connection, transaction);
+        updatePrimaryCommand.CommandTimeout = 300;
+        var updateScenarioVersionParameter = updatePrimaryCommand.Parameters.Add("@scenarioVersionId", NpgsqlDbType.Bigint);
+        var updateUserParameter = updatePrimaryCommand.Parameters.Add("@userId", NpgsqlDbType.Text);
+        var updateMeasureParameter = updatePrimaryCommand.Parameters.Add("@measureId", NpgsqlDbType.Bigint);
+        var updateStoreParameter = updatePrimaryCommand.Parameters.Add("@storeId", NpgsqlDbType.Bigint);
+        var updateProductNodeParameter = updatePrimaryCommand.Parameters.Add("@productNodeId", NpgsqlDbType.Bigint);
+        var updateTimePeriodParameter = updatePrimaryCommand.Parameters.Add("@timePeriodId", NpgsqlDbType.Bigint);
+        var updateInputParameter = updatePrimaryCommand.Parameters.Add("@inputValue", NpgsqlDbType.Numeric);
+        var updateOverrideParameter = updatePrimaryCommand.Parameters.Add("@overrideValue", NpgsqlDbType.Numeric);
+        var updateSystemGeneratedParameter = updatePrimaryCommand.Parameters.Add("@isSystemGeneratedOverride", NpgsqlDbType.Integer);
+        var updateDerivedParameter = updatePrimaryCommand.Parameters.Add("@derivedValue", NpgsqlDbType.Numeric);
+        var updateEffectiveParameter = updatePrimaryCommand.Parameters.Add("@effectiveValue", NpgsqlDbType.Numeric);
+        var updateGrowthFactorParameter = updatePrimaryCommand.Parameters.Add("@growthFactor", NpgsqlDbType.Numeric);
+        var updateLockedParameter = updatePrimaryCommand.Parameters.Add("@isLocked", NpgsqlDbType.Integer);
+        var updateLockReasonParameter = updatePrimaryCommand.Parameters.Add("@lockReason", NpgsqlDbType.Text);
+        var updateLockedByParameter = updatePrimaryCommand.Parameters.Add("@lockedBy", NpgsqlDbType.Text);
+        var updateRowVersionParameter = updatePrimaryCommand.Parameters.Add("@rowVersion", NpgsqlDbType.Bigint);
+        var updateCellKindParameter = updatePrimaryCommand.Parameters.Add("@cellKind", NpgsqlDbType.Text);
+
+        await using var insertPrimaryCommand = new NpgsqlCommand(insertPrimarySql, connection, transaction);
+        insertPrimaryCommand.CommandTimeout = 300;
+        var insertScenarioVersionParameter = insertPrimaryCommand.Parameters.Add("@scenarioVersionId", NpgsqlDbType.Bigint);
+        var insertUserParameter = insertPrimaryCommand.Parameters.Add("@userId", NpgsqlDbType.Text);
+        var insertMeasureParameter = insertPrimaryCommand.Parameters.Add("@measureId", NpgsqlDbType.Bigint);
+        var insertStoreParameter = insertPrimaryCommand.Parameters.Add("@storeId", NpgsqlDbType.Bigint);
+        var insertProductNodeParameter = insertPrimaryCommand.Parameters.Add("@productNodeId", NpgsqlDbType.Bigint);
+        var insertTimePeriodParameter = insertPrimaryCommand.Parameters.Add("@timePeriodId", NpgsqlDbType.Bigint);
+        var insertInputParameter = insertPrimaryCommand.Parameters.Add("@inputValue", NpgsqlDbType.Numeric);
+        var insertOverrideParameter = insertPrimaryCommand.Parameters.Add("@overrideValue", NpgsqlDbType.Numeric);
+        var insertSystemGeneratedParameter = insertPrimaryCommand.Parameters.Add("@isSystemGeneratedOverride", NpgsqlDbType.Integer);
+        var insertDerivedParameter = insertPrimaryCommand.Parameters.Add("@derivedValue", NpgsqlDbType.Numeric);
+        var insertEffectiveParameter = insertPrimaryCommand.Parameters.Add("@effectiveValue", NpgsqlDbType.Numeric);
+        var insertGrowthFactorParameter = insertPrimaryCommand.Parameters.Add("@growthFactor", NpgsqlDbType.Numeric);
+        var insertLockedParameter = insertPrimaryCommand.Parameters.Add("@isLocked", NpgsqlDbType.Integer);
+        var insertLockReasonParameter = insertPrimaryCommand.Parameters.Add("@lockReason", NpgsqlDbType.Text);
+        var insertLockedByParameter = insertPrimaryCommand.Parameters.Add("@lockedBy", NpgsqlDbType.Text);
+        var insertRowVersionParameter = insertPrimaryCommand.Parameters.Add("@rowVersion", NpgsqlDbType.Bigint);
+        var insertCellKindParameter = insertPrimaryCommand.Parameters.Add("@cellKind", NpgsqlDbType.Text);
+
+        foreach (var cell in upsertCells)
+        {
+            var coordinate = cell.Coordinate;
+            var inputValue = (object?)cell.InputValue ?? DBNull.Value;
+            var overrideValue = (object?)cell.OverrideValue ?? DBNull.Value;
+            var lockReason = (object?)cell.LockReason ?? DBNull.Value;
+            var lockedBy = (object?)cell.LockedBy ?? DBNull.Value;
+
+            updateScenarioVersionParameter.Value = scenarioVersionId;
+            updateUserParameter.Value = userContext.PrimaryUserId;
+            updateMeasureParameter.Value = coordinate.MeasureId;
+            updateStoreParameter.Value = coordinate.StoreId;
+            updateProductNodeParameter.Value = coordinate.ProductNodeId;
+            updateTimePeriodParameter.Value = coordinate.TimePeriodId;
+            updateInputParameter.Value = inputValue;
+            updateOverrideParameter.Value = overrideValue;
+            updateSystemGeneratedParameter.Value = cell.IsSystemGeneratedOverride ? 1 : 0;
+            updateDerivedParameter.Value = cell.DerivedValue;
+            updateEffectiveParameter.Value = cell.EffectiveValue;
+            updateGrowthFactorParameter.Value = cell.GrowthFactor;
+            updateLockedParameter.Value = cell.IsLocked ? 1 : 0;
+            updateLockReasonParameter.Value = lockReason;
+            updateLockedByParameter.Value = lockedBy;
+            updateRowVersionParameter.Value = cell.RowVersion;
+            updateCellKindParameter.Value = cell.CellKind;
+
+            var updatedRows = await updatePrimaryCommand.ExecuteNonQueryAsync(cancellationToken);
+            if (updatedRows > 0)
+            {
+                continue;
+            }
+
+            insertScenarioVersionParameter.Value = scenarioVersionId;
+            insertUserParameter.Value = userContext.PrimaryUserId;
+            insertMeasureParameter.Value = coordinate.MeasureId;
+            insertStoreParameter.Value = coordinate.StoreId;
+            insertProductNodeParameter.Value = coordinate.ProductNodeId;
+            insertTimePeriodParameter.Value = coordinate.TimePeriodId;
+            insertInputParameter.Value = inputValue;
+            insertOverrideParameter.Value = overrideValue;
+            insertSystemGeneratedParameter.Value = cell.IsSystemGeneratedOverride ? 1 : 0;
+            insertDerivedParameter.Value = cell.DerivedValue;
+            insertEffectiveParameter.Value = cell.EffectiveValue;
+            insertGrowthFactorParameter.Value = cell.GrowthFactor;
+            insertLockedParameter.Value = cell.IsLocked ? 1 : 0;
+            insertLockReasonParameter.Value = lockReason;
+            insertLockedByParameter.Value = lockedBy;
+            insertRowVersionParameter.Value = cell.RowVersion;
+            insertCellKindParameter.Value = cell.CellKind;
+
+            await insertPrimaryCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
     }
 
     private static async Task InvalidateDraftRedoStackDirectAsync(
