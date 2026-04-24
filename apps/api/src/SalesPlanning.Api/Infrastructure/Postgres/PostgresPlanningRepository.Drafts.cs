@@ -230,6 +230,12 @@ public sealed partial class PostgresPlanningRepository
             .ThenBy(cell => cell.Coordinate.ProductNodeId)
             .ThenBy(cell => cell.Coordinate.TimePeriodId)
             .ToList();
+        var deletionCells = orderedCells
+            .Where(ShouldDeleteDraftCell)
+            .ToList();
+        var upsertCells = orderedCells
+            .Where(cell => !ShouldDeleteDraftCell(cell))
+            .ToList();
         const string deleteAliasSql = """
             delete from planning_draft_cells as target
             using unnest(
@@ -273,8 +279,70 @@ public sealed partial class PostgresPlanningRepository
               and target.product_node_id = source.product_node_id
               and target.time_period_id = source.time_period_id;
             """;
+        const string deletePrimarySql = """
+            delete from planning_draft_cells as target
+            using unnest(
+                @measureIds,
+                @storeIds,
+                @productNodeIds,
+                @timePeriodIds)
+                as source(
+                    measure_id,
+                    store_id,
+                    product_node_id,
+                    time_period_id)
+            where target.scenario_version_id = @scenarioVersionId
+              and target.user_id = @primaryUserId
+              and target.measure_id = source.measure_id
+              and target.store_id = source.store_id
+              and target.product_node_id = source.product_node_id
+              and target.time_period_id = source.time_period_id;
+            """;
 
-        foreach (var cellChunk in orderedCells.Chunk(DraftWriteChunkSize))
+        async Task DeleteDraftChunkAsync(IReadOnlyList<PlanningCell> chunk, CancellationToken ct)
+        {
+            if (chunk.Count == 0)
+            {
+                return;
+            }
+
+            var measureIds = chunk.Select(cell => cell.Coordinate.MeasureId).ToArray();
+            var storeIds = chunk.Select(cell => cell.Coordinate.StoreId).ToArray();
+            var productNodeIds = chunk.Select(cell => cell.Coordinate.ProductNodeId).ToArray();
+            var timePeriodIds = chunk.Select(cell => cell.Coordinate.TimePeriodId).ToArray();
+
+            await using (var deleteAliasCommand = new NpgsqlCommand(deleteAliasSql, connection, transaction))
+            {
+                deleteAliasCommand.CommandTimeout = 300;
+                deleteAliasCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+                deleteAliasCommand.Parameters.Add(CreateArrayParameter("@candidateUserIds", NpgsqlDbType.Text, userContext.CandidateUserIds.ToArray()));
+                deleteAliasCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+                deleteAliasCommand.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, measureIds));
+                deleteAliasCommand.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, storeIds));
+                deleteAliasCommand.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, productNodeIds));
+                deleteAliasCommand.Parameters.Add(CreateArrayParameter("@timePeriodIds", NpgsqlDbType.Bigint, timePeriodIds));
+                await deleteAliasCommand.ExecuteNonQueryAsync(ct);
+            }
+
+            await using var deletePrimaryCommand = new NpgsqlCommand(deletePrimarySql, connection, transaction)
+            {
+                CommandTimeout = 300
+            };
+            deletePrimaryCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+            deletePrimaryCommand.Parameters.AddWithValue("@primaryUserId", userContext.PrimaryUserId);
+            deletePrimaryCommand.Parameters.Add(CreateArrayParameter("@measureIds", NpgsqlDbType.Bigint, measureIds));
+            deletePrimaryCommand.Parameters.Add(CreateArrayParameter("@storeIds", NpgsqlDbType.Bigint, storeIds));
+            deletePrimaryCommand.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, productNodeIds));
+            deletePrimaryCommand.Parameters.Add(CreateArrayParameter("@timePeriodIds", NpgsqlDbType.Bigint, timePeriodIds));
+            await deletePrimaryCommand.ExecuteNonQueryAsync(ct);
+        }
+
+        foreach (var deletionChunk in deletionCells.Chunk(DraftWriteChunkSize))
+        {
+            await DeleteDraftChunkAsync(deletionChunk, cancellationToken);
+        }
+
+        foreach (var cellChunk in upsertCells.Chunk(DraftWriteChunkSize))
         {
             var chunkStopwatch = Stopwatch.StartNew();
             var measureIds = cellChunk.Select(cell => cell.Coordinate.MeasureId).ToArray();
@@ -533,6 +601,20 @@ public sealed partial class PostgresPlanningRepository
                     insertedPrimaryRowCount);
             }
         }
+    }
+
+    private static bool ShouldDeleteDraftCell(PlanningCell cell)
+    {
+        return cell.RowVersion <= 0
+               && cell.InputValue is null
+               && cell.OverrideValue is null
+               && !cell.IsSystemGeneratedOverride
+               && cell.DerivedValue == 0m
+               && cell.EffectiveValue == 0m
+               && cell.GrowthFactor == 1.0m
+               && !cell.IsLocked
+               && string.IsNullOrEmpty(cell.LockReason)
+               && string.IsNullOrEmpty(cell.LockedBy);
     }
 
     private Task<long> GetNextDraftCommandBatchIdDirectAsync(CancellationToken cancellationToken) =>
