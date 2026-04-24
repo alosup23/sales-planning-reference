@@ -755,6 +755,11 @@ public sealed partial class PostgresPlanningRepository
             : await LoadDraftRedoCandidateDirectAsync(connection, transaction, scenarioVersionId, userId, limit, cancellationToken);
         if (batch is null)
         {
+            _logger.LogInformation(
+                "Draft {Operation} found no command batch for scenario {ScenarioVersionId} user {UserId}.",
+                applyOldState ? "undo" : "redo",
+                scenarioVersionId,
+                userId);
             return null;
         }
 
@@ -781,7 +786,28 @@ public sealed partial class PostgresPlanningRepository
         command.Parameters.AddWithValue("@commandBatchId", batch.CommandBatchId);
         command.Parameters.AddWithValue("@isUndone", applyOldState ? 1 : 0);
         command.Parameters.AddWithValue("@undoneAt", applyOldState ? DateTimeOffset.UtcNow : (object)DBNull.Value);
-        await command.ExecuteNonQueryAsync(cancellationToken);
+        var updatedRows = await command.ExecuteNonQueryAsync(cancellationToken);
+
+        await using var verificationCommand = new NpgsqlCommand(
+            """
+            select is_undone
+            from planning_draft_command_batches
+            where command_batch_id = @commandBatchId;
+            """,
+            connection,
+            transaction);
+        verificationCommand.Parameters.AddWithValue("@commandBatchId", batch.CommandBatchId);
+        var persistedIsUndone = Convert.ToInt32(await verificationCommand.ExecuteScalarAsync(cancellationToken) ?? 0);
+
+        _logger.LogInformation(
+            "Draft {Operation} applied batch {CommandBatchId} for scenario {ScenarioVersionId} user {UserId}: deltas {DeltaCount}, updated rows {UpdatedRows}, persisted is_undone {PersistedIsUndone}.",
+            applyOldState ? "undo" : "redo",
+            batch.CommandBatchId,
+            scenarioVersionId,
+            userId,
+            batch.Deltas.Count,
+            updatedRows,
+            persistedIsUndone);
 
         return applyOldState
             ? batch with { IsUndone = true, UndoneAt = DateTimeOffset.UtcNow }
