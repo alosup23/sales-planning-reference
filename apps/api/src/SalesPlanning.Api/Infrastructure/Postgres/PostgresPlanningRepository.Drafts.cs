@@ -682,6 +682,11 @@ public sealed partial class PostgresPlanningRepository
             return;
         }
 
+        var duplicateCoordinateCount = deltas.Count - deltas
+            .Select(delta => delta.Coordinate.Key)
+            .Distinct(StringComparer.Ordinal)
+            .Count();
+
         var tracedAppendedDelta = deltas.FirstOrDefault(delta =>
             delta.Coordinate.ScenarioVersionId == 1 &&
             delta.Coordinate.MeasureId == 2 &&
@@ -698,6 +703,17 @@ public sealed partial class PostgresPlanningRepository
                 tracedAppendedDelta.Coordinate.Key,
                 tracedAppendedDelta.OldState.EffectiveValue,
                 tracedAppendedDelta.NewState.EffectiveValue);
+        }
+
+        if (duplicateCoordinateCount > 0)
+        {
+            _logger.LogInformation(
+                "Draft batch {CommandBatchId} for scenario {ScenarioVersionId} user {UserId} contains {DuplicateCoordinateCount} duplicate coordinate deltas across {DeltaCount} rows.",
+                batch.CommandBatchId,
+                batch.ScenarioVersionId,
+                batch.UserId,
+                duplicateCoordinateCount,
+                deltas.Count);
         }
     }
 
@@ -790,14 +806,26 @@ public sealed partial class PostgresPlanningRepository
             delta.Coordinate.StoreId == 228 &&
             delta.Coordinate.ProductNodeId == 254 &&
             delta.Coordinate.TimePeriodId == 202600);
+        var duplicateCoordinateCount = batch.Deltas.Count - batch.Deltas
+            .Select(delta => delta.Coordinate.Key)
+            .Distinct(StringComparer.Ordinal)
+            .Count();
+        var tracedCoordinateDeltaCount = batch.Deltas.Count(delta =>
+            delta.Coordinate.ScenarioVersionId == 1 &&
+            delta.Coordinate.MeasureId == 2 &&
+            delta.Coordinate.StoreId == 228 &&
+            delta.Coordinate.ProductNodeId == 254 &&
+            delta.Coordinate.TimePeriodId == 202600);
         if (tracedDelta is not null)
         {
             _logger.LogInformation(
-                "Draft {Operation} loading traced coordinate {CoordinateKey}: old {OldEffectiveValue} new {NewEffectiveValue}.",
+                "Draft {Operation} loading traced coordinate {CoordinateKey}: old {OldEffectiveValue} new {NewEffectiveValue}. Traced delta count {TracedDeltaCount}. Duplicate coordinate count {DuplicateCoordinateCount}.",
                 applyOldState ? "undo" : "redo",
                 tracedDelta.Coordinate.Key,
                 tracedDelta.OldState.EffectiveValue,
-                tracedDelta.NewState.EffectiveValue);
+                tracedDelta.NewState.EffectiveValue,
+                tracedCoordinateDeltaCount,
+                duplicateCoordinateCount);
         }
         await RestoreDraftPlanningCellsAsync(
             connection,
@@ -806,6 +834,41 @@ public sealed partial class PostgresPlanningRepository
             PlanningUserIdentity.CreatePlanningUserContext(userId, userId),
             cells,
             cancellationToken);
+
+        if (scenarioVersionId == 1)
+        {
+            await using var tracedStateCommand = new NpgsqlCommand(
+                """
+                select product_node_id, effective_value, row_version, cell_kind
+                from planning_draft_cells
+                where scenario_version_id = @scenarioVersionId
+                  and user_id = @userId
+                  and measure_id = 2
+                  and store_id = 228
+                  and time_period_id = 202600
+                  and product_node_id = any(@productNodeIds)
+                order by product_node_id;
+                """,
+                connection,
+                transaction);
+            tracedStateCommand.Parameters.AddWithValue("@scenarioVersionId", scenarioVersionId);
+            tracedStateCommand.Parameters.AddWithValue("@userId", userId);
+            tracedStateCommand.Parameters.Add(CreateArrayParameter("@productNodeIds", NpgsqlDbType.Bigint, new long[] { 254L, 255L }));
+            await using var tracedStateReader = await tracedStateCommand.ExecuteReaderAsync(cancellationToken);
+            var tracedDraftRows = new List<string>();
+            while (await tracedStateReader.ReadAsync(cancellationToken))
+            {
+                tracedDraftRows.Add(
+                    $"{tracedStateReader.GetInt64(0)}:{tracedStateReader.GetDecimal(1)}:rv{tracedStateReader.GetInt64(2)}:{tracedStateReader.GetString(3)}");
+            }
+
+            _logger.LogInformation(
+                "Draft {Operation} persisted traced rows for scenario {ScenarioVersionId} user {UserId}: {TracedDraftRows}.",
+                applyOldState ? "undo" : "redo",
+                scenarioVersionId,
+                userId,
+                tracedDraftRows.Count == 0 ? "<none>" : string.Join(", ", tracedDraftRows));
+        }
 
         await using var command = new NpgsqlCommand(
             """
