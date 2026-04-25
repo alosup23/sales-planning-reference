@@ -936,6 +936,7 @@ public sealed partial class PostgresPlanningRepository
                                     if (cellsByCoordinate.TryGetValue((period.TimePeriodId, measure.MeasureId), out var existingCell))
                                     {
                                         return new GridCellDto(
+                                            existingCell.BaseValue,
                                             existingCell.EffectiveValue,
                                             existingCell.GrowthFactor,
                                             IsEffectivelyLockedDirect(existingCell.Coordinate, lockedCells, productNodes, timePeriods),
@@ -949,6 +950,7 @@ public sealed partial class PostgresPlanningRepository
                                     var isLeafMonth = node.IsLeaf && string.Equals(period.Grain, "month", StringComparison.OrdinalIgnoreCase);
                                     var cellKind = isLeafMonth && measure.EditableAtLeaf ? "leaf" : "calculated";
                                     return new GridCellDto(
+                                        0m,
                                         0m,
                                         1.0m,
                                         IsEffectivelyLockedDirect(coordinate, lockedCells, productNodes, timePeriods),

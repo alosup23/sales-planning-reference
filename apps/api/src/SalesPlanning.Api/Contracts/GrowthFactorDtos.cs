@@ -4,6 +4,7 @@ public sealed record ApplyGrowthFactorRequest(
     long ScenarioVersionId,
     long MeasureId,
     SplashCoordinateDto SourceCell,
+    decimal BaseValue,
     decimal CurrentValue,
     decimal GrowthFactor,
     string? Comment,

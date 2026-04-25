@@ -319,6 +319,7 @@ public sealed partial class PlanningService
 
                         return new GridCellDto(
                             value,
+                            value,
                             1m,
                             rows.Count > 0 && rows.All(row => row.Cells.GetValueOrDefault(period.TimePeriodId)?.Measures.GetValueOrDefault(measure.MeasureId)?.IsLocked ?? false),
                             true,

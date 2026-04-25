@@ -40,7 +40,27 @@ public static class PlanningMath
 
     public static decimal NormalizeGrowthFactor(decimal value)
     {
-        return Math.Round(Math.Max(value, 0m), 1, MidpointRounding.AwayFromZero);
+        return Math.Round(Math.Max(value, 0m), 2, MidpointRounding.AwayFromZero);
+    }
+
+    public static decimal NormalizeMeasureValue(long measureId, decimal value)
+    {
+        return measureId switch
+        {
+            PlanningMeasures.SalesRevenue => NormalizeRevenue(value),
+            PlanningMeasures.SoldQuantity => NormalizeQuantity(value),
+            PlanningMeasures.AverageSellingPrice => NormalizeAsp(value),
+            PlanningMeasures.UnitCost => NormalizeUnitCost(value),
+            PlanningMeasures.TotalCosts => NormalizeTotalCosts(value),
+            PlanningMeasures.GrossProfit => NormalizeGrossProfit(value),
+            PlanningMeasures.GrossProfitPercent => NormalizeGrossProfitPercent(value),
+            _ => value
+        };
+    }
+
+    public static decimal ApplyGrowthFactor(long measureId, decimal baseValue, decimal growthFactor)
+    {
+        return NormalizeMeasureValue(measureId, baseValue * NormalizeGrowthFactor(growthFactor));
     }
 
     public static decimal CalculateRevenue(decimal quantity, decimal asp)

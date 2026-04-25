@@ -15,7 +15,7 @@ public static class PlanningMeasures
         new(SalesRevenue, "Sales Revenue", 0, false, false, true, true),
         new(SoldQuantity, "Sold Qty", 0, false, false, true, true),
         new(AverageSellingPrice, "ASP", 2, true, false, true, true),
-        new(UnitCost, "Unit Cost", 2, true, false, true, true),
+        new(UnitCost, "Unit Cost", 2, true, false, true, false),
         new(TotalCosts, "Total Costs", 0, false, false, true, true),
         new(GrossProfit, "GP", 0, false, false, true, true),
         new(GrossProfitPercent, "GP%", 1, true, true, true, true)

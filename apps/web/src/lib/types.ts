@@ -1,4 +1,5 @@
 export type GridCell = {
+  baseValue: number;
   value: number;
   growthFactor: number;
   isLocked: boolean;
@@ -119,6 +120,7 @@ export type GrowthFactorRequest = {
     productNodeId: number;
     timePeriodId: number;
   };
+  baseValue: number;
   currentValue: number;
   growthFactor: number;
   comment?: string;

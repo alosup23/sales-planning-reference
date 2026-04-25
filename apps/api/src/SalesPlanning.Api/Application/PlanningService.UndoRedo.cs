@@ -23,6 +23,9 @@ public sealed partial class PlanningService
                     delta.Coordinate.TimePeriodId,
                     delta.Coordinate.MeasureId,
                     new GridCellDto(
+                        delta.NewState.GrowthFactor > 0m && delta.NewState.GrowthFactor != 1.0m
+                            ? PlanningMath.NormalizeMeasureValue(delta.Coordinate.MeasureId, delta.NewState.EffectiveValue / delta.NewState.GrowthFactor)
+                            : delta.NewState.InputValue ?? delta.NewState.OverrideValue ?? delta.NewState.EffectiveValue,
                         delta.NewState.EffectiveValue,
                         delta.NewState.GrowthFactor,
                         delta.NewState.IsLocked,

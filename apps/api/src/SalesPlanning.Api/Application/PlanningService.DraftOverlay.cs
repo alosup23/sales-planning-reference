@@ -208,6 +208,7 @@ public sealed partial class PlanningService
 
                 updatedMeasures ??= new Dictionary<long, GridCellDto>(periodCell.Measures);
                 updatedMeasures[measureId] = new GridCellDto(
+                    draftCell.BaseValue,
                     draftCell.EffectiveValue,
                     draftCell.GrowthFactor,
                     draftCell.IsLocked,

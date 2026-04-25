@@ -1,6 +1,7 @@
 import type { GridSliceResponse } from "./types";
 
 const zeroMeasureCell = (value = 0, isLocked = false) => ({
+  baseValue: value,
   value,
   growthFactor: 1,
   isLocked,

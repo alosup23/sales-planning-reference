@@ -38,7 +38,7 @@ type PlanningGridProps = {
   onSelectedYearChange: (yearTimePeriodId: number | null) => void;
   onSelectionContextChange?: (context: { storeId: number; productNodeId: number; yearTimePeriodId: number; label: string } | null) => void;
   onCellEdit: (row: GridRow, timePeriodId: number, measureId: number, newValue: number) => Promise<void>;
-  onApplyGrowthFactor: (row: GridRow, timePeriodId: number, measureId: number, growthFactor: number, currentValue: number) => Promise<void>;
+  onApplyGrowthFactor: (row: GridRow, timePeriodId: number, measureId: number, growthFactor: number, baseValue: number, currentValue: number) => Promise<void>;
   onToggleLock: (row: GridRow, timePeriodId: number, measureId: number, locked: boolean) => Promise<void>;
   onSplashYear: (row: GridRow, yearTimePeriodId: number, measureId: number) => Promise<void>;
   undoRedoAvailability?: UndoRedoAvailability | null;
@@ -90,6 +90,144 @@ type ContextMenuState = {
   timePeriodId: number | null;
   measureId: number | null;
 };
+
+type ExpressionParseResult =
+  | { ok: true; value: number }
+  | { ok: false; error: string };
+
+function parseCellExpression(input: unknown): ExpressionParseResult {
+  if (typeof input === "number") {
+    return Number.isFinite(input)
+      ? { ok: true, value: input }
+      : { ok: false, error: "Enter a valid number or arithmetic expression." };
+  }
+
+  const source = String(input ?? "").trim();
+  if (!source) {
+    return { ok: false, error: "Enter a value before saving the cell." };
+  }
+
+  let index = 0;
+
+  const skipWhitespace = () => {
+    while (index < source.length && /\s/.test(source[index] ?? "")) {
+      index += 1;
+    }
+  };
+
+  const parseNumber = (): number => {
+    skipWhitespace();
+    const start = index;
+    let hasDigit = false;
+    let hasDecimal = false;
+
+    while (index < source.length) {
+      const char = source[index] ?? "";
+      if (/\d/.test(char)) {
+        hasDigit = true;
+        index += 1;
+        continue;
+      }
+
+      if (char === "." && !hasDecimal) {
+        hasDecimal = true;
+        index += 1;
+        continue;
+      }
+
+      break;
+    }
+
+    if (!hasDigit) {
+      throw new Error("Expected a number.");
+    }
+
+    return Number(source.slice(start, index));
+  };
+
+  const parseFactor = (): number => {
+    skipWhitespace();
+    const char = source[index] ?? "";
+
+    if (char === "+") {
+      index += 1;
+      return parseFactor();
+    }
+
+    if (char === "-") {
+      index += 1;
+      return -parseFactor();
+    }
+
+    if (char === "(") {
+      index += 1;
+      const value = parseExpression();
+      skipWhitespace();
+      if ((source[index] ?? "") !== ")") {
+        throw new Error("Missing closing parenthesis.");
+      }
+
+      index += 1;
+      return value;
+    }
+
+    return parseNumber();
+  };
+
+  const parseTerm = (): number => {
+    let value = parseFactor();
+    while (true) {
+      skipWhitespace();
+      const operator = source[index] ?? "";
+      if (operator !== "*" && operator !== "/") {
+        return value;
+      }
+
+      index += 1;
+      const next = parseFactor();
+      if (operator === "*") {
+        value *= next;
+      } else {
+        if (next === 0) {
+          throw new Error("Division by zero is not allowed.");
+        }
+
+        value /= next;
+      }
+    }
+  };
+
+  const parseExpression = (): number => {
+    let value = parseTerm();
+    while (true) {
+      skipWhitespace();
+      const operator = source[index] ?? "";
+      if (operator !== "+" && operator !== "-") {
+        return value;
+      }
+
+      index += 1;
+      const next = parseTerm();
+      value = operator === "+" ? value + next : value - next;
+    }
+  };
+
+  try {
+    const value = parseExpression();
+    skipWhitespace();
+    if (index !== source.length) {
+      return { ok: false, error: "Only arithmetic expressions using +, -, *, /, and parentheses are supported." };
+    }
+
+    if (!Number.isFinite(value)) {
+      return { ok: false, error: "Enter a valid arithmetic expression." };
+    }
+
+    return { ok: true, value };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Enter a valid arithmetic expression." };
+  }
+}
 
 type SelectedCellState = {
   rowKey: string;
@@ -633,11 +771,17 @@ export function PlanningGrid({
     const [timePeriodIdRaw, measureIdRaw] = event.column.getColId().split(":");
     const timePeriodId = Number(timePeriodIdRaw);
     const measureId = Number(measureIdRaw);
-    if (!event.data || !Number.isFinite(Number(event.newValue)) || !timePeriodId || !measureId) {
+    if (!event.data || !timePeriodId || !measureId) {
       return;
     }
 
-    await onCellEdit(event.data, timePeriodId, measureId, Number(event.newValue));
+    const parsed = parseCellExpression(event.newValue);
+    if (!parsed.ok) {
+      onLoadError?.(parsed.error);
+      return;
+    }
+
+    await onCellEdit(event.data, timePeriodId, measureId, parsed.value);
   };
 
   const handleSelectionChanged = (event: SelectionChangedEvent<GridRowView>) => {
@@ -1271,6 +1415,7 @@ function recomputeSyntheticRow(
             ? (revenue <= 0 ? 0 : roundAwayFromZero(((grossProfit) / revenue) * 100, 1))
             : rawValue;
       const nextCell = {
+        baseValue: nextValue,
         value: nextValue,
         growthFactor: 1,
         isLocked: directChildren.every((child) => Boolean(child.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked)),
@@ -1484,7 +1629,7 @@ type GrowthCellRendererProps = {
   measure: GridMeasure;
   period: GridPeriod;
   showGrowthFactors: boolean;
-  onApplyGrowthFactor: (row: GridRow, timePeriodId: number, measureId: number, growthFactor: number, currentValue: number) => Promise<void>;
+  onApplyGrowthFactor: (row: GridRow, timePeriodId: number, measureId: number, growthFactor: number, baseValue: number, currentValue: number) => Promise<void>;
 };
 
 type HierarchyCellRendererProps = ICellRendererParams<GridRowView> & {
@@ -1534,10 +1679,14 @@ function HierarchyCellRenderer(props: HierarchyCellRendererProps) {
 function GrowthCellRenderer(props: GrowthCellRendererProps) {
   const { measure, showGrowthFactors, value } = props;
   const currentValue = Number(value ?? 0);
+  const cell = props.data?.cells[props.period.timePeriodId]?.measures[measure.measureId];
+  const growthFactor = cell?.growthFactor ?? 1;
+  const baseValue = cell?.baseValue ?? currentValue;
+  const tooltip = `Base ${formatValue({ value: baseValue } as ValueFormatterParams<GridRowView>, measure)} × ${growthFactor.toFixed(2)} = ${formatValue({ value: currentValue } as ValueFormatterParams<GridRowView>, measure)}`;
 
   if (!showGrowthFactors) {
     return (
-      <div className="measure-cell">
+      <div className="measure-cell" title={tooltip}>
         <span className="measure-value">{formatValue({ value: currentValue } as ValueFormatterParams<GridRowView>, measure)}</span>
       </div>
     );
@@ -1550,6 +1699,7 @@ function GrowthFactorEditor(props: GrowthCellRendererProps & { currentValue: num
   const { data, measure, period, showGrowthFactors, onApplyGrowthFactor } = props;
   const { currentValue } = props;
   const cell = data?.cells[period.timePeriodId]?.measures[measure.measureId];
+  const baseValue = cell?.baseValue ?? currentValue;
   const [draftGrowthFactor, setDraftGrowthFactor] = useState(String(cell?.growthFactor ?? 1));
   const isApplyingGrowthFactorRef = useRef(false);
 
@@ -1583,21 +1733,23 @@ function GrowthFactorEditor(props: GrowthCellRendererProps & { currentValue: num
 
     isApplyingGrowthFactorRef.current = true;
     try {
-      await onApplyGrowthFactor(data, period.timePeriodId, measure.measureId, parsed, currentValue);
-      setDraftGrowthFactor("1.0");
+      await onApplyGrowthFactor(data, period.timePeriodId, measure.measureId, parsed, baseValue, currentValue);
     } finally {
       isApplyingGrowthFactorRef.current = false;
     }
   };
 
   return (
-    <div className="measure-cell measure-cell-with-growth">
+    <div
+      className="measure-cell measure-cell-with-growth"
+      title={`Base ${formatValue({ value: baseValue } as ValueFormatterParams<GridRowView>, measure)} × ${Number(cell?.growthFactor ?? 1).toFixed(2)} = ${formatValue({ value: currentValue } as ValueFormatterParams<GridRowView>, measure)}`}
+    >
       <span className="measure-value">{formatValue({ value: currentValue } as ValueFormatterParams<GridRowView>, measure)}</span>
       <input
         className="growth-factor-input"
         aria-label={`${measure.label} growth factor`}
         type="number"
-        step="0.1"
+        step="0.01"
         value={draftGrowthFactor}
         disabled={!canEditGrowthFactor}
         onFocus={() => props.api.stopEditing()}

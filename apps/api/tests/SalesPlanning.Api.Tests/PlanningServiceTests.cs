@@ -375,6 +375,7 @@ public sealed class PlanningServiceTests
                 1,
                 PlanningMeasures.SalesRevenue,
                 new SplashCoordinateDto(101, 2111, 202603),
+                beforeMonthRevenue!.BaseValue,
                 beforeMonthRevenue!.EffectiveValue,
                 1.1m,
                 "Leaf uplift",

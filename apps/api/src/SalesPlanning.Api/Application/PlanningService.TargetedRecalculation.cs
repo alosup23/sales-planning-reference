@@ -55,9 +55,7 @@ public sealed partial class PlanningService
                 metadata);
         }
 
-        var method = metadata.TimePeriods.Values.Any(period => period.ParentTimePeriodId == timePeriodId)
-            ? "seasonality_profile"
-            : "existing_plan";
+        var method = "existing_plan";
         return BuildSplashInstruction(
             scenarioVersionId,
             measureId,

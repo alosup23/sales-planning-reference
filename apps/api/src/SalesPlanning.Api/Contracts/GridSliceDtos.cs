@@ -45,6 +45,7 @@ public sealed record GridRowDto(
 public sealed record GridPeriodCellDto(Dictionary<long, GridCellDto> Measures);
 
 public sealed record GridCellDto(
+    decimal BaseValue,
     decimal Value,
     decimal GrowthFactor,
     bool IsLocked,

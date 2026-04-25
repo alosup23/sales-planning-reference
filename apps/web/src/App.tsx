@@ -1376,7 +1376,7 @@ export default function App() {
         timePeriodId,
       },
       totalValue: newValue,
-      method: period?.grain === "year" ? "seasonality_profile" : "existing_plan",
+      method: "existing_plan",
       roundingScale: measureLookup.get(measureId)?.decimalPlaces ?? 0,
       comment: "Grid top-down edit",
       scopeRoots,
@@ -1428,7 +1428,7 @@ export default function App() {
         timePeriodId: yearTimePeriodId,
       },
       totalValue,
-      method: "seasonality_profile",
+      method: "existing_plan",
       roundingScale: measureLookup.get(measureId)?.decimalPlaces ?? 0,
       comment: "Spread annual value across months",
       scopeRoots,
@@ -1572,7 +1572,7 @@ export default function App() {
     });
   };
 
-  const handleApplyGrowthFactor = async (row: GridRow, timePeriodId: number, measureId: number, growthFactor: number, currentValue: number) => {
+  const handleApplyGrowthFactor = async (row: GridRow, timePeriodId: number, measureId: number, growthFactor: number, baseValue: number, currentValue: number) => {
     if (!planningData) {
       return;
     }
@@ -1595,6 +1595,7 @@ export default function App() {
         productNodeId: sourceProductNodeId,
         timePeriodId,
       },
+      baseValue,
       currentValue,
       growthFactor,
       comment: "Apply growth factor",
@@ -2518,12 +2519,19 @@ function createSyntheticRow({
 function sumCells(rows: GridRow[], data: GridSliceResponse): Record<number, { measures: Record<number, GridCell> }> {
   return Object.fromEntries(
     data.periods.map((period) => {
+      const revenueBaseValue = rows.reduce((total, row) => total + (row.cells[period.timePeriodId]?.measures[1]?.baseValue ?? 0), 0);
       const revenueValue = rows.reduce((total, row) => total + (row.cells[period.timePeriodId]?.measures[1]?.value ?? 0), 0);
+      const quantityBaseValue = rows.reduce((total, row) => total + (row.cells[period.timePeriodId]?.measures[2]?.baseValue ?? 0), 0);
       const quantityValue = rows.reduce((total, row) => total + (row.cells[period.timePeriodId]?.measures[2]?.value ?? 0), 0);
+      const totalCostsBaseValue = rows.reduce((total, row) => total + (row.cells[period.timePeriodId]?.measures[5]?.baseValue ?? 0), 0);
       const totalCostsValue = rows.reduce((total, row) => total + (row.cells[period.timePeriodId]?.measures[5]?.value ?? 0), 0);
+      const grossProfitBaseValue = rows.reduce((total, row) => total + (row.cells[period.timePeriodId]?.measures[6]?.baseValue ?? 0), 0);
       const grossProfitValue = rows.reduce((total, row) => total + (row.cells[period.timePeriodId]?.measures[6]?.value ?? 0), 0);
+      const aspBaseValue = quantityBaseValue > 0 ? roundToDecimals(revenueBaseValue / quantityBaseValue, 2) : 1;
       const aspValue = quantityValue > 0 ? roundToDecimals(revenueValue / quantityValue, 2) : 1;
+      const unitCostBaseValue = quantityBaseValue > 0 ? roundToDecimals(totalCostsBaseValue / quantityBaseValue, 2) : 0;
       const unitCostValue = quantityValue > 0 ? roundToDecimals(totalCostsValue / quantityValue, 2) : 0;
+      const grossProfitPercentBaseValue = aspBaseValue > 0 ? roundToDecimals(((aspBaseValue - unitCostBaseValue) / aspBaseValue) * 100, 1) : 0;
       const grossProfitPercentValue = aspValue > 0 ? roundToDecimals(((aspValue - unitCostValue) / aspValue) * 100, 1) : 0;
 
       return [
@@ -2551,6 +2559,26 @@ function sumCells(rows: GridRow[], data: GridSliceResponse): Record<number, { me
                     return 0;
                 }
               })();
+              const baseValue = (() => {
+                switch (measure.measureId) {
+                  case 1:
+                    return revenueBaseValue;
+                  case 2:
+                    return quantityBaseValue;
+                  case 3:
+                    return aspBaseValue;
+                  case 4:
+                    return unitCostBaseValue;
+                  case 5:
+                    return totalCostsBaseValue;
+                  case 6:
+                    return grossProfitBaseValue;
+                  case 7:
+                    return grossProfitPercentBaseValue;
+                  default:
+                    return value;
+                }
+              })();
               const isLocked = rows.length > 0 && rows.every((row) => row.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked);
               const growthFactors = rows
                 .map((row) => row.cells[period.timePeriodId]?.measures[measure.measureId]?.growthFactor ?? 1)
@@ -2560,6 +2588,7 @@ function sumCells(rows: GridRow[], data: GridSliceResponse): Record<number, { me
               return [
                 measure.measureId,
                 {
+                  baseValue,
                   value,
                   growthFactor: uniformGrowthFactor,
                   isLocked,
