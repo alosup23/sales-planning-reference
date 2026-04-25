@@ -327,48 +327,58 @@ public sealed partial class PlanningService : IPlanningService
 
     public Task<UndoPlanningActionResponse> UndoAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken)
     {
-        return _repository.ExecuteAtomicAsync(async ct =>
-        {
-            var primaryUserId = GetPrimaryPlanningUserId(userId);
-            var batch = await _repository.UndoLatestDraftCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
-            var usedCommittedHistory = false;
-            if (batch is null)
-            {
-                batch = await _repository.UndoLatestCommandAsync(scenarioVersionId, primaryUserId, UndoRedoLimit, ct);
-                usedCommittedHistory = batch is not null;
-            }
-
-            if (batch is not null && usedCommittedHistory)
-            {
-                await AppendAuditAsync("undo", "undo", userId, $"Undo {batch.CommandKind}", InvertCommandDeltas(batch.Deltas), ct);
-            }
-
-            var availability = await GetWorkingUndoRedoAvailabilityAsync(scenarioVersionId, userId, ct);
-            return new UndoPlanningActionResponse(batch is null ? "no-op" : "applied", ToUndoRedoAvailabilityDto(availability));
-        }, cancellationToken);
+        return UndoInternalAsync(scenarioVersionId, userId, cancellationToken);
     }
 
     public Task<RedoPlanningActionResponse> RedoAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken)
     {
-        return _repository.ExecuteAtomicAsync(async ct =>
+        return RedoInternalAsync(scenarioVersionId, userId, cancellationToken);
+    }
+
+    private async Task<UndoPlanningActionResponse> UndoInternalAsync(
+        long scenarioVersionId,
+        string userId,
+        CancellationToken cancellationToken)
+    {
+        var primaryUserId = GetPrimaryPlanningUserId(userId);
+        var batch = await _repository.UndoLatestDraftCommandAsync(scenarioVersionId, userId, UndoRedoLimit, cancellationToken);
+        var usedCommittedHistory = false;
+        if (batch is null)
         {
-            var primaryUserId = GetPrimaryPlanningUserId(userId);
-            var batch = await _repository.RedoLatestDraftCommandAsync(scenarioVersionId, userId, UndoRedoLimit, ct);
-            var usedCommittedHistory = false;
-            if (batch is null)
-            {
-                batch = await _repository.RedoLatestCommandAsync(scenarioVersionId, primaryUserId, UndoRedoLimit, ct);
-                usedCommittedHistory = batch is not null;
-            }
+            batch = await _repository.UndoLatestCommandAsync(scenarioVersionId, primaryUserId, UndoRedoLimit, cancellationToken);
+            usedCommittedHistory = batch is not null;
+        }
 
-            if (batch is not null && usedCommittedHistory)
-            {
-                await AppendAuditAsync("redo", "redo", userId, $"Redo {batch.CommandKind}", batch.Deltas, ct);
-            }
+        if (batch is not null && usedCommittedHistory)
+        {
+            await AppendAuditAsync("undo", "undo", userId, $"Undo {batch.CommandKind}", InvertCommandDeltas(batch.Deltas), cancellationToken);
+        }
 
-            var availability = await GetWorkingUndoRedoAvailabilityAsync(scenarioVersionId, userId, ct);
-            return new RedoPlanningActionResponse(batch is null ? "no-op" : "applied", ToUndoRedoAvailabilityDto(availability));
-        }, cancellationToken);
+        var availability = await GetWorkingUndoRedoAvailabilityAsync(scenarioVersionId, userId, cancellationToken);
+        return new UndoPlanningActionResponse(batch is null ? "no-op" : "applied", ToUndoRedoAvailabilityDto(availability));
+    }
+
+    private async Task<RedoPlanningActionResponse> RedoInternalAsync(
+        long scenarioVersionId,
+        string userId,
+        CancellationToken cancellationToken)
+    {
+        var primaryUserId = GetPrimaryPlanningUserId(userId);
+        var batch = await _repository.RedoLatestDraftCommandAsync(scenarioVersionId, userId, UndoRedoLimit, cancellationToken);
+        var usedCommittedHistory = false;
+        if (batch is null)
+        {
+            batch = await _repository.RedoLatestCommandAsync(scenarioVersionId, primaryUserId, UndoRedoLimit, cancellationToken);
+            usedCommittedHistory = batch is not null;
+        }
+
+        if (batch is not null && usedCommittedHistory)
+        {
+            await AppendAuditAsync("redo", "redo", userId, $"Redo {batch.CommandKind}", batch.Deltas, cancellationToken);
+        }
+
+        var availability = await GetWorkingUndoRedoAvailabilityAsync(scenarioVersionId, userId, cancellationToken);
+        return new RedoPlanningActionResponse(batch is null ? "no-op" : "applied", ToUndoRedoAvailabilityDto(availability));
     }
 
     public async Task<PlanningStoreScopeResponse> GetPlanningStoreScopesAsync(CancellationToken cancellationToken)
