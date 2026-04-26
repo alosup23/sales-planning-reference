@@ -1013,6 +1013,20 @@ public sealed partial class PlanningService : IPlanningService
         }
     }
 
+    private static void ValidateGrowthFactorAggregateEdit(long measureId, bool allowLeafScopedRateOverride)
+    {
+        var definition = PlanningMeasures.GetDefinition(measureId);
+        if (!definition.EditableAtAggregate && !allowLeafScopedRateOverride)
+        {
+            throw new InvalidOperationException($"{definition.Label} cannot be edited at aggregate level.");
+        }
+
+        if (measureId == PlanningMeasures.UnitCost && !allowLeafScopedRateOverride)
+        {
+            throw new InvalidOperationException("Unit Cost cannot be splashed at aggregate level.");
+        }
+    }
+
     private static void ApplyLeafMeasureEdit(
         PlanningCellCoordinate coordinate,
         decimal newValue,
@@ -3959,29 +3973,23 @@ public sealed partial class PlanningService : IPlanningService
         var workingCells = originalCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell.Clone());
 
         var growthFactor = PlanningMath.NormalizeGrowthFactor(request.GrowthFactor);
-        var newValue = PlanningMath.ApplyGrowthFactor(request.MeasureId, request.BaseValue, growthFactor);
         var growthStates = new Dictionary<string, decimal>(StringComparer.Ordinal);
+        var sourceBaseValue = request.BaseValue;
+        if (isLeafWrite && workingCells.TryGetValue(sourceCoordinate.Key, out var sourceCellForBase))
+        {
+            sourceBaseValue = GetCellBaseValue(sourceCellForBase);
+        }
 
         if (isLeafWrite)
         {
+            var newValue = PlanningMath.ApplyGrowthFactor(request.MeasureId, sourceBaseValue, growthFactor);
             ValidateDirectEdit(sourceCoordinate, null, workingCells, metadata);
             ApplyLeafMeasureEdit(sourceCoordinate, newValue, workingCells, metadata);
-            growthStates[sourceCoordinate.Key] = PlanningMath.NormalizeMeasureValue(request.MeasureId, request.BaseValue);
+            growthStates[sourceCoordinate.Key] = PlanningMath.NormalizeMeasureValue(request.MeasureId, sourceBaseValue);
         }
         else
         {
-            ApplyAggregateAllocation(
-                request.ScenarioVersionId,
-                request.MeasureId,
-                request.SourceCell.TimePeriodId,
-                scopeRoots,
-                newValue,
-                "existing_plan",
-                null,
-                workingCells,
-                metadata,
-                allowLeafScopedRateOverride);
-
+            ValidateGrowthFactorAggregateEdit(request.MeasureId, allowLeafScopedRateOverride);
             foreach (var targetProductNodeId in instruction.TargetLeafProductIds)
             {
                 foreach (var targetTimePeriodId in instruction.TargetLeafTimeIds)
@@ -3989,19 +3997,28 @@ public sealed partial class PlanningService : IPlanningService
                     var targetCoordinate = new PlanningCellCoordinate(
                         request.ScenarioVersionId,
                         request.MeasureId,
-                        scopeRoots[0].StoreId,
+                        metadata.ProductNodes[targetProductNodeId].StoreId,
                         targetProductNodeId,
                         targetTimePeriodId);
-                    if (!workingCells.TryGetValue(targetCoordinate.Key, out var targetCell))
+                    if (!workingCells.TryGetValue(targetCoordinate.Key, out var targetCell)
+                        || IsLockedBySelfOrAncestor(targetCoordinate, workingCells.Values, metadata))
                     {
                         continue;
                     }
 
-                    var targetBaseValue = growthFactor <= 0m
-                        ? targetCell.EffectiveValue
-                        : PlanningMath.NormalizeMeasureValue(request.MeasureId, targetCell.EffectiveValue / growthFactor);
+                    var targetBaseValue = PlanningMath.NormalizeMeasureValue(request.MeasureId, GetCellBaseValue(targetCell));
+                    ApplyLeafMeasureEdit(
+                        targetCoordinate,
+                        PlanningMath.ApplyGrowthFactor(request.MeasureId, targetBaseValue, growthFactor),
+                        workingCells,
+                        metadata);
                     growthStates[targetCoordinate.Key] = targetBaseValue;
                 }
+            }
+
+            if (growthStates.Count == 0)
+            {
+                throw new InvalidOperationException("All target cells are locked.");
             }
         }
 

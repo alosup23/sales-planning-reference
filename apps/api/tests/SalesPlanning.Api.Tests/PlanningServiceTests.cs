@@ -363,7 +363,7 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
-    public async Task ApplyGrowthFactorAsync_OnLeafRevenue_ResetsGrowthFactorAndRollsUp()
+    public async Task ApplyGrowthFactorAsync_OnLeafMonthRevenue_PersistsGrowthFactorAndRollsUp()
     {
         var beforeYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202600), CancellationToken.None);
         var beforeMonthRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202603), CancellationToken.None);
@@ -391,9 +391,67 @@ public sealed class PlanningServiceTests
         var updatedYearRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202600));
         Assert.NotNull(updatedMonthRevenue);
         Assert.NotNull(updatedYearRevenue);
-        Assert.Equal(1.0m, updatedMonthRevenue!.GrowthFactor);
+        Assert.Equal(1.1m, updatedMonthRevenue!.GrowthFactor);
+        Assert.Equal(beforeMonthRevenue.BaseValue, updatedMonthRevenue.BaseValue);
+        Assert.Equal(
+            PlanningMath.ApplyGrowthFactor(PlanningMeasures.SalesRevenue, beforeMonthRevenue.BaseValue, 1.1m),
+            updatedMonthRevenue.EffectiveValue);
         Assert.True(updatedMonthRevenue.EffectiveValue > beforeMonthRevenue.EffectiveValue);
         Assert.True(updatedYearRevenue!.EffectiveValue > beforeYearRevenue!.EffectiveValue);
+    }
+
+    [Fact]
+    public async Task ApplyGrowthFactorAsync_OnLeafYearRevenue_RestoresFromPersistedMonthBases()
+    {
+        var beforeYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202600), CancellationToken.None);
+        var beforeMonthRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202603), CancellationToken.None);
+        Assert.NotNull(beforeYearRevenue);
+        Assert.NotNull(beforeMonthRevenue);
+
+        await _service.ApplyGrowthFactorAsync(
+            new ApplyGrowthFactorRequest(
+                1,
+                PlanningMeasures.SalesRevenue,
+                new SplashCoordinateDto(101, 2111, 202600),
+                beforeYearRevenue!.BaseValue,
+                beforeYearRevenue.EffectiveValue,
+                1.1m,
+                "Year uplift",
+                null),
+            "planner.one",
+            CancellationToken.None);
+
+        var upliftedMonthRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202603));
+        Assert.NotNull(upliftedMonthRevenue);
+        Assert.Equal(beforeMonthRevenue!.BaseValue, upliftedMonthRevenue!.BaseValue);
+        Assert.Equal(1.1m, upliftedMonthRevenue.GrowthFactor);
+        Assert.Equal(
+            PlanningMath.ApplyGrowthFactor(PlanningMeasures.SalesRevenue, beforeMonthRevenue.BaseValue, 1.1m),
+            upliftedMonthRevenue.EffectiveValue);
+
+        var upliftedYearRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202600));
+        Assert.NotNull(upliftedYearRevenue);
+        await _service.ApplyGrowthFactorAsync(
+            new ApplyGrowthFactorRequest(
+                1,
+                PlanningMeasures.SalesRevenue,
+                new SplashCoordinateDto(101, 2111, 202600),
+                upliftedYearRevenue!.BaseValue,
+                upliftedYearRevenue.EffectiveValue,
+                1.0m,
+                "Restore year",
+                null),
+            "planner.one",
+            CancellationToken.None);
+
+        var restoredMonthRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202603));
+        var restoredYearRevenue = await GetEffectiveCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202600));
+        Assert.NotNull(restoredMonthRevenue);
+        Assert.NotNull(restoredYearRevenue);
+        Assert.Equal(1.0m, restoredMonthRevenue!.GrowthFactor);
+        Assert.Equal(beforeMonthRevenue.BaseValue, restoredMonthRevenue.BaseValue);
+        Assert.Equal(beforeMonthRevenue.EffectiveValue, restoredMonthRevenue.EffectiveValue);
+        Assert.Equal(beforeYearRevenue.EffectiveValue, restoredYearRevenue!.EffectiveValue);
     }
 
     [Fact]
