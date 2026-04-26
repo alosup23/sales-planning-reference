@@ -156,13 +156,14 @@ This document lists the current Phase 1 UAT API endpoints and describes the main
 
 1. User edits a leaf cell.
 2. App sends `POST /cell-edits`.
-3. Server validates:
+3. Year-level leaf edits use the direct edit path with `override` semantics and do not use generic aggregate splash.
+4. Server validates:
    - authorization
    - lock status
    - coordinate validity
-4. Server recalculates dependent measures and affected aggregates.
-5. Server returns changed-cell patches.
-6. Grid applies the patches without reloading the whole slice.
+5. Server recalculates dependent measures and affected aggregates.
+6. Server returns changed-cell patches.
+7. Grid applies the patches without reloading the whole slice.
 
 ### 7.5 Top-down splash
 
@@ -170,16 +171,20 @@ This document lists the current Phase 1 UAT API endpoints and describes the main
 2. App sends `POST /actions/splash`.
 3. Server determines the descendant scope.
 4. Locked descendants are excluded.
-5. Weights are applied deterministically.
-6. Residual rounding is allocated deterministically.
-7. Server returns the changed-cell patches.
+5. For rate measures, the server first converts the request into the appropriate additive target before allocation.
+6. Weights are applied deterministically.
+7. Residual rounding is allocated deterministically.
+8. Server returns the changed-cell patches.
 
 ### 7.6 Lock / unlock
 
 1. User locks or unlocks a branch or cell.
 2. App sends `POST /locks`.
 3. Server writes the lock state.
-4. Grid refreshes only the planning state needed for the current slice.
+4. Read responses must distinguish:
+   - explicit lock state
+   - implicit or inherited lock state
+5. Grid refreshes only the planning state needed for the current slice.
 
 ### 7.7 Undo / redo
 
@@ -190,6 +195,17 @@ This document lists the current Phase 1 UAT API endpoints and describes the main
 3. Server replays the command journal.
 4. Server returns the changed patches and updated depth state.
 5. Grid applies the returned changes.
+
+### 7.8 Growth factor
+
+1. User applies a growth factor to a supported cell or aggregate scope.
+2. App calls `POST /growth-factors/apply`.
+3. Server persists and recalculates:
+   - `baseValue`
+   - `growthFactor`
+   - `effectiveValue`
+4. Direct numeric or expression edits reset `growthFactor` to `1.00`.
+5. Growth-factor-only actions must not overwrite the stored `baseValue`.
 
 ### 8.8 Async Import
 

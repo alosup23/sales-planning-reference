@@ -4,6 +4,10 @@
 
 This document defines the clean-slate UAT requirements for the Sales Budget & Planning application.
 
+This document is now complemented by the consolidated refactor brief in:
+
+- [docs/comprehensive-refactor-system-prompt.md](/Users/aloysius/Documents/New%20project/docs/comprehensive-refactor-system-prompt.md)
+
 The design must:
 
 - preserve compatibility with the existing Excel-based import and export formats
@@ -107,6 +111,65 @@ The application must provide:
 
 Both views must be projections over the same canonical planning dataset.
 
+### 4.1.1 Navigation and workspace structure
+
+The application must separate planning workflows from master-data administration.
+
+Required primary navigation groups:
+
+- `Planning`
+  - `Planning - by Store`
+  - `Planning - by Department`
+- `Master Data`
+  - `Hierarchy Maintenance`
+  - `Store Profile Maintenance`
+  - `Product Profile Maintenance`
+  - `Inventory Profile Maintenance`
+  - `Pricing Policy Maintenance`
+  - `Seasonality & Events Maintenance`
+  - `Vendor Supply Maintenance`
+  - controlled option-value maintenance where relevant
+- `Operations`
+  - workbook import and export
+  - reconciliation
+  - audit and job status
+
+The master-data maintenance UI must live in its own dedicated section and must not remain mixed into the primary planning navigation.
+
+### 4.1.2 Planning grid UI and formatting rules
+
+The planning grid must:
+
+- start in compact mode by default
+- allow users to toggle visible measures on and off without removing those measures from calculation, aggregation, or splash behavior
+- preserve compact-mode and visible-measure preferences across refreshes
+- keep the active hierarchy expansion state stable during normal edits
+- highlight explicit locks with a light pastel purple background
+- highlight implicit or inherited locks with a pastel yellow background
+- show effective values in cells
+- show `baseValue × growthFactor = effective value` in the editor or tooltip for editable cells that support growth factor behavior
+
+Display rules:
+
+- use thousands separators for all displayed numeric values
+- display `ASP`, `Unit Cost`, and `GP%` with `2` decimals
+- display `Sold Qty`, `Sales Revenue`, `Total Costs`, and `GP` with `0` decimals
+
+Input rules:
+
+- editable cells must accept direct numeric values and arithmetic expressions
+- supported expression syntax is:
+  - `+`
+  - `-`
+  - `*`
+  - `/`
+  - parentheses
+  - decimals
+  - unary minus
+- expressions are evaluated client-side only
+- only the resolved numeric value is sent to the backend
+- raw expressions are not persisted
+
 ### 4.2 Planning behavior
 
 The planning engine must support:
@@ -145,6 +208,71 @@ The planning engine must preserve these invariants:
 - top-down splash updates must preserve requested totals subject to lock constraints
 - rounding residuals must be deterministic and auditable
 - recalculation must stay within the same fiscal year unless a future approved cross-year rule is introduced
+
+### 4.2.1 Confirmed bottom-up edit rules
+
+Leaf month edits are the canonical editable grain.
+
+Leaf year edits are allowed, but must behave as annual override or allocation instructions rather than generic aggregate splash.
+
+Bottom-up leaf rules:
+
+- editing `Sales Revenue` preserves `ASP`, solves `Sold Qty`, then derives `GP` and `GP%`
+- editing `Sold Qty` preserves `ASP` and `Unit Cost`, solves `Sales Revenue` and `Total Costs`, then derives `GP` and `GP%`
+- editing `ASP` preserves `Sold Qty`, solves `Sales Revenue`, then derives `GP` and `GP%`
+- editing `Unit Cost` preserves `Sold Qty`, solves `Total Costs`, then derives `GP` and `GP%`
+- editing `Total Costs` preserves `Sold Qty`, solves `Unit Cost`, then derives `GP` and `GP%`
+- editing `GP` preserves `Sold Qty`, `Total Costs`, and therefore `Unit Cost`, solves `ASP`, then derives `Sales Revenue`, `GP`, and `GP%`
+- editing `GP%` preserves `Sold Qty`, `Total Costs`, and therefore `Unit Cost`, solves `ASP`, then derives `Sales Revenue`, `GP`, and `GP%`
+
+Leaf year allocation rules:
+
+- preserve the existing monthly shape within that fiscal year
+- if the current year total is zero, fall back to equal distribution across unlocked editable months
+- locked months must be excluded from the editable allocation target set
+
+### 4.2.2 Confirmed top-down splash rules
+
+Top-down scope rules:
+
+- aggregate month splash affects eligible descendants in that month only
+- aggregate year splash affects eligible descendants inside that fiscal year only
+- locked descendants are excluded
+- residual rounding must reconcile deterministically at the lowest editable unlocked target level
+
+Additive splash rules:
+
+- `Sales Revenue` splash preserves `Total Costs` and `ASP`, allocates `Sales Revenue`, then derives `Sold Qty`, `GP`, and `GP%`
+- `Sold Qty` splash preserves `ASP` and `Unit Cost`, allocates `Sold Qty`, then derives `Sales Revenue`, `Total Costs`, `GP`, and `GP%`
+- `Total Costs` splash preserves `Sold Qty`, allocates `Total Costs`, then derives `Unit Cost`, `GP`, and `GP%`
+
+Rate splash rules:
+
+- `ASP` splash preserves `Sold Qty`, converts to `Sales Revenue`, then allocates `Sales Revenue`
+- `Unit Cost` splash is not allowed at aggregate level
+- `GP` splash holds `Total Costs` constant, solves `ASP`, recalculates `Sales Revenue`, then allocates `Sales Revenue`
+- `GP%` splash holds `Total Costs` constant, solves `ASP`, recalculates `Sales Revenue`, then allocates `Sales Revenue`
+
+Allocation rules:
+
+- use current descendant values as weights
+- if all weights are zero, fall back to equal distribution across eligible unlocked descendants
+
+### 4.2.3 Growth factor rules
+
+Every editable cell must support:
+
+- `baseValue`
+- `growthFactor`
+- `effective value = baseValue × growthFactor`
+
+Growth factor behavior:
+
+- default `growthFactor = 1.00`
+- direct numeric or expression edit sets the new `baseValue` and resets `growthFactor` to `1.00`
+- growth-factor edit changes only `growthFactor`
+- save must persist both `baseValue` and `growthFactor`
+- growth-factor granularity is `0.01`
 
 ### 4.3 Store Profile maintenance
 

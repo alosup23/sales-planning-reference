@@ -59,8 +59,9 @@ The live UAT deployment as of `2026-03-29` is:
 
 The live UAT deployment already reflects the core Phase 1 runtime decision, but several target-state improvements remain outstanding, especially:
 
-- AG Grid SSRM
-- async import/export jobs
+- growth-factor persistence normalization across all time grains
+- explicit measure-rule normalization across all edit and splash paths
+- master-data admin UX separation
 - ALB HTTPS origin completion
 - richer reconciliation and observability
 

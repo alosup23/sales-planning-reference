@@ -87,6 +87,10 @@ Key backlog:
 - keep lazy branch loading
 - retain patch-based updates
 - preserve compact menu UX
+- separate planning and master-data navigation more clearly
+- persist grid preferences cleanly
+- finalize lock-state highlighting and legends
+- support arithmetic expression entry with safe client-side evaluation
 
 ### Wave 5: Master-Data Maintenance
 
@@ -105,6 +109,28 @@ Key backlog:
 - Pricing Policy CRUD/import/export
 - Seasonality & Events CRUD/import/export
 - Vendor Supply Profile CRUD/import/export
+- move all master-data maintenance into a dedicated top-level admin section
+- unify list, detail, import, export, inactivate, and exception-handling UX patterns
+
+### Wave 5A: Planning Rule Normalization
+
+Status:
+
+- in progress through UAT hardening
+
+Repo modules:
+
+- `apps/api/src/SalesPlanning.Api/Application`
+- `apps/api/src/SalesPlanning.Api/Domain`
+- `apps/api/src/SalesPlanning.Api/Infrastructure/Postgres`
+- `apps/web/src/*`
+
+Key backlog:
+
+- normalize all leaf, year, splash, and growth-factor rules into one explicit rule engine
+- stabilize `baseValue × growthFactor` persistence and restore
+- close remaining `Total Costs` and `GP%` drift in authenticated live matrix replay
+- add a full regression matrix for all measures and time grains
 
 ### Wave 6: Async Jobs And Deployment Cleanup
 

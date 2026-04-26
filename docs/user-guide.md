@@ -37,15 +37,21 @@ Main elements:
 
 The main workspace menu currently includes:
 
-- `Planning - by Store`
-- `Planning - by Department`
-- `Hierarchy Maintenance`
-- `Store Profile Maintenance`
-- `Product Profile Maintenance`
-- `Inventory Profile Maintenance`
-- `Pricing Policy Maintenance`
-- `Seasonality & Events Maintenance`
-- `Vendor Supply Maintenance`
+- `Planning`
+  - `Planning - by Store`
+  - `Planning - by Department`
+- `Master Data`
+  - `Hierarchy Maintenance`
+  - `Store Profile Maintenance`
+  - `Product Profile Maintenance`
+  - `Inventory Profile Maintenance`
+  - `Pricing Policy Maintenance`
+  - `Seasonality & Events Maintenance`
+  - `Vendor Supply Maintenance`
+- `Operations`
+  - import and export
+  - reconciliation
+  - audit and job status
 
 ## 4.3 Planning grid
 
@@ -59,6 +65,12 @@ Key behavior:
 - retained grid color assignments
 - compact but readable buttons and controls
 - responsive layout for smaller screens
+- compact mode starts on by default
+- visible measures can be toggled on or off without changing calculation behavior
+- explicit locks are highlighted in light pastel purple
+- implicit locks are highlighted in pastel yellow
+- effective cell values are shown directly in the grid
+- growth-factor tooltip or editor context shows `baseValue × growthFactor = effective value`
 
 ## 5. Best-Practice Sales Budget And Planning Flow
 
@@ -184,11 +196,18 @@ Best use:
 
 ## 7. Expand And Collapse Behavior
 
-- planning hierarchies start collapsed at the higher level
+- planning hierarchies start collapsed at the higher level unless the active view specifies an expanded landing level
 - users expand only the branches they need
 - store view follows the store-first hierarchy
 - department view follows the currently selected department layout
 - department expansion is not limited to a single selected store when `All Stores` is in effect
+- normal edits should not collapse and re-expand the current hierarchy branch
+
+## 7.1 Number formatting
+
+- all displayed numbers use thousands separators
+- `ASP`, `Unit Cost`, and `GP%` display `2` decimals
+- `Sold Qty`, `Sales Revenue`, `Total Costs`, and `GP` display `0` decimals
 
 ## 8. Bottom-Up Aggregation Rules
 
@@ -216,18 +235,19 @@ Best use:
 
 ## 11. Measures
 
-Editable base measures:
+All seven business measures may be editable depending on row scope and action type:
 
+- `Sales Revenue`
 - `Sold Qty`
 - `ASP`
 - `Unit Cost`
+- `Total Costs`
+- `GP`
+- `GP%`
 
-Derived measures:
+The planning engine must preserve the confirmed business rules documented in:
 
-- `Sales Revenue = Sold Qty * ASP`
-- `Total Costs = Sold Qty * Unit Cost`
-- `GP = Sales Revenue - Total Costs`
-- `GP% = GP / Sales Revenue`
+- [docs/calculation-and-reconciliation-spec.md](/Users/aloysius/Documents/New%20project/docs/calculation-and-reconciliation-spec.md)
 
 ## 12. Undo And Redo
 
@@ -248,6 +268,18 @@ Best practice:
 - confirm the correct year or branch is selected
 - review seasonality before applying broad growth changes
 - use department review after a large growth-factor change
+- remember that `growthFactor` is persistent and should not reset unless a direct value edit resets the base and factor state
+
+## 16. Master Data Administration
+
+Master-data maintenance should be treated as its own administrative workspace, separate from active planning.
+
+Best-practice UI and process rules:
+
+- keep CRUD, import, export, inactivation, and exception handling in the `Master Data` section
+- use search, paging, and filtering for all maintenance lists
+- favor soft inactivation over destructive delete for business records
+- keep import and export status in the operations area rather than inside planning views
 
 ## 14. Audit And Save
 

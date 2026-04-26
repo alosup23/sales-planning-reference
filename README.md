@@ -40,6 +40,8 @@ Current live implementation stack:
   - [docs/current-limitations-and-recommendations.md](/Users/aloysius/Documents/New%20project/docs/current-limitations-and-recommendations.md)
 - current implementation notes:
   - [docs/reference-implementation.md](/Users/aloysius/Documents/New%20project/docs/reference-implementation.md)
+- consolidated refactor brief and expert handoff prompt:
+  - [docs/comprehensive-refactor-system-prompt.md](/Users/aloysius/Documents/New%20project/docs/comprehensive-refactor-system-prompt.md)
 
 ## What Is Included
 

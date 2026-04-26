@@ -9,12 +9,42 @@ This document records the known current limitations of the live Phase 1 UAT plat
 Current limitation:
 
 - edit, splash, and growth-factor processing now use targeted server-side working sets, but the highest-volume aggregate paths still do more recalculation work than the final delta-only target model
+- the latest live authenticated regression matrix still shows drift in year-level growth-factor restore paths and some cost- and GP%-driven aggregate target reconciliation
 
 Recommendation:
 
 - move recalculation fully to strict impacted-ancestor scope only
 - add persisted aggregate projections for the hottest summary paths
 - keep measuring leaf-edit, splash, and growth-factor latency under larger UAT data volumes
+- add an explicit replayable calculation engine contract for:
+  - year leaf edits
+  - rate-driven splashes
+  - growth-factor restore after reread, undo, redo, and save
+
+## 1.1 Growth-Factor And Year-Edit Accuracy
+
+Current limitation:
+
+- persistent `baseValue × growthFactor` semantics are not yet fully stable in all year-level scenarios
+- year-level growth-factor restore is still drifting for several measures in the live replay matrix
+
+Recommendation:
+
+- separate editable user intent from derived recalculation state in the persistence model
+- persist and test `baseValue`, `growthFactor`, and `effectiveValue` as first-class fields with replay-safe undo and redo
+- add dedicated reconciliation checks for year edits and year growth-factor restore
+
+## 1.2 Derived Measure Rule Drift
+
+Current limitation:
+
+- `GP%` and `Total Costs` paths still show rule drift in some live year and aggregate scenarios
+
+Recommendation:
+
+- encode all measure rules in a single explicit rule engine or measure-strategy layer
+- prohibit ambiguous fallback behavior inside ad hoc service methods
+- add measure-by-measure contract tests across leaf month, leaf year, aggregate month, and aggregate year
 
 ## 2. ECS Network Posture
 
@@ -98,9 +128,40 @@ Remaining work:
 
 ## 8. Priority Recommendation Order
 
-1. Delta recalculation and persisted aggregate optimization
-2. Private-subnet ECS with private secret retrieval
-3. ALB HTTPS origin completion
-4. Production observability and alerting
-5. Retire the rollback DB
-6. Phase 2 recommendation APIs and AI review workflow
+1. Fix year-level growth-factor persistence and restore drift
+2. Normalize all derived-measure edit and splash rules into one explicit rule engine
+3. Delta recalculation and persisted aggregate optimization
+4. Complete master-data admin UX separation and CRUD consistency
+5. Private-subnet ECS with private secret retrieval
+6. ALB HTTPS origin completion
+7. Production observability and alerting
+8. Retire the rollback DB
+9. Phase 2 recommendation APIs and AI review workflow
+
+## 9. Architecture, UX, Performance, And Security Review
+
+Architecture improvement opportunities:
+
+- split planning query, planning command, and master-data admin concerns more cleanly
+- isolate recalculation, allocation, and derived-measure solving behind explicit strategy interfaces
+- reduce dependence on UI-side synthetic aggregate recomputation for authoritative behavior
+
+UX improvement opportunities:
+
+- move all master-data maintenance to a dedicated top-level section
+- provide clearer inline explanations for preserved versus derived measures during edits and splashes
+- show lock legends for explicit and implicit lock coloring
+- provide a visible save state, dirty state, and reconciliation status area
+
+Performance improvement opportunities:
+
+- add Redis or equivalent cache only for safe read projections, not for write authority
+- reduce temp-table churn and redundant rereads on draft and growth-factor paths
+- instrument branch-level recalculation fan-out and patch size at runtime
+
+Security improvement opportunities:
+
+- complete HTTPS-only CloudFront-to-origin transport
+- move deployment-time DB credentials to private secret retrieval
+- add stronger tenant, role, and master-data admin authorization boundaries
+- add tamper-evident audit export and retention policy documentation

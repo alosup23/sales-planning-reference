@@ -38,15 +38,18 @@ This document records the major issues encountered through the UAT build history
 | 28 | Department/server-side composition and SSRM were not yet implemented | Department view is now server-composed and AG Grid runs on SSRM/server-side blocks | Yes |
 | 29 | Reconciliation and async progress were not fully documented | runtime and endpoint docs were updated to reflect the final Phase 1 design | Yes |
 | 30 | Several UAT defects risked falling through between frontend and backend fixes | regression coverage was expanded across planning, maintenance, and workbook roundtrips | Yes |
+| 31 | Growth-factor behavior reset or drifted after reread and restore paths | growth-factor persistence was refactored toward explicit `baseValue × growthFactor` semantics, but live year-level drift still remains in some scenarios | Partially |
+| 32 | Leaf year `Unit Cost` behaved like an aggregate-only rule and was rejected | leaf-scoped annual override routing was corrected in the planning service | Yes |
+| 33 | Read and mutate paths disagreed on some effective lock states | read-side effective lock logic and draft overlay were aligned to prevent unlocked presentation of effectively locked cells | Yes |
+| 34 | Planning views did not distinguish explicit locks from inherited locks visually | grid contract was extended with `lockState` and the UI now highlights explicit and implicit locks differently | Yes |
+| 35 | Post-deploy authenticated regression replay found no hard failures but still surfaced year growth-factor and some cost/GP% drift | these scenarios are now explicitly documented as open refactor obligations and must be covered by the next total refactor test matrix | No |
 
 ## Still Open During This Document Revision
 
-- The corrected ECS stack deployment that combines:
-  - durable PostgreSQL-backed jobs
-  - durable reconciliation scheduling
-  - PostgreSQL-backed Data Protection keys
-  - direct DB credential startup for ECS
-  is still being finalized in AWS at the time of this document update.
+- The latest deployed planning runtime no longer shows hard failures in the authenticated matrix replay, but these open behavioral drifts remain:
+  - year-level growth-factor base and restore stability
+  - some `Total Costs` aggregate target reconciliation drift
+  - some `GP%` year-edit preservation drift
 
 ## Review Notes
 

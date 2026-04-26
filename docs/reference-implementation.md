@@ -74,6 +74,7 @@ The source-of-truth target design is now documented in:
 - [docs/user-guide.md](/Users/aloysius/Documents/New%20project/docs/user-guide.md)
 - [docs/training-process-overview.md](/Users/aloysius/Documents/New%20project/docs/training-process-overview.md)
 - [docs/current-limitations-and-recommendations.md](/Users/aloysius/Documents/New%20project/docs/current-limitations-and-recommendations.md)
+- [docs/comprehensive-refactor-system-prompt.md](/Users/aloysius/Documents/New%20project/docs/comprehensive-refactor-system-prompt.md)
 
 The next implementation waves should focus on:
 
@@ -81,4 +82,6 @@ The next implementation waves should focus on:
 2. durable async job persistence and scheduled reconciliation orchestration
 3. ALB HTTPS origin linkage and tighter private networking for ECS
 4. production-grade observability and alerting
-5. Phase 2 AI service boundaries and recommendation workflows
+5. rule-engine normalization for all measure edit, splash, and growth-factor behavior
+6. master-data admin UX separation and CRUD consistency
+7. Phase 2 AI service boundaries and recommendation workflows
