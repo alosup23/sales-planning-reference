@@ -350,7 +350,7 @@ public sealed partial class PlanningService
     {
         var asp = DeriveAsp(rows, timePeriodId);
         var unitCost = DeriveUnitCost(rows, timePeriodId);
-        return asp <= 0m ? 0m : Math.Round(((asp - unitCost) / asp) * 100m, 1, MidpointRounding.AwayFromZero);
+        return asp <= 0m ? 0m : Math.Round(((asp - unitCost) / asp) * 100m, 2, MidpointRounding.AwayFromZero);
     }
 
     private static (long StoreId, long ProductNodeId) ParseCanonicalNodeViewRowId(string viewRowId)

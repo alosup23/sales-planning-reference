@@ -211,7 +211,7 @@ public sealed partial class PlanningService
                     draftCell.BaseValue,
                     draftCell.EffectiveValue,
                     draftCell.GrowthFactor,
-                    draftCell.IsLocked,
+                    cell.IsLocked || draftCell.IsLocked,
                     string.Equals(draftCell.CellKind, "calculated", StringComparison.OrdinalIgnoreCase),
                     draftCell.OverrideValue is not null,
                     draftCell.RowVersion,

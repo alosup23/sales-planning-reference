@@ -15,9 +15,11 @@ public sealed class PlanningCell
     public long RowVersion { get; set; }
     public string CellKind { get; set; } = "leaf";
     public decimal BaseValue =>
-        GrowthFactor > 0m && GrowthFactor != 1.0m
+        InputValue
+        ?? OverrideValue
+        ?? (GrowthFactor > 0m && GrowthFactor != 1.0m
             ? PlanningMath.NormalizeMeasureValue(Coordinate.MeasureId, EffectiveValue / GrowthFactor)
-            : InputValue ?? OverrideValue ?? EffectiveValue;
+            : EffectiveValue);
 
     public PlanningCell Clone()
     {

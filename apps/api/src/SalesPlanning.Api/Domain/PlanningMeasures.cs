@@ -18,7 +18,7 @@ public static class PlanningMeasures
         new(UnitCost, "Unit Cost", 2, true, false, true, false),
         new(TotalCosts, "Total Costs", 0, false, false, true, true),
         new(GrossProfit, "GP", 0, false, false, true, true),
-        new(GrossProfitPercent, "GP%", 1, true, true, true, true)
+        new(GrossProfitPercent, "GP%", 2, true, true, true, true)
     ];
 
     public static IReadOnlyList<long> SupportedMeasureIds => Definitions.Select(definition => definition.MeasureId).ToList();

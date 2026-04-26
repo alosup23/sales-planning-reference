@@ -987,6 +987,7 @@ public sealed partial class PostgresPlanningRepository
         IReadOnlyDictionary<long, TimePeriodNode> timePeriods)
     {
         return scenarioCells.Any(cell =>
+            cell.Coordinate.MeasureId == coordinate.MeasureId &&
             cell.Coordinate.StoreId == coordinate.StoreId &&
             IsAncestorOrSelfDirect(productNodes, cell.Coordinate.ProductNodeId, coordinate.ProductNodeId) &&
             IsAncestorOrSelfDirect(timePeriods, cell.Coordinate.TimePeriodId, coordinate.TimePeriodId));

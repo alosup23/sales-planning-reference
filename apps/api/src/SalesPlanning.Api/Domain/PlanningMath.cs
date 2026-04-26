@@ -35,7 +35,7 @@ public static class PlanningMath
 
     public static decimal NormalizeGrossProfitPercent(decimal value)
     {
-        return Math.Round(value, 1, MidpointRounding.AwayFromZero);
+        return Math.Round(value, 2, MidpointRounding.AwayFromZero);
     }
 
     public static decimal NormalizeGrowthFactor(decimal value)
