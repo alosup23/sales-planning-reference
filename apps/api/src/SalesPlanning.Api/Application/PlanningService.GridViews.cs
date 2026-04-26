@@ -322,6 +322,7 @@ public sealed partial class PlanningService
                             value,
                             1m,
                             rows.Count > 0 && rows.All(row => row.Cells.GetValueOrDefault(period.TimePeriodId)?.Measures.GetValueOrDefault(measure.MeasureId)?.IsLocked ?? false),
+                            rows.Count > 0 && rows.All(row => row.Cells.GetValueOrDefault(period.TimePeriodId)?.Measures.GetValueOrDefault(measure.MeasureId)?.IsLocked ?? false) ? "implicit" : "unlocked",
                             true,
                             false,
                             0,

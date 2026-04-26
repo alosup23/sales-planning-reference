@@ -29,6 +29,7 @@ public sealed partial class PlanningService
                         delta.NewState.EffectiveValue,
                         delta.NewState.GrowthFactor,
                         delta.NewState.IsLocked,
+                        delta.NewState.IsLocked ? "explicit" : "unlocked",
                         string.Equals(delta.NewState.CellKind, "calculated", StringComparison.OrdinalIgnoreCase),
                         delta.NewState.OverrideValue is not null,
                         delta.NewState.RowVersion,

@@ -49,6 +49,7 @@ public sealed record GridCellDto(
     decimal Value,
     decimal GrowthFactor,
     bool IsLocked,
+    string LockState,
     bool IsCalculated,
     bool IsOverride,
     long RowVersion,

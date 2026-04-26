@@ -207,11 +207,13 @@ public sealed partial class PlanningService
                 }
 
                 updatedMeasures ??= new Dictionary<long, GridCellDto>(periodCell.Measures);
+                var lockState = draftCell.IsLocked ? "explicit" : cell.LockState;
                 updatedMeasures[measureId] = new GridCellDto(
                     draftCell.BaseValue,
                     draftCell.EffectiveValue,
                     draftCell.GrowthFactor,
                     cell.IsLocked || draftCell.IsLocked,
+                    lockState,
                     string.Equals(draftCell.CellKind, "calculated", StringComparison.OrdinalIgnoreCase),
                     draftCell.OverrideValue is not null,
                     draftCell.RowVersion,

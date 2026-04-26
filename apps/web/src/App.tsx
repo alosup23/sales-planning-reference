@@ -2531,8 +2531,8 @@ function sumCells(rows: GridRow[], data: GridSliceResponse): Record<number, { me
       const aspValue = quantityValue > 0 ? roundToDecimals(revenueValue / quantityValue, 2) : 1;
       const unitCostBaseValue = quantityBaseValue > 0 ? roundToDecimals(totalCostsBaseValue / quantityBaseValue, 2) : 0;
       const unitCostValue = quantityValue > 0 ? roundToDecimals(totalCostsValue / quantityValue, 2) : 0;
-      const grossProfitPercentBaseValue = aspBaseValue > 0 ? roundToDecimals(((aspBaseValue - unitCostBaseValue) / aspBaseValue) * 100, 1) : 0;
-      const grossProfitPercentValue = aspValue > 0 ? roundToDecimals(((aspValue - unitCostValue) / aspValue) * 100, 1) : 0;
+      const grossProfitPercentBaseValue = aspBaseValue > 0 ? roundToDecimals(((aspBaseValue - unitCostBaseValue) / aspBaseValue) * 100, 2) : 0;
+      const grossProfitPercentValue = aspValue > 0 ? roundToDecimals(((aspValue - unitCostValue) / aspValue) * 100, 2) : 0;
 
       return [
         period.timePeriodId,
@@ -2592,6 +2592,7 @@ function sumCells(rows: GridRow[], data: GridSliceResponse): Record<number, { me
                   value,
                   growthFactor: uniformGrowthFactor,
                   isLocked,
+                  lockState: isLocked ? "implicit" : "unlocked",
                   isCalculated: true,
                   isOverride: false,
                   rowVersion: 0,

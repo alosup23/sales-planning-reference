@@ -23,7 +23,7 @@ import {
 } from "ag-grid-community";
 import { ServerSideRowModelModule } from "ag-grid-enterprise";
 import { AgGridReact } from "ag-grid-react";
-import type { AddRowResponse, GridMeasure, GridPeriod, GridRow, GridSliceResponse, PlanningGridPatch, UndoRedoAvailability } from "../lib/types";
+import type { AddRowResponse, GridCell, GridMeasure, GridPeriod, GridRow, GridSliceResponse, PlanningGridPatch, UndoRedoAvailability } from "../lib/types";
 import "ag-grid-community/styles/ag-grid.css";
 import "ag-grid-community/styles/ag-theme-quartz.css";
 
@@ -515,7 +515,12 @@ export function PlanningGrid({
         initialWidth: columnWidthStateRef.current.get(`${period.timePeriodId}:${measure.measureId}`) ?? (isYearTotal ? yearTotalWidth : monthMeasureWidth),
         minWidth: isYearTotal ? yearTotalWidth : monthMeasureWidth,
         cellStyle: (params): CellStyle => ({
-          backgroundColor: getMeasureBandColor(params.data, period.timePeriodId, yearIndexByTimePeriodId),
+          backgroundColor: getCellBackgroundColor(
+            params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.lockState,
+            params.data,
+            period.timePeriodId,
+            yearIndexByTimePeriodId,
+          ),
           textAlign: "right",
         }),
         cellRenderer: GrowthCellRenderer,
@@ -527,6 +532,8 @@ export function PlanningGrid({
         },
         cellClassRules: {
           "cell-locked": (params) => Boolean(params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked),
+          "cell-locked-explicit": (params) => params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.lockState === "explicit",
+          "cell-locked-implicit": (params) => params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.lockState === "implicit",
           "cell-calculated": (params) => Boolean(params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.isCalculated),
           "cell-override": (params) => Boolean(params.data?.cells[period.timePeriodId]?.measures[measure.measureId]?.isOverride),
         },
@@ -1411,24 +1418,25 @@ function recomputeSyntheticRow(
         ? (quantity <= 0 ? 0 : roundAwayFromZero(revenue / quantity, 2))
         : measure.measureId === 4
           ? (quantity <= 0 ? 0 : roundAwayFromZero(totalCosts / quantity, 2))
-          : measure.measureId === 7
-            ? (revenue <= 0 ? 0 : roundAwayFromZero(((grossProfit) / revenue) * 100, 1))
+        : measure.measureId === 7
+            ? (revenue <= 0 ? 0 : roundAwayFromZero(((grossProfit) / revenue) * 100, 2))
             : rawValue;
+      const existingCell = existingPeriod?.measures?.[measure.measureId];
       const nextCell = {
         baseValue: nextValue,
         value: nextValue,
         growthFactor: 1,
-        isLocked: directChildren.every((child) => Boolean(child.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked)),
+        isLocked: existingCell?.isLocked ?? directChildren.every((child) => Boolean(child.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked)),
+        lockState: existingCell?.lockState ?? (directChildren.every((child) => Boolean(child.cells[period.timePeriodId]?.measures[measure.measureId]?.isLocked)) ? "implicit" : "unlocked"),
         isCalculated: true,
         isOverride: false,
         rowVersion: 0,
         cellKind: "calculated",
       };
-
-      const existingCell = existingPeriod?.measures?.[measure.measureId];
       if (!existingCell
         || existingCell.value !== nextCell.value
         || existingCell.isLocked !== nextCell.isLocked
+        || existingCell.lockState !== nextCell.lockState
         || existingCell.growthFactor !== nextCell.growthFactor
         || existingCell.isCalculated !== nextCell.isCalculated
         || existingCell.isOverride !== nextCell.isOverride
@@ -1581,6 +1589,23 @@ function getRowBandClass(row: GridRowView): string {
 function getMeasureBandColor(row: GridRowView | undefined, timePeriodId: number, yearIndexByTimePeriodId: Map<number, number>): string {
   const baseColor = getBaseBandColor(row);
   return enrichHexColor(baseColor, yearIndexByTimePeriodId.get(timePeriodId) ?? 0);
+}
+
+function getCellBackgroundColor(
+  lockState: GridCell["lockState"] | undefined,
+  row: GridRowView | undefined,
+  timePeriodId: number,
+  yearIndexByTimePeriodId: Map<number, number>,
+): string {
+  if (lockState === "explicit") {
+    return "#f1e6ff";
+  }
+
+  if (lockState === "implicit") {
+    return "#fff6cc";
+  }
+
+  return getMeasureBandColor(row, timePeriodId, yearIndexByTimePeriodId);
 }
 
 function getBaseBandColor(row: GridRowView | undefined): string {

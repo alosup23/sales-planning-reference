@@ -1,10 +1,11 @@
-import type { GridSliceResponse } from "./types";
+import type { GridCell, GridSliceResponse } from "./types";
 
-const zeroMeasureCell = (value = 0, isLocked = false) => ({
+const zeroMeasureCell = (value = 0, isLocked = false): GridCell => ({
   baseValue: value,
   value,
   growthFactor: 1,
   isLocked,
+  lockState: isLocked ? "explicit" : "unlocked",
   isCalculated: true,
   isOverride: false,
   rowVersion: 1,
@@ -20,7 +21,7 @@ export const sampleGridData: GridSliceResponse = {
     { measureId: 4, label: "Unit Cost", decimalPlaces: 2, derivedAtAggregateLevels: true, displayAsPercent: false, editableAtLeaf: true, editableAtAggregate: true },
     { measureId: 5, label: "Total Costs", decimalPlaces: 0, derivedAtAggregateLevels: false, displayAsPercent: false, editableAtLeaf: false, editableAtAggregate: false },
     { measureId: 6, label: "GP", decimalPlaces: 0, derivedAtAggregateLevels: false, displayAsPercent: false, editableAtLeaf: false, editableAtAggregate: false },
-    { measureId: 7, label: "GP%", decimalPlaces: 1, derivedAtAggregateLevels: true, displayAsPercent: true, editableAtLeaf: true, editableAtAggregate: true },
+    { measureId: 7, label: "GP%", decimalPlaces: 2, derivedAtAggregateLevels: true, displayAsPercent: true, editableAtLeaf: true, editableAtAggregate: true },
   ],
   periods: [
     { timePeriodId: 202600, label: "FY26", grain: "year", parentTimePeriodId: null, sortOrder: 2600 },

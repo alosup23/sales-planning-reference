@@ -935,11 +935,13 @@ public sealed partial class PostgresPlanningRepository
                                 {
                                     if (cellsByCoordinate.TryGetValue((period.TimePeriodId, measure.MeasureId), out var existingCell))
                                     {
+                                        var existingLockState = GetLockStateDirect(existingCell, lockedCells, productNodes, timePeriods);
                                         return new GridCellDto(
                                             existingCell.BaseValue,
                                             existingCell.EffectiveValue,
                                             existingCell.GrowthFactor,
-                                            IsEffectivelyLockedDirect(existingCell.Coordinate, lockedCells, productNodes, timePeriods),
+                                            !string.Equals(existingLockState, "unlocked", StringComparison.OrdinalIgnoreCase),
+                                            existingLockState,
                                             existingCell.CellKind == "calculated",
                                             existingCell.OverrideValue is not null,
                                             existingCell.RowVersion,
@@ -949,11 +951,13 @@ public sealed partial class PostgresPlanningRepository
                                     var coordinate = new PlanningCellCoordinate(scenarioVersionId, measure.MeasureId, node.StoreId, node.ProductNodeId, period.TimePeriodId);
                                     var isLeafMonth = node.IsLeaf && string.Equals(period.Grain, "month", StringComparison.OrdinalIgnoreCase);
                                     var cellKind = isLeafMonth && measure.EditableAtLeaf ? "leaf" : "calculated";
+                                    var lockState = GetLockStateDirect(coordinate, lockedCells, productNodes, timePeriods);
                                     return new GridCellDto(
                                         0m,
                                         0m,
                                         1.0m,
-                                        IsEffectivelyLockedDirect(coordinate, lockedCells, productNodes, timePeriods),
+                                        !string.Equals(lockState, "unlocked", StringComparison.OrdinalIgnoreCase),
+                                        lockState,
                                         string.Equals(cellKind, "calculated", StringComparison.OrdinalIgnoreCase),
                                         false,
                                         1,
@@ -986,11 +990,37 @@ public sealed partial class PostgresPlanningRepository
         IReadOnlyDictionary<long, ProductNode> productNodes,
         IReadOnlyDictionary<long, TimePeriodNode> timePeriods)
     {
-        return scenarioCells.Any(cell =>
+        return !string.Equals(GetLockStateDirect(coordinate, scenarioCells, productNodes, timePeriods), "unlocked", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetLockStateDirect(
+        PlanningCell cell,
+        IReadOnlyCollection<PlanningCell> scenarioCells,
+        IReadOnlyDictionary<long, ProductNode> productNodes,
+        IReadOnlyDictionary<long, TimePeriodNode> timePeriods)
+    {
+        if (cell.IsLocked)
+        {
+            return "explicit";
+        }
+
+        return GetLockStateDirect(cell.Coordinate, scenarioCells, productNodes, timePeriods);
+    }
+
+    private static string GetLockStateDirect(
+        PlanningCellCoordinate coordinate,
+        IReadOnlyCollection<PlanningCell> scenarioCells,
+        IReadOnlyDictionary<long, ProductNode> productNodes,
+        IReadOnlyDictionary<long, TimePeriodNode> timePeriods)
+    {
+        var hasImplicitLock = scenarioCells.Any(cell =>
             cell.Coordinate.MeasureId == coordinate.MeasureId &&
             cell.Coordinate.StoreId == coordinate.StoreId &&
+            cell.IsLocked &&
             IsAncestorOrSelfDirect(productNodes, cell.Coordinate.ProductNodeId, coordinate.ProductNodeId) &&
             IsAncestorOrSelfDirect(timePeriods, cell.Coordinate.TimePeriodId, coordinate.TimePeriodId));
+
+        return hasImplicitLock ? "implicit" : "unlocked";
     }
 
     private static bool IsAncestorOrSelfDirect(IReadOnlyDictionary<long, ProductNode> nodes, long ancestorId, long descendantId)

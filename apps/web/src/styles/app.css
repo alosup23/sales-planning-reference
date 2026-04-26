@@ -701,6 +701,14 @@ button {
   box-shadow: inset 0 0 0 2px rgba(176, 74, 74, 0.42);
 }
 
+.cell-locked-explicit {
+  box-shadow: inset 0 0 0 2px rgba(154, 110, 201, 0.45);
+}
+
+.cell-locked-implicit {
+  box-shadow: inset 0 0 0 2px rgba(216, 178, 44, 0.34);
+}
+
 .cell-calculated {
   color: #0d5d74;
 }

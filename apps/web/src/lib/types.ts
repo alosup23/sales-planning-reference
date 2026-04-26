@@ -3,6 +3,7 @@ export type GridCell = {
   value: number;
   growthFactor: number;
   isLocked: boolean;
+  lockState: "unlocked" | "explicit" | "implicit";
   isCalculated: boolean;
   isOverride: boolean;
   rowVersion: number;
