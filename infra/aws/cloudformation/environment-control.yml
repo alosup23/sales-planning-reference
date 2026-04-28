@@ -1,0 +1,458 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Sales Planning UAT environment wake/sleep control plane for ECS and RDS.
+
+Parameters:
+  ControlApiName:
+    Type: String
+    Default: sales-planning-demo-environment-control
+  ClusterName:
+    Type: String
+    Default: sales-planning-demo-cluster
+  ServiceName:
+    Type: String
+    Default: sales-planning-demo-api
+  DbInstanceIdentifier:
+    Type: String
+    Default: sales-planning-demo-pg-private
+  LoadBalancerFullName:
+    Type: String
+    Default: app/sales-plan-api-alb/027a13fe86cf2ebb
+  WarmDesiredCount:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 2
+  ServiceIdleMinutes:
+    Type: Number
+    Default: 20
+    MinValue: 5
+    MaxValue: 240
+  DatabaseIdleMinutes:
+    Type: Number
+    Default: 60
+    MinValue: 15
+    MaxValue: 720
+  IdleCheckScheduleExpression:
+    Type: String
+    Default: rate(5 minutes)
+  AllowedOrigin:
+    Type: String
+    Default: https://d22xc0mfhkv9bk.cloudfront.net
+  EntraTenantId:
+    Type: String
+    Default: 76ad236c-6db1-4d3d-9901-996450816c3c
+  EntraApiAudience:
+    Type: String
+    Default: api://557f0c81-0531-4616-b62e-0b69eb7cb86f
+
+Resources:
+  ControlLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/sales-planning-environment-control
+      RetentionInDays: 14
+
+  ControlRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sales-planning-environment-control
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: sales-planning-environment-control
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:DescribeServices
+                  - ecs:UpdateService
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBInstances
+                  - rds:StartDBInstance
+                  - rds:StopDBInstance
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - cloudwatch:GetMetricData
+                Resource: "*"
+
+  ControlFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: sales-planning-environment-control
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 30
+      MemorySize: 256
+      Role: !GetAtt ControlRole.Arn
+      Environment:
+        Variables:
+          CLUSTER_NAME: !Ref ClusterName
+          SERVICE_NAME: !Ref ServiceName
+          DB_INSTANCE_IDENTIFIER: !Ref DbInstanceIdentifier
+          LOAD_BALANCER_FULL_NAME: !Ref LoadBalancerFullName
+          WARM_DESIRED_COUNT: !Sub ${WarmDesiredCount}
+          SERVICE_IDLE_MINUTES: !Sub ${ServiceIdleMinutes}
+          DATABASE_IDLE_MINUTES: !Sub ${DatabaseIdleMinutes}
+          ALLOWED_ORIGIN: !Ref AllowedOrigin
+      Code:
+        ZipFile: |
+          import json
+          import os
+          from datetime import datetime, timedelta, timezone
+
+          import boto3
+
+          ecs = boto3.client("ecs")
+          rds = boto3.client("rds")
+          cloudwatch = boto3.client("cloudwatch")
+
+          CLUSTER_NAME = os.environ["CLUSTER_NAME"]
+          SERVICE_NAME = os.environ["SERVICE_NAME"]
+          DB_INSTANCE_IDENTIFIER = os.environ["DB_INSTANCE_IDENTIFIER"]
+          LOAD_BALANCER_FULL_NAME = os.environ["LOAD_BALANCER_FULL_NAME"]
+          WARM_DESIRED_COUNT = int(os.environ.get("WARM_DESIRED_COUNT", "1"))
+          SERVICE_IDLE_MINUTES = int(os.environ.get("SERVICE_IDLE_MINUTES", "20"))
+          DATABASE_IDLE_MINUTES = int(os.environ.get("DATABASE_IDLE_MINUTES", "60"))
+          ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
+
+          CORS_HEADERS = {
+              "access-control-allow-origin": ALLOWED_ORIGIN,
+              "access-control-allow-methods": "GET,POST,OPTIONS",
+              "access-control-allow-headers": "authorization,content-type",
+          }
+
+
+          def get_primary_deployment(service):
+              for deployment in service.get("deployments", []):
+                  if deployment.get("status") == "PRIMARY":
+                      return deployment
+              return None
+
+
+          def get_rollout_state(service):
+              deployment = get_primary_deployment(service)
+              return deployment.get("rolloutState", "UNKNOWN") if deployment else "UNKNOWN"
+
+
+          def environment_ready(service, db):
+              desired = service.get("desiredCount", 0)
+              running = service.get("runningCount", 0)
+              return (
+                  db.get("DBInstanceStatus") == "available"
+                  and desired > 0
+                  and running >= desired
+                  and get_rollout_state(service) == "COMPLETED"
+              )
+
+
+          def response_body_from_environment(environment, operations=None):
+              operations = operations or []
+              return {
+                  "ready": environment["ready"],
+                  "operations": operations,
+                  "dbStatus": environment["db"].get("DBInstanceStatus", "unknown"),
+                  "service": {
+                      "desiredCount": environment["service"].get("desiredCount", 0),
+                      "runningCount": environment["service"].get("runningCount", 0),
+                      "pendingCount": environment["service"].get("pendingCount", 0),
+                      "rolloutState": get_rollout_state(environment["service"]),
+                  },
+              }
+
+
+          def describe_environment():
+              service_result = ecs.describe_services(cluster=CLUSTER_NAME, services=[SERVICE_NAME])
+              db_result = rds.describe_db_instances(DBInstanceIdentifier=DB_INSTANCE_IDENTIFIER)
+
+              services = service_result.get("services", [])
+              db_instances = db_result.get("DBInstances", [])
+              if not services:
+                  raise RuntimeError(f"ECS service {SERVICE_NAME} was not found.")
+              if not db_instances:
+                  raise RuntimeError(f"RDS instance {DB_INSTANCE_IDENTIFIER} was not found.")
+
+              service = services[0]
+              db = db_instances[0]
+              return {
+                  "service": service,
+                  "db": db,
+                  "ready": environment_ready(service, db),
+              }
+
+
+          def start_environment():
+              environment = describe_environment()
+              operations = []
+
+              if environment["db"].get("DBInstanceStatus") == "stopped":
+                  rds.start_db_instance(DBInstanceIdentifier=DB_INSTANCE_IDENTIFIER)
+                  operations.append("db-started")
+
+              if environment["service"].get("desiredCount", 0) < WARM_DESIRED_COUNT:
+                  ecs.update_service(
+                      cluster=CLUSTER_NAME,
+                      service=SERVICE_NAME,
+                      desiredCount=WARM_DESIRED_COUNT,
+                  )
+                  operations.append("service-scaled-up")
+
+              refreshed = describe_environment()
+              refreshed["operations"] = operations
+              return refreshed
+
+
+          def sum_values(values):
+              return sum(values or [])
+
+
+          def max_value(values):
+              return max(values or [0])
+
+
+          def get_usage_window(minutes):
+              end_time = datetime.now(timezone.utc)
+              start_time = end_time - timedelta(minutes=minutes)
+              period = max(60, minutes * 60)
+              response = cloudwatch.get_metric_data(
+                  StartTime=start_time,
+                  EndTime=end_time,
+                  MetricDataQueries=[
+                      {
+                          "Id": "requestcount",
+                          "MetricStat": {
+                              "Metric": {
+                                  "Namespace": "AWS/ApplicationELB",
+                                  "MetricName": "RequestCount",
+                                  "Dimensions": [
+                                      {"Name": "LoadBalancer", "Value": LOAD_BALANCER_FULL_NAME},
+                                  ],
+                              },
+                              "Period": period,
+                              "Stat": "Sum",
+                          },
+                          "ReturnData": True,
+                      },
+                      {
+                          "Id": "cpu",
+                          "MetricStat": {
+                              "Metric": {
+                                  "Namespace": "AWS/ECS",
+                                  "MetricName": "CPUUtilization",
+                                  "Dimensions": [
+                                      {"Name": "ClusterName", "Value": CLUSTER_NAME},
+                                      {"Name": "ServiceName", "Value": SERVICE_NAME},
+                                  ],
+                              },
+                              "Period": period,
+                              "Stat": "Average",
+                          },
+                          "ReturnData": True,
+                      },
+                  ],
+              )
+
+              results = {entry["Id"]: entry.get("Values", []) for entry in response.get("MetricDataResults", [])}
+              return {
+                  "requestCount": sum_values(results.get("requestcount")),
+                  "cpu": max_value(results.get("cpu")),
+              }
+
+
+          def perform_idle_check():
+              environment = describe_environment()
+              service_window = get_usage_window(SERVICE_IDLE_MINUTES)
+              database_window = service_window if DATABASE_IDLE_MINUTES == SERVICE_IDLE_MINUTES else get_usage_window(DATABASE_IDLE_MINUTES)
+              actions = []
+
+              desired_count = environment["service"].get("desiredCount", 0)
+              running_count = environment["service"].get("runningCount", 0)
+
+              if desired_count > 0 and service_window["requestCount"] == 0 and service_window["cpu"] < 2:
+                  ecs.update_service(cluster=CLUSTER_NAME, service=SERVICE_NAME, desiredCount=0)
+                  actions.append("service-scaled-down")
+
+              refreshed = describe_environment()
+              if (
+                  refreshed["db"].get("DBInstanceStatus") == "available"
+                  and refreshed["service"].get("desiredCount", desired_count) == 0
+                  and refreshed["service"].get("runningCount", running_count) == 0
+                  and database_window["requestCount"] == 0
+              ):
+                  rds.stop_db_instance(DBInstanceIdentifier=DB_INSTANCE_IDENTIFIER)
+                  actions.append("db-stopped")
+
+              return {
+                  "actions": actions,
+                  "serviceWindow": service_window,
+                  "databaseWindow": database_window,
+                  "environment": describe_environment(),
+              }
+
+
+          def to_response(status_code, body):
+              return {
+                  "statusCode": status_code,
+                  "headers": {
+                      "content-type": "application/json",
+                      **CORS_HEADERS,
+                  },
+                  "body": json.dumps(body),
+              }
+
+
+          def handler(event, _context):
+              try:
+                  method = ((event or {}).get("requestContext") or {}).get("http", {}).get("method")
+                  if method == "OPTIONS":
+                      return to_response(204, {})
+
+                  path = (event or {}).get("rawPath") or ((event or {}).get("requestContext") or {}).get("http", {}).get("path") or "/"
+                  if path.endswith("/environment/start"):
+                      result = start_environment()
+                      return to_response(200 if result["ready"] else 202, response_body_from_environment(result, result.get("operations")))
+
+                  if path.endswith("/environment/status"):
+                      result = describe_environment()
+                      return to_response(200, response_body_from_environment(result))
+
+                  result = perform_idle_check()
+                  return to_response(
+                      200,
+                      {
+                          "mode": "idle-check",
+                          "actions": result["actions"],
+                          "serviceWindow": result["serviceWindow"],
+                          "databaseWindow": result["databaseWindow"],
+                          "ready": result["environment"]["ready"],
+                          "dbStatus": result["environment"]["db"].get("DBInstanceStatus", "unknown"),
+                      },
+                  )
+              except Exception as error:
+                  print(f"Environment control request failed: {error}")
+                  return to_response(500, {"detail": str(error) or "Environment control failed."})
+
+  ControlApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Ref ControlApiName
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref AllowedOrigin
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - authorization
+          - content-type
+
+  ControlAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref ControlApi
+      AuthorizerType: JWT
+      IdentitySource:
+        - $request.header.Authorization
+      JwtConfiguration:
+        Audience:
+          - !Ref EntraApiAudience
+        Issuer: !Sub https://sts.windows.net/${EntraTenantId}/
+      Name: sales-planning-environment-control-jwt
+
+  ControlStartIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ControlApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ControlFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  ControlStartRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ControlApi
+      RouteKey: POST /environment/start
+      AuthorizationType: JWT
+      AuthorizerId: !Ref ControlAuthorizer
+      Target: !Sub integrations/${ControlStartIntegration}
+
+  ControlStatusRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ControlApi
+      RouteKey: GET /environment/status
+      AuthorizationType: JWT
+      AuthorizerId: !Ref ControlAuthorizer
+      Target: !Sub integrations/${ControlStartIntegration}
+
+  ControlOptionsStartRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ControlApi
+      RouteKey: OPTIONS /environment/start
+      AuthorizationType: NONE
+      Target: !Sub integrations/${ControlStartIntegration}
+
+  ControlOptionsStatusRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ControlApi
+      RouteKey: OPTIONS /environment/status
+      AuthorizationType: NONE
+      Target: !Sub integrations/${ControlStartIntegration}
+
+  ControlStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref ControlApi
+      AutoDeploy: true
+      StageName: $default
+
+  ControlLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ControlFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ControlApi}/*/*
+
+  IdleCheckRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: sales-planning-environment-idle-check
+      ScheduleExpression: !Ref IdleCheckScheduleExpression
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ControlFunction.Arn
+          Id: environmentIdleCheck
+
+  IdleCheckPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ControlFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt IdleCheckRule.Arn
+
+Outputs:
+  ControlApiUrl:
+    Value: !GetAtt ControlApi.ApiEndpoint
+  ControlStartUrl:
+    Value: !Sub ${ControlApi.ApiEndpoint}/environment/start
+  ControlStatusUrl:
+    Value: !Sub ${ControlApi.ApiEndpoint}/environment/status
+  ControlFunctionName:
+    Value: !Ref ControlFunction

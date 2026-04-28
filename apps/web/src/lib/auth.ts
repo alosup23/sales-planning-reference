@@ -1,4 +1,5 @@
 import { EventType, InteractionRequiredAuthError, PublicClientApplication, type AuthenticationResult, type Configuration } from "@azure/msal-browser";
+import { ensurePlanningEnvironmentReady, isPlanningEnvironmentControlEnabled } from "./environmentControl";
 
 const authMode = import.meta.env.VITE_AUTH_MODE ?? "entra";
 const clientId = import.meta.env.VITE_ENTRA_CLIENT_ID ?? "557f0c81-0531-4616-b62e-0b69eb7cb86f";
@@ -36,6 +37,18 @@ const msalConfig: Configuration = {
 
 export const msalInstance = authEnabled ? new PublicClientApplication(msalConfig) : null;
 
+async function primePlanningEnvironment(accessToken: string | null): Promise<void> {
+  if (!accessToken || !isPlanningEnvironmentControlEnabled()) {
+    return;
+  }
+
+  try {
+    await ensurePlanningEnvironmentReady(accessToken);
+  } catch (error) {
+    console.warn("Unable to warm the planning environment during sign-in.", error);
+  }
+}
+
 export async function initializeAuth(): Promise<void> {
   if (!msalInstance) {
     return;
@@ -49,17 +62,30 @@ export async function initializeAuth(): Promise<void> {
 
     const authenticationResult = event.payload as AuthenticationResult;
     msalInstance.setActiveAccount(authenticationResult.account);
+    void primePlanningEnvironment(authenticationResult.accessToken || null);
   });
 
   const redirectResult = await msalInstance.handleRedirectPromise();
   if (redirectResult?.account) {
     msalInstance.setActiveAccount(redirectResult.account);
+    void primePlanningEnvironment(redirectResult.accessToken || null);
     return;
   }
 
   const activeAccount = msalInstance.getActiveAccount() ?? msalInstance.getAllAccounts()[0] ?? null;
   if (activeAccount) {
     msalInstance.setActiveAccount(activeAccount);
+    try {
+      const result = await msalInstance.acquireTokenSilent({
+        ...apiRequest,
+        account: activeAccount,
+      });
+      void primePlanningEnvironment(result.accessToken || null);
+    } catch (error) {
+      if (!(error instanceof InteractionRequiredAuthError)) {
+        console.warn("Unable to pre-warm the planning environment from the existing session.", error);
+      }
+    }
   }
 }
 

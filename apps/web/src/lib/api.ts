@@ -61,6 +61,7 @@ import type {
 } from "./types";
 import { sampleGridData } from "./sampleGridData";
 import { authEnabled, getAccessToken } from "./auth";
+import { ensurePlanningEnvironmentReady } from "./environmentControl";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 const ENABLE_SAMPLE_FALLBACK = import.meta.env.VITE_ENABLE_SAMPLE_FALLBACK === "true";
@@ -92,6 +93,7 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     try {
       const token = await getAccessToken();
       if (token) {
+        await ensurePlanningEnvironmentReady(token);
         headers.set("Authorization", `Bearer ${token}`);
       }
     } catch (error) {
@@ -151,6 +153,7 @@ async function fetchBlob(url: string, init?: RequestInit): Promise<{ blob: Blob;
     try {
       const token = await getAccessToken();
       if (token) {
+        await ensurePlanningEnvironmentReady(token);
         headers.set("Authorization", `Bearer ${token}`);
       }
     } catch (error) {
@@ -503,6 +506,7 @@ export async function downloadWorkbookExport(): Promise<void> {
   if (authEnabled) {
     const token = await getAccessToken();
     if (token) {
+      await ensurePlanningEnvironmentReady(token);
       headers.set("Authorization", `Bearer ${token}`);
     }
   }
@@ -600,6 +604,7 @@ export async function downloadStoreProfileExport(): Promise<void> {
   if (authEnabled) {
     const token = await getAccessToken();
     if (token) {
+      await ensurePlanningEnvironmentReady(token);
       headers.set("Authorization", `Bearer ${token}`);
     }
   }
@@ -696,6 +701,7 @@ export async function downloadProductProfileExport(): Promise<void> {
   if (authEnabled) {
     const token = await getAccessToken();
     if (token) {
+      await ensurePlanningEnvironmentReady(token);
       headers.set("Authorization", `Bearer ${token}`);
     }
   }
@@ -756,6 +762,7 @@ export async function downloadInventoryProfileExport(): Promise<void> {
   if (authEnabled) {
     const token = await getAccessToken();
     if (token) {
+      await ensurePlanningEnvironmentReady(token);
       headers.set("Authorization", `Bearer ${token}`);
     }
   }
@@ -816,6 +823,7 @@ export async function downloadPricingPolicyExport(): Promise<void> {
   if (authEnabled) {
     const token = await getAccessToken();
     if (token) {
+      await ensurePlanningEnvironmentReady(token);
       headers.set("Authorization", `Bearer ${token}`);
     }
   }
@@ -876,6 +884,7 @@ export async function downloadSeasonalityEventProfileExport(): Promise<void> {
   if (authEnabled) {
     const token = await getAccessToken();
     if (token) {
+      await ensurePlanningEnvironmentReady(token);
       headers.set("Authorization", `Bearer ${token}`);
     }
   }
@@ -936,6 +945,7 @@ export async function downloadVendorSupplyProfileExport(): Promise<void> {
   if (authEnabled) {
     const token = await getAccessToken();
     if (token) {
+      await ensurePlanningEnvironmentReady(token);
       headers.set("Authorization", `Bearer ${token}`);
     }
   }
