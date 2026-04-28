@@ -913,6 +913,7 @@ public sealed partial class PostgresPlanningRepository
         var cellsByNode = scenarioCells
             .GroupBy(cell => (cell.Coordinate.StoreId, cell.Coordinate.ProductNodeId))
             .ToDictionary(group => group.Key, group => group.ToList());
+        var displayCellCache = new Dictionary<(long ProductNodeId, long TimePeriodId, long MeasureId), GridCellDto>();
 
         return nodes
             .OrderBy(node => node.Path.Length)
@@ -931,38 +932,16 @@ public sealed partial class PostgresPlanningRepository
                         period => new GridPeriodCellDto(
                             PlanningMeasures.Definitions.ToDictionary(
                                 measure => measure.MeasureId,
-                                measure =>
-                                {
-                                    if (cellsByCoordinate.TryGetValue((period.TimePeriodId, measure.MeasureId), out var existingCell))
-                                    {
-                                        var existingLockState = GetLockStateDirect(existingCell, lockedCells, productNodes, timePeriods);
-                                        return new GridCellDto(
-                                            existingCell.BaseValue,
-                                            existingCell.EffectiveValue,
-                                            existingCell.GrowthFactor,
-                                            !string.Equals(existingLockState, "unlocked", StringComparison.OrdinalIgnoreCase),
-                                            existingLockState,
-                                            existingCell.CellKind == "calculated",
-                                            existingCell.OverrideValue is not null,
-                                            existingCell.RowVersion,
-                                            existingCell.CellKind);
-                                    }
-
-                                    var coordinate = new PlanningCellCoordinate(scenarioVersionId, measure.MeasureId, node.StoreId, node.ProductNodeId, period.TimePeriodId);
-                                    var isLeafMonth = node.IsLeaf && string.Equals(period.Grain, "month", StringComparison.OrdinalIgnoreCase);
-                                    var cellKind = isLeafMonth && measure.EditableAtLeaf ? "leaf" : "calculated";
-                                    var lockState = GetLockStateDirect(coordinate, lockedCells, productNodes, timePeriods);
-                                    return new GridCellDto(
-                                        0m,
-                                        0m,
-                                        1.0m,
-                                        !string.Equals(lockState, "unlocked", StringComparison.OrdinalIgnoreCase),
-                                        lockState,
-                                        string.Equals(cellKind, "calculated", StringComparison.OrdinalIgnoreCase),
-                                        false,
-                                        1,
-                                        cellKind);
-                                })));
+                                measure => BuildGridCellDirect(
+                                    scenarioVersionId,
+                                    node,
+                                    period,
+                                    measure,
+                                    cellsByNode,
+                                    lockedCells,
+                                    productNodes,
+                                    timePeriods,
+                                    displayCellCache))));
 
                 return new GridRowDto(
                     node.StoreId,
@@ -982,6 +961,264 @@ public sealed partial class PostgresPlanningRepository
                     cells);
             })
             .ToList();
+    }
+
+    private static GridCellDto BuildGridCellDirect(
+        long scenarioVersionId,
+        ProductNode node,
+        TimePeriodNode period,
+        PlanningMeasureDefinition measure,
+        IReadOnlyDictionary<(long StoreId, long ProductNodeId), List<PlanningCell>> cellsByNode,
+        IReadOnlyCollection<PlanningCell> lockedCells,
+        IReadOnlyDictionary<long, ProductNode> productNodes,
+        IReadOnlyDictionary<long, TimePeriodNode> timePeriods,
+        IDictionary<(long ProductNodeId, long TimePeriodId, long MeasureId), GridCellDto> displayCellCache)
+    {
+        var cacheKey = (node.ProductNodeId, period.TimePeriodId, measure.MeasureId);
+        if (displayCellCache.TryGetValue(cacheKey, out var cached))
+        {
+            return cached;
+        }
+
+        var coordinate = new PlanningCellCoordinate(scenarioVersionId, measure.MeasureId, node.StoreId, node.ProductNodeId, period.TimePeriodId);
+        var isLeafMonth = node.IsLeaf && string.Equals(period.Grain, "month", StringComparison.OrdinalIgnoreCase);
+        var lockState = GetLockStateDirect(coordinate, lockedCells, productNodes, timePeriods);
+        var nodeCells = cellsByNode.GetValueOrDefault((node.StoreId, node.ProductNodeId)) ?? [];
+        var existingCell = nodeCells.FirstOrDefault(cell =>
+            cell.Coordinate.TimePeriodId == period.TimePeriodId &&
+            cell.Coordinate.MeasureId == measure.MeasureId);
+
+        if (existingCell is null)
+        {
+            var missing = new GridCellDto(
+                0m,
+                0m,
+                1.0m,
+                !string.Equals(lockState, "unlocked", StringComparison.OrdinalIgnoreCase),
+                lockState,
+                !isLeafMonth,
+                false,
+                1,
+                isLeafMonth && measure.EditableAtLeaf ? "leaf" : "calculated");
+            displayCellCache[cacheKey] = missing;
+            return missing;
+        }
+
+        if (isLeafMonth)
+        {
+            var leafCell = new GridCellDto(
+                existingCell.BaseValue,
+                existingCell.EffectiveValue,
+                existingCell.GrowthFactor,
+                !string.Equals(lockState, "unlocked", StringComparison.OrdinalIgnoreCase),
+                lockState,
+                string.Equals(existingCell.CellKind, "calculated", StringComparison.OrdinalIgnoreCase),
+                existingCell.OverrideValue is not null && !existingCell.IsSystemGeneratedOverride,
+                existingCell.RowVersion,
+                existingCell.CellKind);
+            displayCellCache[cacheKey] = leafCell;
+            return leafCell;
+        }
+
+        var childCells = GetChildDisplayCellsDirect(
+            scenarioVersionId,
+            node,
+            period,
+            measure,
+            cellsByNode,
+            lockedCells,
+            productNodes,
+            timePeriods,
+            displayCellCache);
+
+        if (childCells.Count == 0)
+        {
+            var passthrough = new GridCellDto(
+                existingCell.BaseValue,
+                existingCell.EffectiveValue,
+                existingCell.GrowthFactor,
+                !string.Equals(lockState, "unlocked", StringComparison.OrdinalIgnoreCase),
+                lockState,
+                string.Equals(existingCell.CellKind, "calculated", StringComparison.OrdinalIgnoreCase),
+                existingCell.OverrideValue is not null && !existingCell.IsSystemGeneratedOverride,
+                existingCell.RowVersion,
+                existingCell.CellKind);
+            displayCellCache[cacheKey] = passthrough;
+            return passthrough;
+        }
+
+        var childScopes = GetChildScopesDirect(node, period, productNodes, timePeriods);
+        var derivedBaseValue = DeriveMeasureValueDirect(
+            measure.MeasureId,
+            BuildAdditiveValueMapDirect(
+                scenarioVersionId,
+                childScopes,
+                cellsByNode,
+                lockedCells,
+                productNodes,
+                timePeriods,
+                displayCellCache,
+                useBaseValues: true));
+        var derivedEffectiveValue = DeriveMeasureValueDirect(
+            measure.MeasureId,
+            BuildAdditiveValueMapDirect(
+                scenarioVersionId,
+                childScopes,
+                cellsByNode,
+                lockedCells,
+                productNodes,
+                timePeriods,
+                displayCellCache,
+                useBaseValues: false));
+        var derivedGrowthFactor = DeriveUniformGrowthFactorDirect(childCells);
+        var calculated = new GridCellDto(
+            derivedBaseValue,
+            derivedEffectiveValue,
+            derivedGrowthFactor,
+            !string.Equals(lockState, "unlocked", StringComparison.OrdinalIgnoreCase),
+            lockState,
+            true,
+            existingCell.OverrideValue is not null && !existingCell.IsSystemGeneratedOverride,
+            existingCell.RowVersion,
+            existingCell.CellKind);
+        displayCellCache[cacheKey] = calculated;
+        return calculated;
+    }
+
+    private static IReadOnlyList<GridCellDto> GetChildDisplayCellsDirect(
+        long scenarioVersionId,
+        ProductNode node,
+        TimePeriodNode period,
+        PlanningMeasureDefinition measure,
+        IReadOnlyDictionary<(long StoreId, long ProductNodeId), List<PlanningCell>> cellsByNode,
+        IReadOnlyCollection<PlanningCell> lockedCells,
+        IReadOnlyDictionary<long, ProductNode> productNodes,
+        IReadOnlyDictionary<long, TimePeriodNode> timePeriods,
+        IDictionary<(long ProductNodeId, long TimePeriodId, long MeasureId), GridCellDto> displayCellCache)
+    {
+        if (!node.IsLeaf)
+        {
+            return productNodes.Values
+                .Where(candidate => candidate.ParentProductNodeId == node.ProductNodeId)
+                .OrderBy(candidate => candidate.ProductNodeId)
+                .Select(candidate => BuildGridCellDirect(
+                    scenarioVersionId,
+                    candidate,
+                    period,
+                    measure,
+                    cellsByNode,
+                    lockedCells,
+                    productNodes,
+                    timePeriods,
+                    displayCellCache))
+                .ToList();
+        }
+
+        return timePeriods.Values
+            .Where(candidate => candidate.ParentTimePeriodId == period.TimePeriodId)
+            .OrderBy(candidate => candidate.SortOrder)
+            .Select(candidate => BuildGridCellDirect(
+                scenarioVersionId,
+                node,
+                candidate,
+                measure,
+                cellsByNode,
+                lockedCells,
+                productNodes,
+                timePeriods,
+                displayCellCache))
+            .ToList();
+    }
+
+    private static IReadOnlyList<(ProductNode Node, TimePeriodNode Period)> GetChildScopesDirect(
+        ProductNode node,
+        TimePeriodNode period,
+        IReadOnlyDictionary<long, ProductNode> productNodes,
+        IReadOnlyDictionary<long, TimePeriodNode> timePeriods)
+    {
+        if (!node.IsLeaf)
+        {
+            return productNodes.Values
+                .Where(candidate => candidate.ParentProductNodeId == node.ProductNodeId)
+                .OrderBy(candidate => candidate.ProductNodeId)
+                .Select(candidate => (candidate, period))
+                .ToList();
+        }
+
+        return timePeriods.Values
+            .Where(candidate => candidate.ParentTimePeriodId == period.TimePeriodId)
+            .OrderBy(candidate => candidate.SortOrder)
+            .Select(candidate => (node, candidate))
+            .ToList();
+    }
+
+    private static Dictionary<long, decimal> BuildAdditiveValueMapDirect(
+        long scenarioVersionId,
+        IReadOnlyList<(ProductNode Node, TimePeriodNode Period)> childScopes,
+        IReadOnlyDictionary<(long StoreId, long ProductNodeId), List<PlanningCell>> cellsByNode,
+        IReadOnlyCollection<PlanningCell> lockedCells,
+        IReadOnlyDictionary<long, ProductNode> productNodes,
+        IReadOnlyDictionary<long, TimePeriodNode> timePeriods,
+        IDictionary<(long ProductNodeId, long TimePeriodId, long MeasureId), GridCellDto> displayCellCache,
+        bool useBaseValues)
+    {
+        decimal SumMeasure(long measureId) => childScopes.Sum(scope =>
+        {
+            var childCell = BuildGridCellDirect(
+                scenarioVersionId,
+                scope.Node,
+                scope.Period,
+                PlanningMeasures.GetDefinition(measureId),
+                cellsByNode,
+                lockedCells,
+                productNodes,
+                timePeriods,
+                displayCellCache);
+            return useBaseValues ? childCell.BaseValue : childCell.Value;
+        });
+
+        return new Dictionary<long, decimal>
+        {
+            [PlanningMeasures.SalesRevenue] = SumMeasure(PlanningMeasures.SalesRevenue),
+            [PlanningMeasures.SoldQuantity] = SumMeasure(PlanningMeasures.SoldQuantity),
+            [PlanningMeasures.TotalCosts] = SumMeasure(PlanningMeasures.TotalCosts),
+            [PlanningMeasures.GrossProfit] = SumMeasure(PlanningMeasures.GrossProfit)
+        };
+    }
+
+    private static decimal DeriveMeasureValueDirect(long measureId, IReadOnlyDictionary<long, decimal> additiveValues)
+    {
+        var revenue = additiveValues.GetValueOrDefault(PlanningMeasures.SalesRevenue, 0m);
+        var quantity = additiveValues.GetValueOrDefault(PlanningMeasures.SoldQuantity, 0m);
+        var totalCosts = additiveValues.GetValueOrDefault(PlanningMeasures.TotalCosts, 0m);
+        var grossProfit = additiveValues.GetValueOrDefault(PlanningMeasures.GrossProfit, 0m);
+
+        return measureId switch
+        {
+            PlanningMeasures.SalesRevenue => PlanningMath.NormalizeRevenue(revenue),
+            PlanningMeasures.SoldQuantity => PlanningMath.NormalizeQuantity(quantity),
+            PlanningMeasures.AverageSellingPrice => quantity > 0m ? PlanningMath.NormalizeAsp(revenue / quantity) : 1.00m,
+            PlanningMeasures.UnitCost => quantity > 0m ? PlanningMath.NormalizeUnitCost(totalCosts / quantity) : 0m,
+            PlanningMeasures.TotalCosts => PlanningMath.NormalizeTotalCosts(totalCosts),
+            PlanningMeasures.GrossProfit => PlanningMath.NormalizeGrossProfit(grossProfit),
+            PlanningMeasures.GrossProfitPercent => revenue > 0m
+                ? PlanningMath.NormalizeGrossProfitPercent(((revenue - totalCosts) / revenue) * 100m)
+                : 0m,
+            _ => 0m
+        };
+    }
+
+    private static decimal DeriveUniformGrowthFactorDirect(IReadOnlyList<GridCellDto> childCells)
+    {
+        if (childCells.Count == 0)
+        {
+            return 1.0m;
+        }
+
+        var first = childCells[0].GrowthFactor;
+        return childCells.All(cell => cell.GrowthFactor == first)
+            ? first
+            : 1.0m;
     }
 
     private static bool IsEffectivelyLockedDirect(

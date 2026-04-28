@@ -120,7 +120,8 @@ public sealed partial class PlanningService
         string userId,
         CancellationToken cancellationToken)
     {
-        var rows = await ApplyDraftOverlayToRowsAsync(slice.ScenarioVersionId, slice.Rows, userId, cancellationToken);
+        var metadata = await _repository.GetMetadataAsync(cancellationToken);
+        var rows = await ApplyDraftOverlayToRowsAsync(slice.ScenarioVersionId, slice.Rows, userId, metadata, cancellationToken);
         return slice with { Rows = rows };
     }
 
@@ -129,7 +130,8 @@ public sealed partial class PlanningService
         string userId,
         CancellationToken cancellationToken)
     {
-        var rows = await ApplyDraftOverlayToRowsAsync(branch.ScenarioVersionId, branch.Rows, userId, cancellationToken);
+        var metadata = await _repository.GetMetadataAsync(cancellationToken);
+        var rows = await ApplyDraftOverlayToRowsAsync(branch.ScenarioVersionId, branch.Rows, userId, metadata, cancellationToken);
         return branch with { Rows = rows };
     }
 
@@ -137,6 +139,7 @@ public sealed partial class PlanningService
         long scenarioVersionId,
         IReadOnlyList<GridRowDto> rows,
         string userId,
+        PlanningMetadataSnapshot metadata,
         CancellationToken cancellationToken)
     {
         if (rows.Count == 0)
@@ -176,14 +179,15 @@ public sealed partial class PlanningService
 
         var draftByKey = draftCells.ToDictionary(cell => cell.Coordinate.Key, cell => cell, StringComparer.Ordinal);
         return rows
-            .Select(row => ApplyDraftOverlayToRow(row, scenarioVersionId, draftByKey))
+            .Select(row => ApplyDraftOverlayToRow(row, scenarioVersionId, draftByKey, metadata))
             .ToList();
     }
 
     private static GridRowDto ApplyDraftOverlayToRow(
         GridRowDto row,
         long scenarioVersionId,
-        IReadOnlyDictionary<string, PlanningCell> draftByKey)
+        IReadOnlyDictionary<string, PlanningCell> draftByKey,
+        PlanningMetadataSnapshot metadata)
     {
         var storeId = row.BindingStoreId ?? row.StoreId;
         var productNodeId = row.BindingProductNodeId ?? row.ProductNodeId;
@@ -215,7 +219,7 @@ public sealed partial class PlanningService
                     cell.IsLocked || draftCell.IsLocked,
                     lockState,
                     string.Equals(draftCell.CellKind, "calculated", StringComparison.OrdinalIgnoreCase),
-                    draftCell.OverrideValue is not null,
+                    draftCell.OverrideValue is not null && !draftCell.IsSystemGeneratedOverride,
                     draftCell.RowVersion,
                     draftCell.CellKind);
             }
@@ -229,6 +233,95 @@ public sealed partial class PlanningService
             updatedCells[timePeriodId] = new GridPeriodCellDto(updatedMeasures);
         }
 
-        return updatedCells is null ? row : row with { Cells = updatedCells };
+        var mergedRow = updatedCells is null ? row : row with { Cells = updatedCells };
+        return RecalculateTimeAggregateDisplayCells(mergedRow, metadata);
+    }
+
+    private static GridRowDto RecalculateTimeAggregateDisplayCells(GridRowDto row, PlanningMetadataSnapshot metadata)
+    {
+        var updatedCells = row.Cells.ToDictionary(entry => entry.Key, entry => entry.Value);
+        var aggregatePeriods = metadata.TimePeriods.Values
+            .Where(period => updatedCells.ContainsKey(period.TimePeriodId))
+            .Where(period => metadata.TimePeriods.Values.Any(child => child.ParentTimePeriodId == period.TimePeriodId && updatedCells.ContainsKey(child.TimePeriodId)))
+            .OrderByDescending(period => GetTimeDepth(period.TimePeriodId, metadata))
+            .ThenBy(period => period.SortOrder)
+            .ToList();
+
+        foreach (var aggregatePeriod in aggregatePeriods)
+        {
+            var childPeriods = metadata.TimePeriods.Values
+                .Where(period => period.ParentTimePeriodId == aggregatePeriod.TimePeriodId && updatedCells.ContainsKey(period.TimePeriodId))
+                .OrderBy(period => period.SortOrder)
+                .ToList();
+            if (childPeriods.Count == 0)
+            {
+                continue;
+            }
+
+            var currentMeasures = updatedCells[aggregatePeriod.TimePeriodId].Measures.ToDictionary(entry => entry.Key, entry => entry.Value);
+            foreach (var measure in PlanningMeasures.Definitions)
+            {
+                if (!currentMeasures.TryGetValue(measure.MeasureId, out var currentCell))
+                {
+                    continue;
+                }
+
+                decimal SumChild(long additiveMeasureId, bool useBaseValue) => childPeriods.Sum(period =>
+                {
+                    var childCell = updatedCells[period.TimePeriodId].Measures[additiveMeasureId];
+                    return useBaseValue ? childCell.BaseValue : childCell.Value;
+                });
+
+                var revenueBase = SumChild(PlanningMeasures.SalesRevenue, useBaseValue: true);
+                var quantityBase = SumChild(PlanningMeasures.SoldQuantity, useBaseValue: true);
+                var totalCostsBase = SumChild(PlanningMeasures.TotalCosts, useBaseValue: true);
+                var grossProfitBase = SumChild(PlanningMeasures.GrossProfit, useBaseValue: true);
+                var revenueValue = SumChild(PlanningMeasures.SalesRevenue, useBaseValue: false);
+                var quantityValue = SumChild(PlanningMeasures.SoldQuantity, useBaseValue: false);
+                var totalCostsValue = SumChild(PlanningMeasures.TotalCosts, useBaseValue: false);
+                var grossProfitValue = SumChild(PlanningMeasures.GrossProfit, useBaseValue: false);
+                var childMeasureCells = childPeriods.Select(period => updatedCells[period.TimePeriodId].Measures[measure.MeasureId]).ToList();
+                var firstGrowthFactor = childMeasureCells[0].GrowthFactor;
+                var uniformGrowthFactor = childMeasureCells.All(cell => cell.GrowthFactor == firstGrowthFactor)
+                    ? firstGrowthFactor
+                    : 1.0m;
+
+                currentMeasures[measure.MeasureId] = currentCell with
+                {
+                    BaseValue = measure.MeasureId switch
+                    {
+                        PlanningMeasures.SalesRevenue => PlanningMath.NormalizeRevenue(revenueBase),
+                        PlanningMeasures.SoldQuantity => PlanningMath.NormalizeQuantity(quantityBase),
+                        PlanningMeasures.AverageSellingPrice => quantityBase > 0m ? PlanningMath.NormalizeAsp(revenueBase / quantityBase) : 1.00m,
+                        PlanningMeasures.UnitCost => quantityBase > 0m ? PlanningMath.NormalizeUnitCost(totalCostsBase / quantityBase) : 0m,
+                        PlanningMeasures.TotalCosts => PlanningMath.NormalizeTotalCosts(totalCostsBase),
+                        PlanningMeasures.GrossProfit => PlanningMath.NormalizeGrossProfit(grossProfitBase),
+                        PlanningMeasures.GrossProfitPercent => revenueBase > 0m
+                            ? PlanningMath.NormalizeGrossProfitPercent(((revenueBase - totalCostsBase) / revenueBase) * 100m)
+                            : 0m,
+                        _ => currentCell.BaseValue
+                    },
+                    Value = measure.MeasureId switch
+                    {
+                        PlanningMeasures.SalesRevenue => PlanningMath.NormalizeRevenue(revenueValue),
+                        PlanningMeasures.SoldQuantity => PlanningMath.NormalizeQuantity(quantityValue),
+                        PlanningMeasures.AverageSellingPrice => quantityValue > 0m ? PlanningMath.NormalizeAsp(revenueValue / quantityValue) : 1.00m,
+                        PlanningMeasures.UnitCost => quantityValue > 0m ? PlanningMath.NormalizeUnitCost(totalCostsValue / quantityValue) : 0m,
+                        PlanningMeasures.TotalCosts => PlanningMath.NormalizeTotalCosts(totalCostsValue),
+                        PlanningMeasures.GrossProfit => PlanningMath.NormalizeGrossProfit(grossProfitValue),
+                        PlanningMeasures.GrossProfitPercent => revenueValue > 0m
+                            ? PlanningMath.NormalizeGrossProfitPercent(((revenueValue - totalCostsValue) / revenueValue) * 100m)
+                            : 0m,
+                        _ => currentCell.Value
+                    },
+                    GrowthFactor = uniformGrowthFactor,
+                    IsCalculated = true
+                };
+            }
+
+            updatedCells[aggregatePeriod.TimePeriodId] = new GridPeriodCellDto(currentMeasures);
+        }
+
+        return row with { Cells = updatedCells };
     }
 }

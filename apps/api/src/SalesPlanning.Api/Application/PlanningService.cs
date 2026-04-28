@@ -1358,7 +1358,8 @@ public sealed partial class PlanningService : IPlanningService
                     manualWeights,
                     workingCells,
                     metadata,
-                    preserveTotalCostsForRevenue: true);
+                    preserveTotalCostsForRevenue: !allowLeafScopedRateOverride,
+                    preserveQuantityAndTotalCostsForRevenue: allowLeafScopedRateOverride);
                 return;
             }
 
@@ -1377,7 +1378,8 @@ public sealed partial class PlanningService : IPlanningService
                     manualWeights,
                     workingCells,
                     metadata,
-                    preserveTotalCostsForRevenue: true);
+                    preserveTotalCostsForRevenue: !allowLeafScopedRateOverride,
+                    preserveQuantityAndTotalCostsForRevenue: allowLeafScopedRateOverride);
                 return;
             }
         }
@@ -1394,7 +1396,8 @@ public sealed partial class PlanningService : IPlanningService
         PlanningMetadataSnapshot metadata,
         long? weightMeasureId = null,
         bool preserveQuantityForRevenue = false,
-        bool preserveTotalCostsForRevenue = false)
+        bool preserveTotalCostsForRevenue = false,
+        bool preserveQuantityAndTotalCostsForRevenue = false)
     {
         var weightCells = weightMeasureId is null || weightMeasureId == measureId
             ? targetCells
@@ -1429,7 +1432,8 @@ public sealed partial class PlanningService : IPlanningService
                 workingCells,
                 metadata,
                 preserveQuantityForRevenue,
-                preserveTotalCostsForRevenue);
+                preserveTotalCostsForRevenue,
+                preserveQuantityAndTotalCostsForRevenue);
         }
 
         if (measureId == PlanningMeasures.SalesRevenue)
@@ -1441,7 +1445,20 @@ public sealed partial class PlanningService : IPlanningService
                 workingCells,
                 metadata,
                 preserveQuantityForRevenue,
-                preserveTotalCostsForRevenue);
+                preserveTotalCostsForRevenue,
+                preserveQuantityAndTotalCostsForRevenue);
+            return;
+        }
+
+        if (measureId is PlanningMeasures.SoldQuantity or PlanningMeasures.TotalCosts or PlanningMeasures.GrossProfit)
+        {
+            ReconcileAdditiveMeasureResidual(
+                measureId,
+                totalValue,
+                splashTargets.Select(target => target.Cell.Coordinate).ToList(),
+                allocations,
+                workingCells,
+                metadata);
         }
     }
 
@@ -1467,8 +1484,24 @@ public sealed partial class PlanningService : IPlanningService
         IDictionary<string, PlanningCell> workingCells,
         PlanningMetadataSnapshot metadata,
         bool preserveQuantityForRevenue = false,
-        bool preserveTotalCostsForRevenue = false)
+        bool preserveTotalCostsForRevenue = false,
+        bool preserveQuantityAndTotalCostsForRevenue = false)
     {
+        if (measureId == PlanningMeasures.SalesRevenue && preserveQuantityAndTotalCostsForRevenue)
+        {
+            ApplyExactRevenueLeafStatePreservingQuantityAndTotalCosts(
+                coordinate,
+                newValue,
+                workingCells[new PlanningCellCoordinate(coordinate.ScenarioVersionId, PlanningMeasures.SoldQuantity, coordinate.StoreId, coordinate.ProductNodeId, coordinate.TimePeriodId).Key],
+                workingCells[new PlanningCellCoordinate(coordinate.ScenarioVersionId, PlanningMeasures.AverageSellingPrice, coordinate.StoreId, coordinate.ProductNodeId, coordinate.TimePeriodId).Key],
+                workingCells[new PlanningCellCoordinate(coordinate.ScenarioVersionId, PlanningMeasures.UnitCost, coordinate.StoreId, coordinate.ProductNodeId, coordinate.TimePeriodId).Key],
+                workingCells[new PlanningCellCoordinate(coordinate.ScenarioVersionId, PlanningMeasures.SalesRevenue, coordinate.StoreId, coordinate.ProductNodeId, coordinate.TimePeriodId).Key],
+                workingCells[new PlanningCellCoordinate(coordinate.ScenarioVersionId, PlanningMeasures.TotalCosts, coordinate.StoreId, coordinate.ProductNodeId, coordinate.TimePeriodId).Key],
+                workingCells[new PlanningCellCoordinate(coordinate.ScenarioVersionId, PlanningMeasures.GrossProfit, coordinate.StoreId, coordinate.ProductNodeId, coordinate.TimePeriodId).Key],
+                workingCells[new PlanningCellCoordinate(coordinate.ScenarioVersionId, PlanningMeasures.GrossProfitPercent, coordinate.StoreId, coordinate.ProductNodeId, coordinate.TimePeriodId).Key]);
+            return;
+        }
+
         if (measureId == PlanningMeasures.SalesRevenue && preserveQuantityForRevenue)
         {
             var quantityCell = workingCells[new PlanningCellCoordinate(coordinate.ScenarioVersionId, PlanningMeasures.SoldQuantity, coordinate.StoreId, coordinate.ProductNodeId, coordinate.TimePeriodId).Key];
@@ -1672,7 +1705,8 @@ public sealed partial class PlanningService : IPlanningService
         IDictionary<string, PlanningCell> workingCells,
         PlanningMetadataSnapshot metadata,
         bool preserveQuantityForRevenue = false,
-        bool preserveTotalCostsForRevenue = false)
+        bool preserveTotalCostsForRevenue = false,
+        bool preserveQuantityAndTotalCostsForRevenue = false)
     {
         if (targetCoordinates.Count == 0 || allocations.Count == 0)
         {
@@ -1764,6 +1798,19 @@ public sealed partial class PlanningService : IPlanningService
                     workingCells[grossProfitCoordinate.Key],
                     workingCells[grossProfitPercentCoordinate.Key]);
             }
+            else if (preserveQuantityAndTotalCostsForRevenue)
+            {
+                ApplyExactRevenueLeafStatePreservingQuantityAndTotalCosts(
+                    revenueCoordinate,
+                    desiredLeafRevenue,
+                    workingCells[quantityCoordinate.Key],
+                    workingCells[aspCoordinate.Key],
+                    workingCells[unitCostCoordinate.Key],
+                    workingCells[revenueCoordinate.Key],
+                    workingCells[totalCostsCoordinate.Key],
+                    workingCells[grossProfitCoordinate.Key],
+                    workingCells[grossProfitPercentCoordinate.Key]);
+            }
             else if (preserveTotalCostsForRevenue)
             {
                 ApplyExactRevenueLeafStatePreservingAspAndTotalCosts(
@@ -1789,6 +1836,60 @@ public sealed partial class PlanningService : IPlanningService
             }
 
             residual = desiredTotal - SumRevenueTargets(targetCoordinates, workingCells);
+            if (residual == 0m)
+            {
+                return;
+            }
+        }
+    }
+
+    private static void ReconcileAdditiveMeasureResidual(
+        long measureId,
+        decimal requestedTotal,
+        IReadOnlyList<PlanningCellCoordinate> targetCoordinates,
+        IReadOnlyList<SplashAllocation> allocations,
+        IDictionary<string, PlanningCell> workingCells,
+        PlanningMetadataSnapshot metadata)
+    {
+        if (targetCoordinates.Count == 0 || allocations.Count == 0)
+        {
+            return;
+        }
+
+        var desiredTotal = PlanningMath.NormalizeMeasureValue(measureId, requestedTotal);
+        var unlockedTargets = allocations
+            .Where(allocation => !allocation.Cell.IsLocked)
+            .OrderByDescending(allocation => allocation.Cell.Coordinate.TimePeriodId)
+            .ThenByDescending(allocation => allocation.Cell.Coordinate.ProductNodeId)
+            .ToList();
+        if (unlockedTargets.Count == 0)
+        {
+            return;
+        }
+
+        var residual = desiredTotal - SumTargetMeasure(targetCoordinates, workingCells, measureId);
+        if (residual == 0m)
+        {
+            return;
+        }
+
+        foreach (var allocation in unlockedTargets)
+        {
+            var coordinate = new PlanningCellCoordinate(
+                allocation.Cell.Coordinate.ScenarioVersionId,
+                measureId,
+                allocation.Cell.Coordinate.StoreId,
+                allocation.Cell.Coordinate.ProductNodeId,
+                allocation.Cell.Coordinate.TimePeriodId);
+            var currentValue = workingCells[coordinate.Key].EffectiveValue;
+            var desiredLeafValue = currentValue + residual;
+            if (measureId is PlanningMeasures.SoldQuantity or PlanningMeasures.TotalCosts && desiredLeafValue < 0m)
+            {
+                continue;
+            }
+
+            ApplyLeafMeasureEdit(coordinate, desiredLeafValue, workingCells, metadata);
+            residual = desiredTotal - SumTargetMeasure(targetCoordinates, workingCells, measureId);
             if (residual == 0m)
             {
                 return;
@@ -2055,6 +2156,14 @@ public sealed partial class PlanningService : IPlanningService
         if (cell.InputValue is not null || string.Equals(cell.CellKind, "input", StringComparison.OrdinalIgnoreCase))
         {
             cell.InputValue = normalizedBaseValue;
+            cell.OverrideValue = null;
+            cell.IsSystemGeneratedOverride = false;
+        }
+        else
+        {
+            cell.InputValue = null;
+            cell.OverrideValue = normalizedBaseValue;
+            cell.IsSystemGeneratedOverride = true;
         }
 
         cell.GrowthFactor = normalizedGrowthFactor;
