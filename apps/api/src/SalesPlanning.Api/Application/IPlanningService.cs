@@ -24,6 +24,7 @@ public interface IPlanningService
     Task<PlanningInsightResponse> GetPlanningInsightsAsync(long scenarioVersionId, long storeId, long productNodeId, long yearTimePeriodId, string userId, CancellationToken cancellationToken);
     Task<ApplyGrowthFactorResponse> ApplyGrowthFactorAsync(ApplyGrowthFactorRequest request, string userId, CancellationToken cancellationToken);
     Task<SaveScenarioResponse> SaveScenarioAsync(SaveScenarioRequest request, string userId, CancellationToken cancellationToken);
+    Task<DiscardDraftResponse> DiscardDraftAsync(DiscardDraftRequest request, string userId, CancellationToken cancellationToken);
     Task<UndoRedoAvailabilityDto> GetUndoRedoAvailabilityAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken);
     Task<UndoPlanningActionResponse> UndoAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken);
     Task<RedoPlanningActionResponse> RedoAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken);

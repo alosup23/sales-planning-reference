@@ -1707,6 +1707,51 @@ public sealed partial class PostgresPlanningRepository
             await insertCommittedCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        var cleanupResult = await DeleteDraftArtifactsDirectAsync(connection, transaction, scenarioVersionId, userContext, cancellationToken);
+
+        _logger.LogInformation(
+            "Draft commit cleanup for scenario {ScenarioVersionId} user {UserId}: primary drafts deleted {DeletedPrimaryDraftRows}, alias drafts deleted {DeletedAliasDraftRows}, primary deltas deleted {DeletedPrimaryDeltaRows}, alias deltas deleted {DeletedAliasDeltaRows}, primary batches deleted {DeletedPrimaryBatchRows}, alias batches deleted {DeletedAliasBatchRows}, remaining primary drafts {RemainingPrimaryDraftRows}, remaining alias drafts {RemainingAliasDraftRows}.",
+            scenarioVersionId,
+            userContext.PrimaryUserId,
+            cleanupResult.DeletedPrimaryDraftRows,
+            cleanupResult.DeletedAliasDraftRows,
+            cleanupResult.DeletedPrimaryDeltaRows,
+            cleanupResult.DeletedAliasDeltaRows,
+            cleanupResult.DeletedPrimaryBatchRows,
+            cleanupResult.DeletedAliasBatchRows,
+            cleanupResult.RemainingPrimaryDraftRows,
+            cleanupResult.RemainingAliasDraftRows);
+    }
+
+    private async Task DiscardDraftDirectAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        long scenarioVersionId,
+        PlanningUserIdentity.PlanningUserContext userContext,
+        CancellationToken cancellationToken)
+    {
+        var cleanupResult = await DeleteDraftArtifactsDirectAsync(connection, transaction, scenarioVersionId, userContext, cancellationToken);
+        _logger.LogInformation(
+            "Draft discard cleanup for scenario {ScenarioVersionId} user {UserId}: primary drafts deleted {DeletedPrimaryDraftRows}, alias drafts deleted {DeletedAliasDraftRows}, primary deltas deleted {DeletedPrimaryDeltaRows}, alias deltas deleted {DeletedAliasDeltaRows}, primary batches deleted {DeletedPrimaryBatchRows}, alias batches deleted {DeletedAliasBatchRows}, remaining primary drafts {RemainingPrimaryDraftRows}, remaining alias drafts {RemainingAliasDraftRows}.",
+            scenarioVersionId,
+            userContext.PrimaryUserId,
+            cleanupResult.DeletedPrimaryDraftRows,
+            cleanupResult.DeletedAliasDraftRows,
+            cleanupResult.DeletedPrimaryDeltaRows,
+            cleanupResult.DeletedAliasDeltaRows,
+            cleanupResult.DeletedPrimaryBatchRows,
+            cleanupResult.DeletedAliasBatchRows,
+            cleanupResult.RemainingPrimaryDraftRows,
+            cleanupResult.RemainingAliasDraftRows);
+    }
+
+    private async Task<DraftCleanupResult> DeleteDraftArtifactsDirectAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        long scenarioVersionId,
+        PlanningUserIdentity.PlanningUserContext userContext,
+        CancellationToken cancellationToken)
+    {
         var aliasUserIds = userContext.CandidateUserIds
             .Where(candidate => !string.Equals(candidate, userContext.PrimaryUserId, StringComparison.Ordinal))
             .Distinct(StringComparer.Ordinal)
@@ -1833,10 +1878,7 @@ public sealed partial class PostgresPlanningRepository
             remainingAliasDraftRows = Convert.ToInt64(await remainingAliasDraftCommand.ExecuteScalarAsync(cancellationToken) ?? 0L);
         }
 
-        _logger.LogInformation(
-            "Draft commit cleanup for scenario {ScenarioVersionId} user {UserId}: primary drafts deleted {DeletedPrimaryDraftRows}, alias drafts deleted {DeletedAliasDraftRows}, primary deltas deleted {DeletedPrimaryDeltaRows}, alias deltas deleted {DeletedAliasDeltaRows}, primary batches deleted {DeletedPrimaryBatchRows}, alias batches deleted {DeletedAliasBatchRows}, remaining primary drafts {RemainingPrimaryDraftRows}, remaining alias drafts {RemainingAliasDraftRows}.",
-            scenarioVersionId,
-            userContext.PrimaryUserId,
+        return new DraftCleanupResult(
             deletedPrimaryDraftRows,
             deletedAliasDraftRows,
             deletedPrimaryDeltaRows,
@@ -1846,4 +1888,14 @@ public sealed partial class PostgresPlanningRepository
             remainingPrimaryDraftRows,
             remainingAliasDraftRows);
     }
+
+    private readonly record struct DraftCleanupResult(
+        int DeletedPrimaryDraftRows,
+        int DeletedAliasDraftRows,
+        int DeletedPrimaryDeltaRows,
+        int DeletedAliasDeltaRows,
+        int DeletedPrimaryBatchRows,
+        int DeletedAliasBatchRows,
+        long RemainingPrimaryDraftRows,
+        long RemainingAliasDraftRows);
 }

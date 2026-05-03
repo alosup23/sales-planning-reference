@@ -142,6 +142,26 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
+    public async Task GetGridViewChildrenAsync_RootRowsExposeExplicitAndImplicitLockStates()
+    {
+        await _service.ApplyLockAsync(
+            new LockCellsRequest(1, PlanningMeasures.SalesRevenue, true, "Freeze year", [new LockCoordinateDto(101, 2000, 202600)]),
+            "planner.one",
+            CancellationToken.None);
+
+        var request = new PlanningGridViewRequest(1, "store", null, null, null, false);
+        var storeRows = await _service.GetGridViewChildrenAsync(request, "view:store:root", "planner.one", CancellationToken.None);
+        var storeRow = Assert.Single(storeRows.Rows, row => row.Label == "Store A");
+        var yearCell = storeRow.Cells[202600].Measures[PlanningMeasures.SalesRevenue];
+        var monthCell = storeRow.Cells[202601].Measures[PlanningMeasures.SalesRevenue];
+
+        Assert.True(yearCell.IsLocked);
+        Assert.Equal("explicit", yearCell.LockState);
+        Assert.True(monthCell.IsLocked);
+        Assert.Equal("implicit", monthCell.LockState);
+    }
+
+    [Fact]
     public async Task UndoAndRedoAsync_ReversesLeafEditAndRestoresAvailability()
     {
         var revenueCoordinate = new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202603);
@@ -363,6 +383,47 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
+    public async Task DiscardDraftAsync_ClearsUserDraftCellsAndRestoresCommittedValues()
+    {
+        var coordinate = new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202603);
+        var committedCell = await _repository.GetCellAsync(coordinate, CancellationToken.None);
+        Assert.NotNull(committedCell);
+
+        await _service.ApplyEditsAsync(
+            new EditCellsRequest(
+                1,
+                PlanningMeasures.SalesRevenue,
+                "Draft revenue edit",
+                [
+                    new EditCellRequest(
+                        coordinate.StoreId,
+                        coordinate.ProductNodeId,
+                        coordinate.TimePeriodId,
+                        committedCell!.EffectiveValue + 125m,
+                        "input",
+                        committedCell.RowVersion)
+                ]),
+            "planner.one",
+            CancellationToken.None);
+
+        var draftedCell = await GetEffectiveCellAsync(coordinate);
+        Assert.NotNull(draftedCell);
+        Assert.NotEqual(committedCell.EffectiveValue, draftedCell!.EffectiveValue);
+
+        var discardResult = await _service.DiscardDraftAsync(new DiscardDraftRequest(1), "planner.one", CancellationToken.None);
+
+        Assert.Equal("discarded", discardResult.Status);
+        Assert.Equal(1, discardResult.ScenarioVersionId);
+        Assert.Empty(await _repository.GetDraftCellsAsync(1, "planner.one", [coordinate], CancellationToken.None));
+
+        var restoredCell = await GetEffectiveCellAsync(coordinate);
+        Assert.NotNull(restoredCell);
+        Assert.Equal(committedCell.EffectiveValue, restoredCell!.EffectiveValue);
+        Assert.Equal(committedCell.BaseValue, restoredCell.BaseValue);
+        Assert.Equal(committedCell.GrowthFactor, restoredCell.GrowthFactor);
+    }
+
+    [Fact]
     public async Task ApplyGrowthFactorAsync_OnLeafMonthRevenue_PersistsGrowthFactorAndRollsUp()
     {
         var beforeYearRevenue = await _repository.GetCellAsync(new PlanningCellCoordinate(1, PlanningMeasures.SalesRevenue, 101, 2111, 202600), CancellationToken.None);
@@ -452,6 +513,102 @@ public sealed class PlanningServiceTests
         Assert.Equal(beforeMonthRevenue.BaseValue, restoredMonthRevenue.BaseValue);
         Assert.Equal(beforeMonthRevenue.EffectiveValue, restoredMonthRevenue.EffectiveValue);
         Assert.Equal(beforeYearRevenue.EffectiveValue, restoredYearRevenue!.EffectiveValue);
+    }
+
+    [Theory]
+    [InlineData(PlanningMeasures.SalesRevenue)]
+    [InlineData(PlanningMeasures.SoldQuantity)]
+    [InlineData(PlanningMeasures.TotalCosts)]
+    [InlineData(PlanningMeasures.GrossProfit)]
+    public async Task ApplyGrowthFactorAsync_OnLeafYearAdditiveMeasures_PreservesRequestedYearTotalAndRestore(long measureId)
+    {
+        var coordinate = new PlanningCellCoordinate(1, measureId, 101, 2111, 202600);
+        var beforeYearCell = await _repository.GetCellAsync(coordinate, CancellationToken.None);
+        Assert.NotNull(beforeYearCell);
+
+        var requestedGrowthFactor = 1.10m;
+        var expectedValue = PlanningMath.ApplyGrowthFactor(measureId, beforeYearCell!.BaseValue, requestedGrowthFactor);
+
+        await _service.ApplyGrowthFactorAsync(
+            new ApplyGrowthFactorRequest(
+                1,
+                measureId,
+                new SplashCoordinateDto(101, 2111, 202600),
+                beforeYearCell.BaseValue,
+                beforeYearCell.EffectiveValue,
+                requestedGrowthFactor,
+                $"Leaf year growth {measureId}",
+                null),
+            "planner.one",
+            CancellationToken.None);
+
+        var afterGrowth = await GetDepartmentPathRowsAsync("Beverages", "Soft Drinks", "Cola");
+        Assert.Equal(expectedValue, afterGrowth.SubclassRow.Cells[202600].Measures[measureId].Value);
+
+        var grownYearCell = await GetEffectiveCellAsync(coordinate);
+        Assert.NotNull(grownYearCell);
+        await _service.ApplyGrowthFactorAsync(
+            new ApplyGrowthFactorRequest(
+                1,
+                measureId,
+                new SplashCoordinateDto(101, 2111, 202600),
+                grownYearCell!.BaseValue,
+                grownYearCell.EffectiveValue,
+                1.0m,
+                $"Leaf year restore {measureId}",
+                null),
+            "planner.one",
+            CancellationToken.None);
+
+        var afterRestore = await GetDepartmentPathRowsAsync("Beverages", "Soft Drinks", "Cola");
+        Assert.Equal(beforeYearCell.EffectiveValue, afterRestore.SubclassRow.Cells[202600].Measures[measureId].Value);
+    }
+
+    [Theory]
+    [InlineData(PlanningMeasures.SalesRevenue)]
+    [InlineData(PlanningMeasures.SoldQuantity)]
+    [InlineData(PlanningMeasures.TotalCosts)]
+    [InlineData(PlanningMeasures.GrossProfit)]
+    public async Task ApplyGrowthFactorAsync_OnStoreYearAdditiveMeasures_PreservesRequestedAggregateTotalAndRestore(long measureId)
+    {
+        var beforeStorePath = await GetStorePathRowsAsync("Beverages", "Soft Drinks", "Cola");
+        var beforeStoreValue = beforeStorePath.StoreRow.Cells[202600].Measures[measureId].Value;
+        var beforeStoreBase = beforeStorePath.StoreRow.Cells[202600].Measures[measureId].BaseValue;
+        var expectedValue = PlanningMath.ApplyGrowthFactor(measureId, beforeStoreBase, 1.10m);
+
+        await _service.ApplyGrowthFactorAsync(
+            new ApplyGrowthFactorRequest(
+                1,
+                measureId,
+                new SplashCoordinateDto(101, 2000, 202600),
+                beforeStoreBase,
+                beforeStoreValue,
+                1.10m,
+                $"Store year growth {measureId}",
+                [new SplashScopeRootDto(101, 2000)]),
+            "planner.one",
+            CancellationToken.None);
+
+        var afterGrowth = await GetStorePathRowsAsync("Beverages", "Soft Drinks", "Cola");
+        Assert.Equal(expectedValue, afterGrowth.StoreRow.Cells[202600].Measures[measureId].Value);
+
+        var grownStoreValue = afterGrowth.StoreRow.Cells[202600].Measures[measureId].Value;
+        var grownStoreBase = afterGrowth.StoreRow.Cells[202600].Measures[measureId].BaseValue;
+        await _service.ApplyGrowthFactorAsync(
+            new ApplyGrowthFactorRequest(
+                1,
+                measureId,
+                new SplashCoordinateDto(101, 2000, 202600),
+                grownStoreBase,
+                grownStoreValue,
+                1.0m,
+                $"Store year restore {measureId}",
+                [new SplashScopeRootDto(101, 2000)]),
+            "planner.one",
+            CancellationToken.None);
+
+        var afterRestore = await GetStorePathRowsAsync("Beverages", "Soft Drinks", "Cola");
+        Assert.Equal(beforeStoreValue, afterRestore.StoreRow.Cells[202600].Measures[measureId].Value);
     }
 
     [Fact]
@@ -999,6 +1156,47 @@ public sealed class PlanningServiceTests
 
         Assert.Equal(28.5m, departmentRows.SubclassRow.Cells[202600].Measures[PlanningMeasures.GrossProfitPercent].Value);
         Assert.Equal(28.5m, storeRows.SubclassRow.Cells[202600].Measures[PlanningMeasures.GrossProfitPercent].Value);
+    }
+
+    [Fact]
+    public async Task ApplySplashAsync_OnStoreMonthGrossProfitPercent_RestoresExactOriginalValue()
+    {
+        var beforeStorePath = await GetStorePathRowsAsync("Beverages", "Soft Drinks", "Cola");
+        var originalMonthValue = beforeStorePath.StoreRow.Cells[202601].Measures[PlanningMeasures.GrossProfitPercent].Value;
+
+        await _service.ApplySplashAsync(
+            new SplashRequest(
+                1,
+                PlanningMeasures.GrossProfitPercent,
+                new SplashCoordinateDto(101, 2000, 202601),
+                29.75m,
+                "proportional",
+                0,
+                "Store month GP% splash",
+                null,
+                [new SplashScopeRootDto(101, 2000)]),
+            "planner.one",
+            CancellationToken.None);
+
+        var afterSplash = await GetStorePathRowsAsync("Beverages", "Soft Drinks", "Cola");
+        Assert.Equal(29.75m, afterSplash.StoreRow.Cells[202601].Measures[PlanningMeasures.GrossProfitPercent].Value);
+
+        await _service.ApplySplashAsync(
+            new SplashRequest(
+                1,
+                PlanningMeasures.GrossProfitPercent,
+                new SplashCoordinateDto(101, 2000, 202601),
+                originalMonthValue,
+                "proportional",
+                0,
+                "Store month GP% restore",
+                null,
+                [new SplashScopeRootDto(101, 2000)]),
+            "planner.one",
+            CancellationToken.None);
+
+        var afterRestore = await GetStorePathRowsAsync("Beverages", "Soft Drinks", "Cola");
+        Assert.Equal(originalMonthValue, afterRestore.StoreRow.Cells[202601].Measures[PlanningMeasures.GrossProfitPercent].Value);
     }
 
     [Fact]

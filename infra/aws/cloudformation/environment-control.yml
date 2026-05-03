@@ -32,6 +32,14 @@ Parameters:
     Default: 60
     MinValue: 15
     MaxValue: 720
+  WakeHeartbeatParameterName:
+    Type: String
+    Default: /sales-planning/environment-control/last-wake-at
+  ServiceWarmupMinutes:
+    Type: Number
+    Default: 15
+    MinValue: 5
+    MaxValue: 120
   IdleCheckScheduleExpression:
     Type: String
     Default: rate(5 minutes)
@@ -86,6 +94,18 @@ Resources:
                 Action:
                   - cloudwatch:GetMetricData
                 Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:PutParameter
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${WakeHeartbeatParameterName}
+
+  WakeHeartbeatParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Ref WakeHeartbeatParameterName
+      Type: String
+      Value: never
 
   ControlFunction:
     Type: AWS::Lambda::Function
@@ -105,6 +125,8 @@ Resources:
           WARM_DESIRED_COUNT: !Sub ${WarmDesiredCount}
           SERVICE_IDLE_MINUTES: !Sub ${ServiceIdleMinutes}
           DATABASE_IDLE_MINUTES: !Sub ${DatabaseIdleMinutes}
+          WAKE_HEARTBEAT_PARAMETER_NAME: !Ref WakeHeartbeatParameter
+          SERVICE_WARMUP_MINUTES: !Sub ${ServiceWarmupMinutes}
           ALLOWED_ORIGIN: !Ref AllowedOrigin
       Code:
         ZipFile: |
@@ -117,6 +139,7 @@ Resources:
           ecs = boto3.client("ecs")
           rds = boto3.client("rds")
           cloudwatch = boto3.client("cloudwatch")
+          ssm = boto3.client("ssm")
 
           CLUSTER_NAME = os.environ["CLUSTER_NAME"]
           SERVICE_NAME = os.environ["SERVICE_NAME"]
@@ -125,6 +148,8 @@ Resources:
           WARM_DESIRED_COUNT = int(os.environ.get("WARM_DESIRED_COUNT", "1"))
           SERVICE_IDLE_MINUTES = int(os.environ.get("SERVICE_IDLE_MINUTES", "20"))
           DATABASE_IDLE_MINUTES = int(os.environ.get("DATABASE_IDLE_MINUTES", "60"))
+          WAKE_HEARTBEAT_PARAMETER_NAME = os.environ["WAKE_HEARTBEAT_PARAMETER_NAME"]
+          SERVICE_WARMUP_MINUTES = int(os.environ.get("SERVICE_WARMUP_MINUTES", "15"))
           ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
 
           CORS_HEADERS = {
@@ -141,9 +166,100 @@ Resources:
               return None
 
 
+          def utc_now():
+              return datetime.now(timezone.utc)
+
+
+          def serialize_timestamp(timestamp):
+              return timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+          def parse_timestamp(raw_value):
+              if not raw_value or raw_value == "never":
+                  return None
+
+              normalized = raw_value.strip()
+              if normalized.endswith("Z"):
+                  normalized = normalized[:-1] + "+00:00"
+
+              try:
+                  timestamp = datetime.fromisoformat(normalized)
+              except ValueError:
+                  print(f"Unable to parse wake heartbeat timestamp: {raw_value}")
+                  return None
+
+              if timestamp.tzinfo is None:
+                  timestamp = timestamp.replace(tzinfo=timezone.utc)
+
+              return timestamp.astimezone(timezone.utc)
+
+
+          def get_last_wake_at():
+              try:
+                  response = ssm.get_parameter(Name=WAKE_HEARTBEAT_PARAMETER_NAME)
+              except ssm.exceptions.ParameterNotFound:
+                  return None
+              except Exception as error:
+                  print(f"Unable to read wake heartbeat: {error}")
+                  return None
+
+              value = ((response or {}).get("Parameter") or {}).get("Value")
+              return parse_timestamp(value)
+
+
+          def record_wake_heartbeat(timestamp=None):
+              wake_at = timestamp or utc_now()
+              ssm.put_parameter(
+                  Name=WAKE_HEARTBEAT_PARAMETER_NAME,
+                  Value=serialize_timestamp(wake_at),
+                  Type="String",
+                  Overwrite=True,
+              )
+              return wake_at
+
+
+          def age_minutes(timestamp):
+              if timestamp is None:
+                  return None
+              return max(0.0, (utc_now() - timestamp).total_seconds() / 60.0)
+
+
           def get_rollout_state(service):
               deployment = get_primary_deployment(service)
               return deployment.get("rolloutState", "UNKNOWN") if deployment else "UNKNOWN"
+
+
+          def primary_deployment_age_minutes(service):
+              deployment = get_primary_deployment(service)
+              created_at = deployment.get("createdAt") if deployment else None
+              if created_at is None:
+                  return None
+
+              if created_at.tzinfo is None:
+                  created_at = created_at.replace(tzinfo=timezone.utc)
+
+              return max(0.0, (utc_now() - created_at).total_seconds() / 60.0)
+
+
+          def service_is_warming(service):
+              desired = service.get("desiredCount", 0)
+              running = service.get("runningCount", 0)
+              pending = service.get("pendingCount", 0)
+              rollout_state = get_rollout_state(service)
+              deployment_age_minutes = primary_deployment_age_minutes(service)
+              within_warmup_window = (
+                  deployment_age_minutes is not None
+                  and deployment_age_minutes < SERVICE_WARMUP_MINUTES
+              )
+              return (
+                  desired > 0
+                  and (
+                      pending > 0
+                      or running < desired
+                      or rollout_state != "COMPLETED"
+                      or within_warmup_window
+                  )
+              )
 
 
           def environment_ready(service, db):
@@ -157,12 +273,14 @@ Resources:
               )
 
 
-          def response_body_from_environment(environment, operations=None):
+          def response_body_from_environment(environment, operations=None, last_wake_at=None):
               operations = operations or []
               return {
                   "ready": environment["ready"],
                   "operations": operations,
                   "dbStatus": environment["db"].get("DBInstanceStatus", "unknown"),
+                  "lastWakeAt": serialize_timestamp(last_wake_at) if last_wake_at else None,
+                  "wakeAgeMinutes": age_minutes(last_wake_at),
                   "service": {
                       "desiredCount": environment["service"].get("desiredCount", 0),
                       "runningCount": environment["service"].get("runningCount", 0),
@@ -193,6 +311,7 @@ Resources:
 
 
           def start_environment():
+              wake_at = record_wake_heartbeat()
               environment = describe_environment()
               operations = []
 
@@ -210,6 +329,7 @@ Resources:
 
               refreshed = describe_environment()
               refreshed["operations"] = operations
+              refreshed["lastWakeAt"] = wake_at
               return refreshed
 
 
@@ -222,7 +342,7 @@ Resources:
 
 
           def get_usage_window(minutes):
-              end_time = datetime.now(timezone.utc)
+              end_time = utc_now()
               start_time = end_time - timedelta(minutes=minutes)
               period = max(60, minutes * 60)
               response = cloudwatch.get_metric_data(
@@ -275,11 +395,22 @@ Resources:
               service_window = get_usage_window(SERVICE_IDLE_MINUTES)
               database_window = service_window if DATABASE_IDLE_MINUTES == SERVICE_IDLE_MINUTES else get_usage_window(DATABASE_IDLE_MINUTES)
               actions = []
+              last_wake_at = get_last_wake_at()
+              wake_age = age_minutes(last_wake_at)
+              service_recently_woken = wake_age is not None and wake_age < SERVICE_IDLE_MINUTES
+              database_recently_woken = wake_age is not None and wake_age < DATABASE_IDLE_MINUTES
 
               desired_count = environment["service"].get("desiredCount", 0)
               running_count = environment["service"].get("runningCount", 0)
+              service_warming = service_is_warming(environment["service"])
 
-              if desired_count > 0 and service_window["requestCount"] == 0 and service_window["cpu"] < 2:
+              if (
+                  desired_count > 0
+                  and not service_warming
+                  and not service_recently_woken
+                  and service_window["requestCount"] == 0
+                  and service_window["cpu"] < 2
+              ):
                   ecs.update_service(cluster=CLUSTER_NAME, service=SERVICE_NAME, desiredCount=0)
                   actions.append("service-scaled-down")
 
@@ -288,6 +419,8 @@ Resources:
                   refreshed["db"].get("DBInstanceStatus") == "available"
                   and refreshed["service"].get("desiredCount", desired_count) == 0
                   and refreshed["service"].get("runningCount", running_count) == 0
+                  and not service_is_warming(refreshed["service"])
+                  and not database_recently_woken
                   and database_window["requestCount"] == 0
               ):
                   rds.stop_db_instance(DBInstanceIdentifier=DB_INSTANCE_IDENTIFIER)
@@ -297,6 +430,8 @@ Resources:
                   "actions": actions,
                   "serviceWindow": service_window,
                   "databaseWindow": database_window,
+                  "lastWakeAt": serialize_timestamp(last_wake_at) if last_wake_at else None,
+                  "wakeAgeMinutes": wake_age,
                   "environment": describe_environment(),
               }
 
@@ -321,11 +456,11 @@ Resources:
                   path = (event or {}).get("rawPath") or ((event or {}).get("requestContext") or {}).get("http", {}).get("path") or "/"
                   if path.endswith("/environment/start"):
                       result = start_environment()
-                      return to_response(200 if result["ready"] else 202, response_body_from_environment(result, result.get("operations")))
+                      return to_response(200 if result["ready"] else 202, response_body_from_environment(result, result.get("operations"), result.get("lastWakeAt")))
 
                   if path.endswith("/environment/status"):
                       result = describe_environment()
-                      return to_response(200, response_body_from_environment(result))
+                      return to_response(200, response_body_from_environment(result, last_wake_at=get_last_wake_at()))
 
                   result = perform_idle_check()
                   return to_response(
@@ -335,6 +470,8 @@ Resources:
                           "actions": result["actions"],
                           "serviceWindow": result["serviceWindow"],
                           "databaseWindow": result["databaseWindow"],
+                          "lastWakeAt": result["lastWakeAt"],
+                          "wakeAgeMinutes": result["wakeAgeMinutes"],
                           "ready": result["environment"]["ready"],
                           "dbStatus": result["environment"]["db"].get("DBInstanceStatus", "unknown"),
                       },

@@ -178,6 +178,12 @@ public sealed class PlanningController : ControllerBase
         return _planningService.SaveScenarioAsync(request, GetPlanningUserToken(), cancellationToken);
     }
 
+    [HttpPost("draft/discard")]
+    public Task<DiscardDraftResponse> DiscardDraft([FromBody] DiscardDraftRequest request, CancellationToken cancellationToken)
+    {
+        return _planningService.DiscardDraftAsync(request, GetPlanningUserToken(), cancellationToken);
+    }
+
     [HttpGet("undo-redo/availability")]
     public Task<UndoRedoAvailabilityDto> GetUndoRedoAvailability([FromQuery] long scenarioVersionId = 1, CancellationToken cancellationToken = default)
     {

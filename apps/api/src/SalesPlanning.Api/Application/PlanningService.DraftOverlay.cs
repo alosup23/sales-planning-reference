@@ -201,27 +201,48 @@ public sealed partial class PlanningService
         foreach (var (timePeriodId, periodCell) in row.Cells)
         {
             Dictionary<long, GridCellDto>? updatedMeasures = null;
+            var isLeafMonth = metadata.ProductNodes[productNodeId].IsLeaf
+                && string.Equals(metadata.TimePeriods[timePeriodId].Grain, "month", StringComparison.OrdinalIgnoreCase);
 
             foreach (var (measureId, cell) in periodCell.Measures)
             {
                 var coordinate = new PlanningCellCoordinate(scenarioVersionId, measureId, storeId, productNodeId, timePeriodId);
-                if (!draftByKey.TryGetValue(coordinate.Key, out var draftCell))
+                draftByKey.TryGetValue(coordinate.Key, out var draftCell);
+                var lockState = ResolveDraftLockState(
+                    coordinate,
+                    cell.LockState,
+                    draftByKey,
+                    metadata);
+                var isLocked = !string.Equals(lockState, "unlocked", StringComparison.OrdinalIgnoreCase);
+                if (draftCell is null
+                    && isLocked == cell.IsLocked
+                    && string.Equals(lockState, cell.LockState, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
 
                 updatedMeasures ??= new Dictionary<long, GridCellDto>(periodCell.Measures);
-                var lockState = draftCell.IsLocked ? "explicit" : cell.LockState;
-                updatedMeasures[measureId] = new GridCellDto(
-                    draftCell.BaseValue,
-                    draftCell.EffectiveValue,
-                    draftCell.GrowthFactor,
-                    cell.IsLocked || draftCell.IsLocked,
-                    lockState,
-                    string.Equals(draftCell.CellKind, "calculated", StringComparison.OrdinalIgnoreCase),
-                    draftCell.OverrideValue is not null && !draftCell.IsSystemGeneratedOverride,
-                    draftCell.RowVersion,
-                    draftCell.CellKind);
+                if (draftCell is not null && isLeafMonth)
+                {
+                    updatedMeasures[measureId] = new GridCellDto(
+                        draftCell.BaseValue,
+                        draftCell.EffectiveValue,
+                        draftCell.GrowthFactor,
+                        isLocked,
+                        lockState,
+                        string.Equals(draftCell.CellKind, "calculated", StringComparison.OrdinalIgnoreCase),
+                        draftCell.OverrideValue is not null && !draftCell.IsSystemGeneratedOverride,
+                        draftCell.RowVersion,
+                        draftCell.CellKind);
+                    continue;
+                }
+
+                updatedMeasures[measureId] = cell with
+                {
+                    IsLocked = isLocked,
+                    LockState = lockState,
+                    RowVersion = draftCell?.RowVersion ?? cell.RowVersion
+                };
             }
 
             if (updatedMeasures is null)
@@ -235,6 +256,32 @@ public sealed partial class PlanningService
 
         var mergedRow = updatedCells is null ? row : row with { Cells = updatedCells };
         return RecalculateTimeAggregateDisplayCells(mergedRow, metadata);
+    }
+
+    private static string ResolveDraftLockState(
+        PlanningCellCoordinate coordinate,
+        string currentLockState,
+        IReadOnlyDictionary<string, PlanningCell> draftByKey,
+        PlanningMetadataSnapshot metadata)
+    {
+        if (draftByKey.TryGetValue(coordinate.Key, out var draftCell) && draftCell.IsLocked)
+        {
+            return "explicit";
+        }
+
+        var hasImplicitLock = draftByKey.Values.Any(cell =>
+            cell.IsLocked
+            && cell.Coordinate.MeasureId == coordinate.MeasureId
+            && cell.Coordinate.StoreId == coordinate.StoreId
+            && IsDescendantProduct(coordinate.ProductNodeId, cell.Coordinate.ProductNodeId, metadata)
+            && IsDescendantTime(coordinate.TimePeriodId, cell.Coordinate.TimePeriodId, metadata));
+
+        if (hasImplicitLock)
+        {
+            return "implicit";
+        }
+
+        return currentLockState;
     }
 
     private static GridRowDto RecalculateTimeAggregateDisplayCells(GridRowDto row, PlanningMetadataSnapshot metadata)
@@ -281,40 +328,45 @@ public sealed partial class PlanningService
                 var totalCostsValue = SumChild(PlanningMeasures.TotalCosts, useBaseValue: false);
                 var grossProfitValue = SumChild(PlanningMeasures.GrossProfit, useBaseValue: false);
                 var childMeasureCells = childPeriods.Select(period => updatedCells[period.TimePeriodId].Measures[measure.MeasureId]).ToList();
-                var firstGrowthFactor = childMeasureCells[0].GrowthFactor;
-                var uniformGrowthFactor = childMeasureCells.All(cell => cell.GrowthFactor == firstGrowthFactor)
-                    ? firstGrowthFactor
-                    : 1.0m;
+                var derivedBaseValue = measure.MeasureId switch
+                {
+                    PlanningMeasures.SalesRevenue => PlanningMath.NormalizeRevenue(revenueBase),
+                    PlanningMeasures.SoldQuantity => PlanningMath.NormalizeQuantity(quantityBase),
+                    PlanningMeasures.AverageSellingPrice => quantityBase > 0m ? PlanningMath.NormalizeAsp(revenueBase / quantityBase) : 1.00m,
+                    PlanningMeasures.UnitCost => quantityBase > 0m ? PlanningMath.NormalizeUnitCost(totalCostsBase / quantityBase) : 0m,
+                    PlanningMeasures.TotalCosts => PlanningMath.NormalizeTotalCosts(totalCostsBase),
+                    PlanningMeasures.GrossProfit => PlanningMath.NormalizeGrossProfit(grossProfitBase),
+                    PlanningMeasures.GrossProfitPercent => revenueBase > 0m
+                        ? PlanningMath.NormalizeGrossProfitPercent(((revenueBase - totalCostsBase) / revenueBase) * 100m)
+                        : 0m,
+                    _ => currentCell.BaseValue
+                };
+                var derivedEffectiveValue = measure.MeasureId switch
+                {
+                    PlanningMeasures.SalesRevenue => PlanningMath.NormalizeRevenue(revenueValue),
+                    PlanningMeasures.SoldQuantity => PlanningMath.NormalizeQuantity(quantityValue),
+                    PlanningMeasures.AverageSellingPrice => quantityValue > 0m ? PlanningMath.NormalizeAsp(revenueValue / quantityValue) : 1.00m,
+                    PlanningMeasures.UnitCost => quantityValue > 0m ? PlanningMath.NormalizeUnitCost(totalCostsValue / quantityValue) : 0m,
+                    PlanningMeasures.TotalCosts => PlanningMath.NormalizeTotalCosts(totalCostsValue),
+                    PlanningMeasures.GrossProfit => PlanningMath.NormalizeGrossProfit(grossProfitValue),
+                    PlanningMeasures.GrossProfitPercent => revenueValue > 0m
+                        ? PlanningMath.NormalizeGrossProfitPercent(((revenueValue - totalCostsValue) / revenueValue) * 100m)
+                        : 0m,
+                    _ => currentCell.Value
+                };
+                var aggregateGrowthFactor = DeriveAggregateGrowthFactor(derivedBaseValue, derivedEffectiveValue, childMeasureCells);
+                if (measure.MeasureId is PlanningMeasures.AverageSellingPrice or PlanningMeasures.UnitCost or PlanningMeasures.GrossProfitPercent)
+                {
+                    derivedBaseValue = aggregateGrowthFactor != 0m
+                        ? PlanningMath.NormalizeMeasureValue(measure.MeasureId, derivedEffectiveValue / aggregateGrowthFactor)
+                        : derivedBaseValue;
+                }
 
                 currentMeasures[measure.MeasureId] = currentCell with
                 {
-                    BaseValue = measure.MeasureId switch
-                    {
-                        PlanningMeasures.SalesRevenue => PlanningMath.NormalizeRevenue(revenueBase),
-                        PlanningMeasures.SoldQuantity => PlanningMath.NormalizeQuantity(quantityBase),
-                        PlanningMeasures.AverageSellingPrice => quantityBase > 0m ? PlanningMath.NormalizeAsp(revenueBase / quantityBase) : 1.00m,
-                        PlanningMeasures.UnitCost => quantityBase > 0m ? PlanningMath.NormalizeUnitCost(totalCostsBase / quantityBase) : 0m,
-                        PlanningMeasures.TotalCosts => PlanningMath.NormalizeTotalCosts(totalCostsBase),
-                        PlanningMeasures.GrossProfit => PlanningMath.NormalizeGrossProfit(grossProfitBase),
-                        PlanningMeasures.GrossProfitPercent => revenueBase > 0m
-                            ? PlanningMath.NormalizeGrossProfitPercent(((revenueBase - totalCostsBase) / revenueBase) * 100m)
-                            : 0m,
-                        _ => currentCell.BaseValue
-                    },
-                    Value = measure.MeasureId switch
-                    {
-                        PlanningMeasures.SalesRevenue => PlanningMath.NormalizeRevenue(revenueValue),
-                        PlanningMeasures.SoldQuantity => PlanningMath.NormalizeQuantity(quantityValue),
-                        PlanningMeasures.AverageSellingPrice => quantityValue > 0m ? PlanningMath.NormalizeAsp(revenueValue / quantityValue) : 1.00m,
-                        PlanningMeasures.UnitCost => quantityValue > 0m ? PlanningMath.NormalizeUnitCost(totalCostsValue / quantityValue) : 0m,
-                        PlanningMeasures.TotalCosts => PlanningMath.NormalizeTotalCosts(totalCostsValue),
-                        PlanningMeasures.GrossProfit => PlanningMath.NormalizeGrossProfit(grossProfitValue),
-                        PlanningMeasures.GrossProfitPercent => revenueValue > 0m
-                            ? PlanningMath.NormalizeGrossProfitPercent(((revenueValue - totalCostsValue) / revenueValue) * 100m)
-                            : 0m,
-                        _ => currentCell.Value
-                    },
-                    GrowthFactor = uniformGrowthFactor,
+                    BaseValue = derivedBaseValue,
+                    Value = derivedEffectiveValue,
+                    GrowthFactor = aggregateGrowthFactor,
                     IsCalculated = true
                 };
             }
@@ -323,5 +375,26 @@ public sealed partial class PlanningService
         }
 
         return row with { Cells = updatedCells };
+    }
+
+    private static decimal DeriveAggregateGrowthFactor(decimal baseValue, decimal effectiveValue, IReadOnlyList<GridCellDto> childCells)
+    {
+        if (childCells.Count == 0)
+        {
+            return 1.0m;
+        }
+
+        var firstGrowthFactor = childCells[0].GrowthFactor;
+        if (childCells.All(cell => cell.GrowthFactor == firstGrowthFactor))
+        {
+            return firstGrowthFactor;
+        }
+
+        if (baseValue <= 0m || effectiveValue <= 0m)
+        {
+            return 1.0m;
+        }
+
+        return PlanningMath.NormalizeGrowthFactor(effectiveValue / baseValue);
     }
 }

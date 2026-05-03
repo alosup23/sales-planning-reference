@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net.Sockets;
 using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Extensions.DependencyInjection;
@@ -90,13 +91,44 @@ public sealed class PlanningAsyncJobManager : BackgroundService, IPlanningAsyncJ
     {
         if (UseDurableStore)
         {
-            await EnsureDurableSchemaAsync(stoppingToken);
-            await RecoverDurableJobsAsync(stoppingToken);
-            await ExecuteDurableLoopAsync(stoppingToken);
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await EnsureDurableSchemaAsync(stoppingToken);
+                    await RecoverDurableJobsAsync(stoppingToken);
+                    await ExecuteDurableLoopAsync(stoppingToken);
+                    return;
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception exception) when (IsRetryableDatabaseStartupException(exception))
+                {
+                    _logger.LogWarning(
+                        exception,
+                        "Async job manager is waiting for PostgreSQL to become available before starting durable processing.");
+                    await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+                }
+            }
+
             return;
         }
 
         await ExecuteInMemoryLoopAsync(stoppingToken);
+    }
+
+    private static bool IsRetryableDatabaseStartupException(Exception exception)
+    {
+        if (exception is NpgsqlException)
+        {
+            return true;
+        }
+
+        return exception.InnerException is SocketException
+            || exception.InnerException is TimeoutException
+            || (exception.InnerException is not null && IsRetryableDatabaseStartupException(exception.InnerException));
     }
 
     private bool UseDurableStore => !string.IsNullOrWhiteSpace(_connectionString);

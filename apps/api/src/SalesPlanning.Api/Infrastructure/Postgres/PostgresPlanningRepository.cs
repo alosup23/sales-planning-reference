@@ -356,6 +356,21 @@ public sealed partial class PostgresPlanningRepository : IPlanningRepository
             stopwatch.ElapsedMilliseconds);
     }
 
+    public async Task DiscardDraftAsync(long scenarioVersionId, string userId, CancellationToken cancellationToken)
+    {
+        var userContext = PlanningUserIdentity.ParsePlanningUserToken(userId);
+        var stopwatch = Stopwatch.StartNew();
+        await ExecuteDirectMutationAsync(
+            (connection, transaction, ct) => DiscardDraftDirectAsync(connection, transaction, scenarioVersionId, userContext, ct),
+            cancellationToken);
+        InvalidateReadCaches("planning_draft_cells", "planning_draft_command_batches", "planning_draft_command_cell_deltas");
+        _logger.LogInformation(
+            "Discarded planning draft for scenario {ScenarioVersionId} user {UserId} in {ElapsedMs} ms.",
+            scenarioVersionId,
+            userContext.PrimaryUserId,
+            stopwatch.ElapsedMilliseconds);
+    }
+
     public Task RecordSaveCheckpointAsync(long scenarioVersionId, string userId, string mode, DateTimeOffset savedAt, CancellationToken cancellationToken) =>
         RecordSaveCheckpointDirectAsync(scenarioVersionId, userId, mode, savedAt, cancellationToken);
 

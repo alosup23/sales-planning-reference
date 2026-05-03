@@ -982,11 +982,13 @@ public sealed partial class PostgresPlanningRepository
 
         var coordinate = new PlanningCellCoordinate(scenarioVersionId, measure.MeasureId, node.StoreId, node.ProductNodeId, period.TimePeriodId);
         var isLeafMonth = node.IsLeaf && string.Equals(period.Grain, "month", StringComparison.OrdinalIgnoreCase);
-        var lockState = GetLockStateDirect(coordinate, lockedCells, productNodes, timePeriods);
         var nodeCells = cellsByNode.GetValueOrDefault((node.StoreId, node.ProductNodeId)) ?? [];
         var existingCell = nodeCells.FirstOrDefault(cell =>
             cell.Coordinate.TimePeriodId == period.TimePeriodId &&
             cell.Coordinate.MeasureId == measure.MeasureId);
+        var lockState = existingCell is null
+            ? GetLockStateDirect(coordinate, lockedCells, productNodes, timePeriods)
+            : GetLockStateDirect(existingCell, lockedCells, productNodes, timePeriods);
 
         if (existingCell is null)
         {
@@ -1070,7 +1072,13 @@ public sealed partial class PostgresPlanningRepository
                 timePeriods,
                 displayCellCache,
                 useBaseValues: false));
-        var derivedGrowthFactor = DeriveUniformGrowthFactorDirect(childCells);
+        var derivedGrowthFactor = DeriveAggregateGrowthFactorDirect(derivedBaseValue, derivedEffectiveValue, childCells);
+        if (measure.MeasureId is PlanningMeasures.AverageSellingPrice or PlanningMeasures.UnitCost or PlanningMeasures.GrossProfitPercent)
+        {
+            derivedBaseValue = derivedGrowthFactor != 0m
+                ? PlanningMath.NormalizeMeasureValue(measure.MeasureId, derivedEffectiveValue / derivedGrowthFactor)
+                : derivedBaseValue;
+        }
         var calculated = new GridCellDto(
             derivedBaseValue,
             derivedEffectiveValue,
@@ -1208,7 +1216,10 @@ public sealed partial class PostgresPlanningRepository
         };
     }
 
-    private static decimal DeriveUniformGrowthFactorDirect(IReadOnlyList<GridCellDto> childCells)
+    private static decimal DeriveAggregateGrowthFactorDirect(
+        decimal baseValue,
+        decimal effectiveValue,
+        IReadOnlyList<GridCellDto> childCells)
     {
         if (childCells.Count == 0)
         {
@@ -1216,9 +1227,17 @@ public sealed partial class PostgresPlanningRepository
         }
 
         var first = childCells[0].GrowthFactor;
-        return childCells.All(cell => cell.GrowthFactor == first)
-            ? first
-            : 1.0m;
+        if (childCells.All(cell => cell.GrowthFactor == first))
+        {
+            return first;
+        }
+
+        if (baseValue <= 0m || effectiveValue <= 0m)
+        {
+            return 1.0m;
+        }
+
+        return PlanningMath.NormalizeGrowthFactor(effectiveValue / baseValue);
     }
 
     private static bool IsEffectivelyLockedDirect(
