@@ -67,6 +67,7 @@ Key behavior:
 - responsive layout for smaller screens
 - compact mode starts on by default
 - visible measures can be toggled on or off without changing calculation behavior
+- compact-mode and visible-measure choices survive refresh
 - explicit locks are highlighted in light pastel purple
 - implicit locks are highlighted in pastel yellow
 - effective cell values are shown directly in the grid
@@ -200,6 +201,7 @@ Best use:
 - users expand only the branches they need
 - store view follows the store-first hierarchy
 - department view follows the currently selected department layout
+- department view opens with the Department landing level expanded
 - department expansion is not limited to a single selected store when `All Stores` is in effect
 - normal edits should not collapse and re-expand the current hierarchy branch
 
@@ -224,6 +226,7 @@ Best use:
 - weights are applied deterministically
 - residual rounding is deterministic and auditable
 - the requested aggregate target is preserved across the unlocked descendants
+- `GP%` splash is only allowed when the eligible scope has positive `Total Costs`
 
 ## 10. Constraints Imposed By The Planning Engine
 

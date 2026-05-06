@@ -3,6 +3,7 @@
 ## Core Invariants
 
 - all planning views read from the same canonical planning facts
+- store-view and department-view aggregates must reconcile even when branches are loaded lazily
 - parent totals equal the sum of child totals after every committed action
 - same-year recalculation only
 - locked cells are never overwritten by splash or aggregate override paths
@@ -75,6 +76,12 @@ Confirmed measure-specific splash rules:
 - `GP` splash holds `Total Costs` constant, solves `ASP`, recalculates `Sales Revenue`, then allocates `Sales Revenue`
 - `GP%` splash holds `Total Costs` constant, solves `ASP`, recalculates `Sales Revenue`, then allocates `Sales Revenue`
 
+Impossible-edit rules:
+
+- reject a `GP%` splash when the target scope has no positive `Total Costs`
+- reject rate-driven or additive requests when every eligible target is locked
+- reject invalid expressions and divide-by-zero before any persistence occurs
+
 Weighting rules:
 
 - use current descendant values as weights
@@ -109,6 +116,7 @@ The system must support reconciliation routines for:
 Additional reconciliation obligations:
 
 - lock-state consistency between read and mutate paths
+- branch reads must include enough descendant data to derive visible aggregate rows correctly
 - growth-factor base stability after reread, undo, redo, save, and restore
 - year total equality versus month sum after every year-level edit or splash
 - branch-scoped splash containment so no month or year outside scope changes

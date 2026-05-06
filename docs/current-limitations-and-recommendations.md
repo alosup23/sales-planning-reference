@@ -9,7 +9,7 @@ This document records the known current limitations of the live Phase 1 UAT plat
 Current limitation:
 
 - edit, splash, and growth-factor processing now use targeted server-side working sets, but the highest-volume aggregate paths still do more recalculation work than the final delta-only target model
-- the latest live authenticated regression matrix still shows drift in year-level growth-factor restore paths and some cost- and GP%-driven aggregate target reconciliation
+- the latest focused live replay has removed the prior store-rollup and zero-total-cost `GP%` failures, but one aggregate month `GP%` restore path still misses the original target by display precision
 
 Recommendation:
 
@@ -23,10 +23,13 @@ Recommendation:
 
 ## 1.1 Growth-Factor And Year-Edit Accuracy
 
+Current state:
+
+- persistent `baseValue × growthFactor` semantics are now materially more stable across reread, save, and live year-growth replay than in the earlier UAT builds
+
 Current limitation:
 
-- persistent `baseValue × growthFactor` semantics are not yet fully stable in all year-level scenarios
-- year-level growth-factor restore is still drifting for several measures in the live replay matrix
+- full authenticated matrix replay should still be rerun after the final `GP%` restore fix to confirm there is no remaining year-level drift outside the focused replay set
 
 Recommendation:
 
@@ -38,13 +41,14 @@ Recommendation:
 
 Current limitation:
 
-- `GP%` and `Total Costs` paths still show rule drift in some live year and aggregate scenarios
+- the remaining known live derived-measure drift is concentrated in one aggregate month `GP%` restore scenario after forward splash and restore
 
 Recommendation:
 
 - encode all measure rules in a single explicit rule engine or measure-strategy layer
 - prohibit ambiguous fallback behavior inside ad hoc service methods
 - add measure-by-measure contract tests across leaf month, leaf year, aggregate month, and aggregate year
+- instrument forward-and-restore replay for `GP%` so total revenue, total costs, and feasible equivalent targets are captured in logs
 
 ## 2. ECS Network Posture
 
@@ -128,7 +132,7 @@ Remaining work:
 
 ## 8. Priority Recommendation Order
 
-1. Fix year-level growth-factor persistence and restore drift
+1. Close the remaining aggregate month `GP%` restore exactness gap
 2. Normalize all derived-measure edit and splash rules into one explicit rule engine
 3. Delta recalculation and persisted aggregate optimization
 4. Complete master-data admin UX separation and CRUD consistency

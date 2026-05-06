@@ -44,6 +44,11 @@ This document records the final deployed Phase 1 UAT AWS runtime, the current li
 - ALB listener with:
   - default `403`
   - forward only when the CloudFront origin header is present
+- environment wake and idle control hosted behind a lightweight control plane:
+  - CloudFront and web remain always available
+  - ECS and PostgreSQL are started when authenticated usage resumes
+  - ECS is allowed to scale down to `0` after idle windows
+  - PostgreSQL is stopped after a longer idle window once the API tier is already down
 
 ### 3.3 Database
 
@@ -130,6 +135,8 @@ This document records the final deployed Phase 1 UAT AWS runtime, the current li
 
 - one active ECS task
 - one active PostgreSQL instance
+- automatic wake on demand for authenticated usage
+- idle scale-down for ECS and delayed stop for PostgreSQL
 - one parked rollback DB only during transition windows
 - no Redis yet
 - no Route 53 custom domain yet

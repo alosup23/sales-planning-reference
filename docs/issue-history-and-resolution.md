@@ -42,19 +42,24 @@ This document records the major issues encountered through the UAT build history
 | 32 | Leaf year `Unit Cost` behaved like an aggregate-only rule and was rejected | leaf-scoped annual override routing was corrected in the planning service | Yes |
 | 33 | Read and mutate paths disagreed on some effective lock states | read-side effective lock logic and draft overlay were aligned to prevent unlocked presentation of effectively locked cells | Yes |
 | 34 | Planning views did not distinguish explicit locks from inherited locks visually | grid contract was extended with `lockState` and the UI now highlights explicit and implicit locks differently | Yes |
-| 35 | Post-deploy authenticated regression replay found no hard failures but still surfaced year growth-factor and some cost/GP% drift | these scenarios are now explicitly documented as open refactor obligations and must be covered by the next total refactor test matrix | No |
+| 35 | Post-deploy authenticated regression replay found no hard failures but still surfaced year growth-factor and some cost/GP% drift | these scenarios were promoted into targeted live replay coverage and isolated for remediation | Partially |
+| 36 | Store-view aggregate rows could show zeros on expanded branches while descendant leaves were non-zero | branch and slice read paths now load enough descendant cells to derive visible aggregates correctly | Yes |
+| 37 | The wake/sleep controller could scale the API tier back down during warm-up | wake heartbeat and warm-up protection were added so authenticated startup can reach a ready state reliably | Yes |
+| 38 | Production support had no safe draft reset path for live regression or recovery | `POST /api/v1/draft/discard` was added as the supported production draft reset endpoint | Yes |
+| 39 | Aggregate `GP%` splash against zero-cost scopes could succeed with invalid semantics | the service now rejects aggregate `GP%` splash when the eligible scope has no positive `Total Costs` | Yes |
+| 40 | Aggregate month `GP%` restore still drifts in one live replay scenario | additional residual and equivalent-target reconciliation work is in progress; the live `MKAP` restore path remains the last known planning-accuracy warning | No |
 
 ## Still Open During This Document Revision
 
-- The latest deployed planning runtime no longer shows hard failures in the authenticated matrix replay, but these open behavioral drifts remain:
-  - year-level growth-factor base and restore stability
-  - some `Total Costs` aggregate target reconciliation drift
-  - some `GP%` year-edit preservation drift
+- The latest deployed planning runtime no longer shows the previous store-view aggregate read failure, year-growth hard drift, or zero-total-cost `GP%` contract bug.
+- The remaining live warning under focused replay is:
+  - aggregate month `GP%` restore exactness on the `MKAP` path
 
 ## Review Notes
 
 - All user-reported defects from the issue history were either fixed in code or converted into explicit tracked deployment follow-up items.
-- The remaining high-priority items are now architectural and operational rather than missing feature work:
+- The remaining high-priority items are now:
+  - final aggregate month `GP%` restore exactness
   - stricter delta-only recalculation
   - private-subnet ECS
   - HTTPS from CloudFront to ALB

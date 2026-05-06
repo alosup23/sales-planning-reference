@@ -32,6 +32,7 @@ This document lists the current Phase 1 UAT API endpoints and describes the main
 - `POST /api/v1/actions/redo`
 - `POST /api/v1/growth-factors/apply`
 - `POST /api/v1/save`
+- `POST /api/v1/draft/discard`
 - `POST /api/v1/rows`
 - `POST /api/v1/rows/delete`
 - `POST /api/v1/years/generate-next`
@@ -131,10 +132,11 @@ This document lists the current Phase 1 UAT API endpoints and describes the main
 
 1. User signs in through Microsoft Entra.
 2. Browser loads the web bundle from CloudFront.
-3. App requests:
+3. The web client wakes the UAT environment when required before attempting authenticated planning calls.
+4. App requests:
    - planning store scopes
    - active slice for the current planning view
-4. Grid renders only the scoped planning data needed for the starting view.
+5. Grid renders only the scoped planning data needed for the starting view.
 
 ### 8.2 Store-view branch expansion
 
@@ -146,7 +148,7 @@ This document lists the current Phase 1 UAT API endpoints and describes the main
 ### 8.3 Department-view branch expansion
 
 1. User opens `Planning - by Department`.
-2. App starts with departments collapsed.
+2. App starts with the Department landing level expanded.
 3. Expansion follows the selected department layout:
    - `Department -> Store -> Class -> Subclass`
    - `Department -> Class -> Store -> Subclass`
@@ -174,7 +176,15 @@ This document lists the current Phase 1 UAT API endpoints and describes the main
 5. For rate measures, the server first converts the request into the appropriate additive target before allocation.
 6. Weights are applied deterministically.
 7. Residual rounding is allocated deterministically.
-8. Server returns the changed-cell patches.
+8. Aggregate `GP%` splash is rejected if the eligible target scope has zero `Total Costs`.
+9. Server returns the changed-cell patches.
+
+### 7.5.1 Draft discard
+
+1. User or support flow invokes `POST /draft/discard`.
+2. Server deletes the active user draft for the scenario.
+3. The next read overlays only committed facts until a new draft is created.
+4. This endpoint is the safe production reset path used for live validation and recovery.
 
 ### 7.6 Lock / unlock
 
@@ -245,3 +255,4 @@ This document lists the current Phase 1 UAT API endpoints and describes the main
 - Import, export, and reconciliation are async job flows with progress reporting and durable PostgreSQL-backed job state.
 - Reconciliation can also be scheduled from the durable scheduler tables and run independently of a user session.
 - The current UAT runtime is optimized for scoped planning interactions, not unlimited full-hierarchy expansion.
+- Branch read responses must include enough descendant data to derive visible aggregate rows correctly in both Store and Department projections.

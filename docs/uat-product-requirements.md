@@ -144,6 +144,7 @@ The planning grid must:
 - allow users to toggle visible measures on and off without removing those measures from calculation, aggregation, or splash behavior
 - preserve compact-mode and visible-measure preferences across refreshes
 - keep the active hierarchy expansion state stable during normal edits
+- when `Planning - by Department` opens, the Department level must already be expanded
 - highlight explicit locks with a light pastel purple background
 - highlight implicit or inherited locks with a pastel yellow background
 - show effective values in cells
@@ -239,6 +240,7 @@ Top-down scope rules:
 - aggregate year splash affects eligible descendants inside that fiscal year only
 - locked descendants are excluded
 - residual rounding must reconcile deterministically at the lowest editable unlocked target level
+- store-view and department-view branch reads must derive the same aggregate answer even when only part of the hierarchy is loaded in the UI
 
 Additive splash rules:
 
@@ -252,11 +254,13 @@ Rate splash rules:
 - `Unit Cost` splash is not allowed at aggregate level
 - `GP` splash holds `Total Costs` constant, solves `ASP`, recalculates `Sales Revenue`, then allocates `Sales Revenue`
 - `GP%` splash holds `Total Costs` constant, solves `ASP`, recalculates `Sales Revenue`, then allocates `Sales Revenue`
+- `GP%` splash must fail with a clear user error when the eligible target scope has zero `Total Costs`
 
 Allocation rules:
 
 - use current descendant values as weights
 - if all weights are zero, fall back to equal distribution across eligible unlocked descendants
+- any restore path must return to the pre-edit aggregate value within the published display precision for that measure
 
 ### 4.2.3 Growth factor rules
 
