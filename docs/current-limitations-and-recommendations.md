@@ -9,7 +9,7 @@ This document records the known current limitations of the live Phase 1 UAT plat
 Current limitation:
 
 - edit, splash, and growth-factor processing now use targeted server-side working sets, but the highest-volume aggregate paths still do more recalculation work than the final delta-only target model
-- the latest focused live replay has removed the prior store-rollup and zero-total-cost `GP%` failures, but one aggregate month `GP%` restore path still misses the original target by display precision
+- the latest focused live replay has removed the prior store-rollup, zero-total-cost `GP%`, and aggregate month `GP%` restore failures, but the full authenticated matrix should still be rerun after each material planning-engine change
 
 Recommendation:
 
@@ -29,7 +29,7 @@ Current state:
 
 Current limitation:
 
-- full authenticated matrix replay should still be rerun after the final `GP%` restore fix to confirm there is no remaining year-level drift outside the focused replay set
+- full authenticated matrix replay should still be rerun after each material planning-engine change to confirm there is no remaining year-level drift outside the focused replay set
 
 Recommendation:
 
@@ -39,16 +39,20 @@ Recommendation:
 
 ## 1.2 Derived Measure Rule Drift
 
+Current state:
+
+- the focused live `GP%` forward-and-restore replay now returns the expected aggregate value on the target path, including the previously noisy `MKAP` scenario
+
 Current limitation:
 
-- the remaining known live derived-measure drift is concentrated in one aggregate month `GP%` restore scenario after forward splash and restore
+- broader authenticated replay coverage is still required after planning-engine changes so equivalent-target and restore paths remain accurate across other branches, stores, and lock combinations
 
 Recommendation:
 
 - encode all measure rules in a single explicit rule engine or measure-strategy layer
 - prohibit ambiguous fallback behavior inside ad hoc service methods
 - add measure-by-measure contract tests across leaf month, leaf year, aggregate month, and aggregate year
-- instrument forward-and-restore replay for `GP%` so total revenue, total costs, and feasible equivalent targets are captured in logs
+- keep instrumented forward-and-restore replay for `GP%` so total revenue, total costs, and feasible equivalent targets are captured in logs whenever regressions reappear
 
 ## 2. ECS Network Posture
 
@@ -132,9 +136,9 @@ Remaining work:
 
 ## 8. Priority Recommendation Order
 
-1. Close the remaining aggregate month `GP%` restore exactness gap
-2. Normalize all derived-measure edit and splash rules into one explicit rule engine
-3. Delta recalculation and persisted aggregate optimization
+1. Normalize all derived-measure edit and splash rules into one explicit rule engine
+2. Delta recalculation and persisted aggregate optimization
+3. Full authenticated regression matrix after each material planning-engine change
 4. Complete master-data admin UX separation and CRUD consistency
 5. Private-subnet ECS with private secret retrieval
 6. ALB HTTPS origin completion

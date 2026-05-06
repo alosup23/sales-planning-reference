@@ -1272,13 +1272,20 @@ public sealed partial class PlanningService : IPlanningService
     private static IEnumerable<decimal> BuildFixedAspQuantityCandidates(decimal currentQuantity, decimal desiredQuantity)
     {
         var seen = new HashSet<decimal>();
+        var maxOffset = Math.Max(
+            96,
+            decimal.ToInt32(Math.Min(
+                240m,
+                Math.Abs(
+                    PlanningMath.NormalizeQuantity(desiredQuantity)
+                    - PlanningMath.NormalizeQuantity(currentQuantity)) + 48m)));
 
         IEnumerable<decimal> Enumerate()
         {
             yield return PlanningMath.NormalizeQuantity(currentQuantity);
             yield return PlanningMath.NormalizeQuantity(desiredQuantity);
 
-            for (var offset = 1; offset <= 48; offset += 1)
+            for (var offset = 1; offset <= maxOffset; offset += 1)
             {
                 yield return PlanningMath.NormalizeQuantity(desiredQuantity - offset);
                 yield return PlanningMath.NormalizeQuantity(desiredQuantity + offset);
@@ -1409,6 +1416,11 @@ public sealed partial class PlanningService : IPlanningService
                 var normalizedGrossProfitPercent = PlanningMath.NormalizeGrossProfitPercent(totalValue);
                 var targetCoordinates = targetCells.Select(cell => cell.Coordinate).ToList();
                 var totalCosts = SumTargetMeasure(targetCoordinates, workingCells, PlanningMeasures.TotalCosts);
+                if (totalCosts <= 0m && normalizedGrossProfitPercent != 0m)
+                {
+                    throw new InvalidOperationException("GP% splash requires positive Total Costs in the target scope.");
+                }
+
                 var targetRevenue = ResolveRevenueForGrossProfitPercent(totalCosts, normalizedGrossProfitPercent);
                 ApplyAggregateAdditiveAllocation(
                     sourceTimePeriodId,
@@ -1420,7 +1432,8 @@ public sealed partial class PlanningService : IPlanningService
                     workingCells,
                     metadata,
                     preserveTotalCostsForRevenue: !allowLeafScopedRateOverride,
-                    preserveQuantityAndTotalCostsForRevenue: allowLeafScopedRateOverride);
+                    preserveQuantityAndTotalCostsForRevenue: allowLeafScopedRateOverride,
+                    targetGrossProfitPercentForRevenue: normalizedGrossProfitPercent);
                 return;
             }
 
@@ -1458,7 +1471,8 @@ public sealed partial class PlanningService : IPlanningService
         long? weightMeasureId = null,
         bool preserveQuantityForRevenue = false,
         bool preserveTotalCostsForRevenue = false,
-        bool preserveQuantityAndTotalCostsForRevenue = false)
+        bool preserveQuantityAndTotalCostsForRevenue = false,
+        decimal? targetGrossProfitPercentForRevenue = null)
     {
         var weightCells = weightMeasureId is null || weightMeasureId == measureId
             ? targetCells
@@ -1507,7 +1521,8 @@ public sealed partial class PlanningService : IPlanningService
                 metadata,
                 preserveQuantityForRevenue,
                 preserveTotalCostsForRevenue,
-                preserveQuantityAndTotalCostsForRevenue);
+                preserveQuantityAndTotalCostsForRevenue,
+                targetGrossProfitPercentForRevenue);
             return;
         }
 
@@ -1767,7 +1782,8 @@ public sealed partial class PlanningService : IPlanningService
         PlanningMetadataSnapshot metadata,
         bool preserveQuantityForRevenue = false,
         bool preserveTotalCostsForRevenue = false,
-        bool preserveQuantityAndTotalCostsForRevenue = false)
+        bool preserveQuantityAndTotalCostsForRevenue = false,
+        decimal? targetGrossProfitPercentForRevenue = null)
     {
         if (targetCoordinates.Count == 0 || allocations.Count == 0)
         {
@@ -1790,6 +1806,49 @@ public sealed partial class PlanningService : IPlanningService
         if (residual == 0m)
         {
             return;
+        }
+
+        if (preserveTotalCostsForRevenue
+            && !preserveQuantityForRevenue
+            && !preserveQuantityAndTotalCostsForRevenue
+            && TryApplyExactRevenueResidualAdjustment(
+                residual,
+                allocations,
+                workingCells))
+        {
+            residual = desiredTotal - SumRevenueTargets(targetCoordinates, workingCells);
+            if (residual == 0m)
+            {
+                return;
+            }
+        }
+
+        if (preserveTotalCostsForRevenue
+            && !preserveQuantityForRevenue
+            && !preserveQuantityAndTotalCostsForRevenue)
+        {
+            OptimizeRevenueResidualWithPreservedAspAndTotalCosts(
+                desiredTotal,
+                allocations,
+                workingCells);
+
+            residual = desiredTotal - SumRevenueTargets(targetCoordinates, workingCells);
+            if (residual == 0m)
+            {
+                return;
+            }
+
+            if (TryApplyExactRevenueResidualAdjustment(
+                    residual,
+                    allocations,
+                    workingCells))
+            {
+                residual = desiredTotal - SumRevenueTargets(targetCoordinates, workingCells);
+                if (residual == 0m)
+                {
+                    return;
+                }
+            }
         }
 
         foreach (var allocation in unlockedTargets)
@@ -1902,6 +1961,40 @@ public sealed partial class PlanningService : IPlanningService
                 return;
             }
         }
+
+        if (preserveTotalCostsForRevenue
+            && !preserveQuantityForRevenue
+            && !preserveQuantityAndTotalCostsForRevenue
+            && TryApplyExactRevenueResidualAdjustment(
+                residual,
+                allocations,
+                workingCells))
+        {
+            residual = desiredTotal - SumRevenueTargets(targetCoordinates, workingCells);
+            if (residual == 0m)
+            {
+                return;
+            }
+        }
+
+        if (targetGrossProfitPercentForRevenue is decimal targetGrossProfitPercent
+            && preserveTotalCostsForRevenue
+            && !preserveQuantityForRevenue
+            && !preserveQuantityAndTotalCostsForRevenue
+            && TryApplyEquivalentGrossProfitPercentRevenueTotal(
+                desiredTotal,
+                targetGrossProfitPercent,
+                targetCoordinates,
+                allocations,
+                workingCells))
+        {
+            var achievedTotal = SumRevenueTargets(targetCoordinates, workingCells);
+            var achievedTotalCosts = SumTargetMeasure(targetCoordinates, workingCells, PlanningMeasures.TotalCosts);
+            if (CalculateGrossProfitPercentFromTotals(achievedTotal, achievedTotalCosts) == PlanningMath.NormalizeGrossProfitPercent(targetGrossProfitPercent))
+            {
+                return;
+            }
+        }
     }
 
     private static void ReconcileAdditiveMeasureResidual(
@@ -1968,6 +2061,353 @@ public sealed partial class PlanningService : IPlanningService
             coordinate.StoreId,
             coordinate.ProductNodeId,
             coordinate.TimePeriodId).Key].EffectiveValue);
+    }
+
+    private sealed record RevenueLeafStateCandidate(
+        PlanningCellCoordinate Coordinate,
+        decimal CurrentRevenue,
+        decimal AchievedRevenue,
+        decimal Score,
+        IReadOnlyDictionary<string, PlanningCell> LeafState);
+
+    private sealed record RevenueResidualPlan(
+        int Delta,
+        decimal Score,
+        IReadOnlyList<RevenueLeafStateCandidate> Candidates);
+
+    private static bool TryApplyExactRevenueResidualAdjustment(
+        decimal residual,
+        IReadOnlyList<SplashAllocation> allocations,
+        IDictionary<string, PlanningCell> workingCells)
+    {
+        var targetResidual = decimal.ToInt32(residual);
+        if (targetResidual == 0)
+        {
+            return true;
+        }
+
+        var searchWindow = Math.Max(Math.Abs(targetResidual) + 24, 64);
+        var unlockedAllocations = allocations
+            .Where(allocation => !allocation.Cell.IsLocked)
+            .ToList();
+        if (unlockedAllocations.Count == 0)
+        {
+            return false;
+        }
+
+        var candidateSets = unlockedAllocations
+            .Select(allocation =>
+            {
+                var revenueCoordinate = new PlanningCellCoordinate(
+                    allocation.Cell.Coordinate.ScenarioVersionId,
+                    PlanningMeasures.SalesRevenue,
+                    allocation.Cell.Coordinate.StoreId,
+                    allocation.Cell.Coordinate.ProductNodeId,
+                    allocation.Cell.Coordinate.TimePeriodId);
+                var currentRevenue = workingCells[revenueCoordinate.Key].EffectiveValue;
+                var desiredLeafRevenue = Math.Max(0m, currentRevenue + residual);
+
+                return BuildPreservedAspRevenueCandidates(
+                        allocation,
+                        desiredLeafRevenue,
+                        workingCells)
+                    .Where(candidate => Math.Abs(decimal.ToInt32(candidate.AchievedRevenue - candidate.CurrentRevenue)) <= searchWindow)
+                    .ToList();
+            })
+            .Where(candidates => candidates.Count > 0)
+            .ToList();
+        if (candidateSets.Count == 0)
+        {
+            return false;
+        }
+
+        var plans = new Dictionary<int, RevenueResidualPlan>
+        {
+            [0] = new RevenueResidualPlan(0, 0m, [])
+        };
+
+        foreach (var candidateSet in candidateSets)
+        {
+            var nextPlans = new Dictionary<int, RevenueResidualPlan>();
+            foreach (var existingPlan in plans.Values)
+            {
+                foreach (var candidate in candidateSet)
+                {
+                    var delta = existingPlan.Delta + decimal.ToInt32(candidate.AchievedRevenue - candidate.CurrentRevenue);
+                    if (Math.Abs(delta) > searchWindow)
+                    {
+                        continue;
+                    }
+
+                    var score = existingPlan.Score + candidate.Score;
+                    var combinedCandidates = existingPlan.Candidates.Concat([candidate]).ToList();
+                    if (nextPlans.TryGetValue(delta, out var currentBest)
+                        && currentBest.Score <= score)
+                    {
+                        continue;
+                    }
+
+                    nextPlans[delta] = new RevenueResidualPlan(delta, score, combinedCandidates);
+                }
+            }
+
+            plans = nextPlans;
+            if (plans.Count == 0)
+            {
+                return false;
+            }
+        }
+
+        if (!plans.TryGetValue(targetResidual, out var exactPlan))
+        {
+            return false;
+        }
+
+        foreach (var candidate in exactPlan.Candidates)
+        {
+            CopyLeafMeasureState(candidate.LeafState, candidate.Coordinate, workingCells);
+        }
+
+        return true;
+    }
+
+    private static void OptimizeRevenueResidualWithPreservedAspAndTotalCosts(
+        decimal desiredTotal,
+        IReadOnlyList<SplashAllocation> allocations,
+        IDictionary<string, PlanningCell> workingCells)
+    {
+        var unlockedAllocations = allocations
+            .Where(allocation => !allocation.Cell.IsLocked)
+            .ToList();
+        if (unlockedAllocations.Count == 0)
+        {
+            return;
+        }
+
+        var currentTotal = unlockedAllocations.Sum(allocation => workingCells[new PlanningCellCoordinate(
+            allocation.Cell.Coordinate.ScenarioVersionId,
+            PlanningMeasures.SalesRevenue,
+            allocation.Cell.Coordinate.StoreId,
+            allocation.Cell.Coordinate.ProductNodeId,
+            allocation.Cell.Coordinate.TimePeriodId).Key].EffectiveValue);
+        var initialResidual = decimal.ToInt32(desiredTotal - currentTotal);
+        if (initialResidual == 0)
+        {
+            return;
+        }
+
+        var candidateSets = unlockedAllocations
+            .Select(allocation => BuildPreservedAspRevenueCandidates(
+                allocation,
+                PlanningMath.NormalizeRevenue(allocation.NewValue),
+                workingCells))
+            .Where(candidates => candidates.Count > 0)
+            .ToList();
+        if (candidateSets.Count == 0)
+        {
+            return;
+        }
+
+        var plans = new Dictionary<int, RevenueResidualPlan>
+        {
+            [0] = new RevenueResidualPlan(0, 0m, [])
+        };
+
+        foreach (var candidateSet in candidateSets)
+        {
+            var nextPlans = new Dictionary<int, RevenueResidualPlan>();
+            foreach (var existingPlan in plans.Values)
+            {
+                foreach (var candidate in candidateSet)
+                {
+                    var delta = existingPlan.Delta + decimal.ToInt32(candidate.AchievedRevenue - candidate.CurrentRevenue);
+                    var score = existingPlan.Score + candidate.Score;
+                    var combinedCandidates = existingPlan.Candidates.Concat([candidate]).ToList();
+                    if (nextPlans.TryGetValue(delta, out var currentBest)
+                        && currentBest.Score <= score)
+                    {
+                        continue;
+                    }
+
+                    nextPlans[delta] = new RevenueResidualPlan(delta, score, combinedCandidates);
+                }
+            }
+
+            plans = PruneRevenueResidualPlans(nextPlans, initialResidual);
+        }
+
+        var bestPlan = plans.Values
+            .OrderBy(plan => Math.Abs(initialResidual - plan.Delta))
+            .ThenBy(plan => plan.Score)
+            .FirstOrDefault();
+        if (bestPlan is null || Math.Abs(initialResidual - bestPlan.Delta) >= Math.Abs(initialResidual))
+        {
+            return;
+        }
+
+        foreach (var candidate in bestPlan.Candidates)
+        {
+            CopyLeafMeasureState(candidate.LeafState, candidate.Coordinate, workingCells);
+        }
+    }
+
+    private static bool TryApplyEquivalentGrossProfitPercentRevenueTotal(
+        decimal desiredTotal,
+        decimal targetGrossProfitPercent,
+        IReadOnlyList<PlanningCellCoordinate> targetCoordinates,
+        IReadOnlyList<SplashAllocation> allocations,
+        IDictionary<string, PlanningCell> workingCells)
+    {
+        var normalizedTargetGrossProfitPercent = PlanningMath.NormalizeGrossProfitPercent(targetGrossProfitPercent);
+        var totalCosts = SumTargetMeasure(targetCoordinates, workingCells, PlanningMeasures.TotalCosts);
+        var currentTotal = SumRevenueTargets(targetCoordinates, workingCells);
+        if (CalculateGrossProfitPercentFromTotals(currentTotal, totalCosts) == normalizedTargetGrossProfitPercent)
+        {
+            return true;
+        }
+
+        var baselineState = CloneSplashAllocationLeafStates(allocations, workingCells);
+        for (var offset = 1m; offset <= 5000m; offset += 1m)
+        {
+            foreach (var sign in new[] { -1m, 1m })
+            {
+                var candidateTotal = PlanningMath.NormalizeRevenue(desiredTotal + (offset * sign));
+                if (candidateTotal <= 0m
+                    || CalculateGrossProfitPercentFromTotals(candidateTotal, totalCosts) != normalizedTargetGrossProfitPercent)
+                {
+                    continue;
+                }
+
+                var candidateWorkingCells = CloneCellMap(baselineState);
+                var candidateResidual = candidateTotal - currentTotal;
+                if (!TryApplyExactRevenueResidualAdjustment(candidateResidual, allocations, candidateWorkingCells))
+                {
+                    OptimizeRevenueResidualWithPreservedAspAndTotalCosts(candidateTotal, allocations, candidateWorkingCells);
+                    candidateResidual = candidateTotal - SumRevenueTargets(targetCoordinates, candidateWorkingCells);
+                    if (candidateResidual != 0m
+                        && !TryApplyExactRevenueResidualAdjustment(candidateResidual, allocations, candidateWorkingCells))
+                    {
+                        continue;
+                    }
+                }
+
+                var achievedTotal = SumRevenueTargets(targetCoordinates, candidateWorkingCells);
+                if (achievedTotal != candidateTotal
+                    || CalculateGrossProfitPercentFromTotals(achievedTotal, totalCosts) != normalizedTargetGrossProfitPercent)
+                {
+                    continue;
+                }
+
+                CopyCellMap(candidateWorkingCells, workingCells);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static Dictionary<int, RevenueResidualPlan> PruneRevenueResidualPlans(
+        IReadOnlyDictionary<int, RevenueResidualPlan> plans,
+        int targetResidual)
+    {
+        const int maxPlans = 2048;
+        return plans.Values
+            .OrderBy(plan => Math.Abs(targetResidual - plan.Delta))
+            .ThenBy(plan => plan.Score)
+            .Take(maxPlans)
+            .ToDictionary(plan => plan.Delta, plan => plan);
+    }
+
+    private static IReadOnlyList<RevenueLeafStateCandidate> BuildPreservedAspRevenueCandidates(
+        SplashAllocation allocation,
+        decimal requestedTargetRevenue,
+        IDictionary<string, PlanningCell> workingCells)
+    {
+        var coordinate = new PlanningCellCoordinate(
+            allocation.Cell.Coordinate.ScenarioVersionId,
+            PlanningMeasures.SalesRevenue,
+            allocation.Cell.Coordinate.StoreId,
+            allocation.Cell.Coordinate.ProductNodeId,
+            allocation.Cell.Coordinate.TimePeriodId);
+        var revenueCell = workingCells[coordinate.Key];
+        var quantityCell = workingCells[new PlanningCellCoordinate(
+            coordinate.ScenarioVersionId,
+            PlanningMeasures.SoldQuantity,
+            coordinate.StoreId,
+            coordinate.ProductNodeId,
+            coordinate.TimePeriodId).Key];
+        var aspCell = workingCells[new PlanningCellCoordinate(
+            coordinate.ScenarioVersionId,
+            PlanningMeasures.AverageSellingPrice,
+            coordinate.StoreId,
+            coordinate.ProductNodeId,
+            coordinate.TimePeriodId).Key];
+
+        var currentRevenue = revenueCell.EffectiveValue;
+        var targetRevenue = PlanningMath.NormalizeRevenue(requestedTargetRevenue);
+        var currentQuantity = GetEffectiveDriverValue(quantityCell, PlanningMeasures.SoldQuantity);
+        var preservedAsp = GetEffectiveDriverValue(aspCell, PlanningMeasures.AverageSellingPrice);
+        if (preservedAsp <= 0m)
+        {
+            return [];
+        }
+
+        var candidates = new List<RevenueLeafStateCandidate>();
+        var seenRevenues = new HashSet<decimal>();
+
+        foreach (var quantityCandidate in BuildFixedAspQuantityCandidates(currentQuantity, targetRevenue / preservedAsp))
+        {
+            var candidateRevenue = PlanningMath.CalculateRevenue(quantityCandidate, preservedAsp);
+            if (!seenRevenues.Add(candidateRevenue))
+            {
+                continue;
+            }
+
+            var leafState = CloneLeafMeasureState(coordinate, workingCells);
+            ApplyExactRevenueLeafStatePreservingAspAndTotalCosts(
+                coordinate,
+                candidateRevenue,
+                leafState[new PlanningCellCoordinate(coordinate.ScenarioVersionId, PlanningMeasures.SoldQuantity, coordinate.StoreId, coordinate.ProductNodeId, coordinate.TimePeriodId).Key],
+                leafState[new PlanningCellCoordinate(coordinate.ScenarioVersionId, PlanningMeasures.AverageSellingPrice, coordinate.StoreId, coordinate.ProductNodeId, coordinate.TimePeriodId).Key],
+                leafState[new PlanningCellCoordinate(coordinate.ScenarioVersionId, PlanningMeasures.UnitCost, coordinate.StoreId, coordinate.ProductNodeId, coordinate.TimePeriodId).Key],
+                leafState[coordinate.Key],
+                leafState[new PlanningCellCoordinate(coordinate.ScenarioVersionId, PlanningMeasures.TotalCosts, coordinate.StoreId, coordinate.ProductNodeId, coordinate.TimePeriodId).Key],
+                leafState[new PlanningCellCoordinate(coordinate.ScenarioVersionId, PlanningMeasures.GrossProfit, coordinate.StoreId, coordinate.ProductNodeId, coordinate.TimePeriodId).Key],
+                leafState[new PlanningCellCoordinate(coordinate.ScenarioVersionId, PlanningMeasures.GrossProfitPercent, coordinate.StoreId, coordinate.ProductNodeId, coordinate.TimePeriodId).Key]);
+
+            var achievedRevenue = leafState[coordinate.Key].EffectiveValue;
+            var achievedQuantity = leafState[new PlanningCellCoordinate(
+                coordinate.ScenarioVersionId,
+                PlanningMeasures.SoldQuantity,
+                coordinate.StoreId,
+                coordinate.ProductNodeId,
+                coordinate.TimePeriodId).Key].EffectiveValue;
+            var score = Math.Abs(achievedRevenue - targetRevenue)
+                + (Math.Abs(achievedQuantity - currentQuantity) / 1000m);
+
+            candidates.Add(new RevenueLeafStateCandidate(
+                coordinate,
+                currentRevenue,
+                achievedRevenue,
+                score,
+                leafState));
+        }
+
+        if (!seenRevenues.Contains(currentRevenue))
+        {
+            candidates.Add(new RevenueLeafStateCandidate(
+                coordinate,
+                currentRevenue,
+                currentRevenue,
+                Math.Abs(currentRevenue - targetRevenue),
+                CloneLeafMeasureState(coordinate, workingCells)));
+        }
+
+        return candidates
+            .OrderBy(candidate => candidate.Score)
+            .ThenBy(candidate => Math.Abs(candidate.AchievedRevenue - targetRevenue))
+            .Take(96)
+            .ToList();
     }
 
     private static bool TryResolveRevenueLeafState(
@@ -2183,6 +2623,7 @@ public sealed partial class PlanningService : IPlanningService
                 }
             }
         }
+
     }
 
     private static decimal GetCellBaseValue(PlanningCell cell)
@@ -2501,6 +2942,45 @@ public sealed partial class PlanningService : IPlanningService
         }
 
         return result;
+    }
+
+    private static Dictionary<string, PlanningCell> CloneSplashAllocationLeafStates(
+        IReadOnlyList<SplashAllocation> allocations,
+        IDictionary<string, PlanningCell> workingCells)
+    {
+        var result = new Dictionary<string, PlanningCell>(StringComparer.Ordinal);
+        foreach (var coordinate in allocations
+                     .Select(allocation => allocation.Cell.Coordinate)
+                     .DistinctBy(coordinate => coordinate.Key))
+        {
+            foreach (var measureId in PlanningMeasures.Definitions.Select(definition => definition.MeasureId))
+            {
+                var leafCoordinate = new PlanningCellCoordinate(
+                    coordinate.ScenarioVersionId,
+                    measureId,
+                    coordinate.StoreId,
+                    coordinate.ProductNodeId,
+                    coordinate.TimePeriodId);
+                result[leafCoordinate.Key] = workingCells[leafCoordinate.Key].Clone();
+            }
+        }
+
+        return result;
+    }
+
+    private static Dictionary<string, PlanningCell> CloneCellMap(IReadOnlyDictionary<string, PlanningCell> source)
+    {
+        return source.ToDictionary(entry => entry.Key, entry => entry.Value.Clone(), StringComparer.Ordinal);
+    }
+
+    private static void CopyCellMap(
+        IReadOnlyDictionary<string, PlanningCell> source,
+        IDictionary<string, PlanningCell> destination)
+    {
+        foreach (var entry in source)
+        {
+            destination[entry.Key] = entry.Value.Clone();
+        }
     }
 
     private static void CopyLeafMeasureState(

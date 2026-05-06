@@ -308,11 +308,12 @@ public sealed partial class PostgresPlanningRepository
                 .Where(node => ShouldIncludeGridNodeDirect(node, selectedStoreId, selectedDepartmentLabel, expandedNodeSet, productNodes, expandAllBranches))
                 .ToList();
 
+            var calculationNodeIds = GetDisplayCalculationProductNodeIdsDirect(visibleNodes, productNodes);
             var scenarioCells = await LoadScenarioCellsForNodesDirectAsync(
                 connection,
                 transaction,
                 scenarioVersionId,
-                visibleNodes.Select(node => node.ProductNodeId).ToArray(),
+                calculationNodeIds,
                 ct);
 
             var rows = BuildGridRowsDirect(scenarioVersionId, visibleNodes, scenarioCells, productNodes, timePeriods, stores, hierarchyMappings);
@@ -362,8 +363,7 @@ public sealed partial class PostgresPlanningRepository
             var stores = metadata.Stores;
             var hierarchyMappings = await GetHierarchyMappingsCachedDirectAsync(connection, transaction, ct);
 
-            var relevantNodeIds = children
-                .Select(node => node.ProductNodeId)
+            var relevantNodeIds = GetDisplayCalculationProductNodeIdsDirect(children, productNodes)
                 .Concat(GetAncestorProductNodeIdsDirect(parentNode, productNodes))
                 .Distinct()
                 .ToArray();
@@ -898,6 +898,45 @@ public sealed partial class PostgresPlanningRepository
             yield return parentId;
             currentParentId = parentNode.ParentProductNodeId;
         }
+    }
+
+    private static long[] GetDisplayCalculationProductNodeIdsDirect(
+        IReadOnlyCollection<ProductNode> visibleNodes,
+        IReadOnlyDictionary<long, ProductNode> productNodes)
+    {
+        if (visibleNodes.Count == 0)
+        {
+            return [];
+        }
+
+        var visibleNodeIds = visibleNodes
+            .Select(node => node.ProductNodeId)
+            .ToHashSet();
+
+        return productNodes.Values
+            .Where(node => visibleNodeIds.Contains(node.ProductNodeId) || HasVisibleAncestorDirect(node, visibleNodeIds, productNodes))
+            .Select(node => node.ProductNodeId)
+            .Distinct()
+            .ToArray();
+    }
+
+    private static bool HasVisibleAncestorDirect(
+        ProductNode node,
+        IReadOnlySet<long> visibleNodeIds,
+        IReadOnlyDictionary<long, ProductNode> productNodes)
+    {
+        var currentParentId = node.ParentProductNodeId;
+        while (currentParentId is long parentId && productNodes.TryGetValue(parentId, out var parentNode))
+        {
+            if (visibleNodeIds.Contains(parentId))
+            {
+                return true;
+            }
+
+            currentParentId = parentNode.ParentProductNodeId;
+        }
+
+        return false;
     }
 
     private static IReadOnlyList<GridRowDto> BuildGridRowsDirect(

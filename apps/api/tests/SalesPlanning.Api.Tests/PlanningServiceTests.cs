@@ -61,6 +61,36 @@ public sealed class PlanningServiceTests
     }
 
     [Fact]
+    public async Task GetGridSliceAsync_WhenExpandedAggregateIsVisible_RollsUpDescendantValues()
+    {
+        var grid = await _service.GetGridSliceAsync(1, 101, null, new[] { 2100L }, false, "planner.one", CancellationToken.None);
+        var row = Assert.Single(grid.Rows, candidate => candidate.ProductNodeId == 2110);
+        var branch = await _service.GetGridBranchRowsAsync(1, 2110, "planner.one", CancellationToken.None);
+
+        var expectedRevenue = branch.Rows.Sum(candidate =>
+            candidate.Cells[202600].Measures[PlanningMeasures.SalesRevenue].Value);
+        var actualRevenue = row.Cells[202600].Measures[PlanningMeasures.SalesRevenue].Value;
+
+        Assert.True(expectedRevenue > 0m);
+        Assert.Equal(expectedRevenue, actualRevenue);
+    }
+
+    [Fact]
+    public async Task GetGridBranchRowsAsync_WhenAggregateChildIsReturned_RollsUpDescendantValues()
+    {
+        var branch = await _service.GetGridBranchRowsAsync(1, 2100, "planner.one", CancellationToken.None);
+        var row = Assert.Single(branch.Rows, candidate => candidate.ProductNodeId == 2110);
+        var childBranch = await _service.GetGridBranchRowsAsync(1, 2110, "planner.one", CancellationToken.None);
+
+        var expectedRevenue = childBranch.Rows.Sum(candidate =>
+            candidate.Cells[202600].Measures[PlanningMeasures.SalesRevenue].Value);
+        var actualRevenue = row.Cells[202600].Measures[PlanningMeasures.SalesRevenue].Value;
+
+        Assert.True(expectedRevenue > 0m);
+        Assert.Equal(expectedRevenue, actualRevenue);
+    }
+
+    [Fact]
     public async Task GetPlanningStoreScopesAsync_ReturnsStoreRootProductNodeIds()
     {
         var response = await _service.GetPlanningStoreScopesAsync(CancellationToken.None);
@@ -1197,6 +1227,41 @@ public sealed class PlanningServiceTests
 
         var afterRestore = await GetStorePathRowsAsync("Beverages", "Soft Drinks", "Cola");
         Assert.Equal(originalMonthValue, afterRestore.StoreRow.Cells[202601].Measures[PlanningMeasures.GrossProfitPercent].Value);
+    }
+
+    [Fact]
+    public async Task ApplySplashAsync_OnStoreMonthGrossProfitPercent_WithZeroTotalCosts_ThrowsClearError()
+    {
+        var metadata = await _repository.GetMetadataAsync(CancellationToken.None);
+        var zeroMonthRequests = metadata.ProductNodes.Values
+            .Where(node => node.StoreId == 101 && node.IsLeaf)
+            .Select(node => new EditCellRequest(101, node.ProductNodeId, 202601, 0m, "input", null))
+            .ToArray();
+
+        await _service.ApplyEditsAsync(
+            new EditCellsRequest(
+                1,
+                PlanningMeasures.SoldQuantity,
+                "Zero store month quantity",
+                zeroMonthRequests),
+            "planner.one",
+            CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => _service.ApplySplashAsync(
+            new SplashRequest(
+                1,
+                PlanningMeasures.GrossProfitPercent,
+                new SplashCoordinateDto(101, 2000, 202601),
+                0.2m,
+                "proportional",
+                0,
+                "Store month GP% splash with zero total costs",
+                null,
+                [new SplashScopeRootDto(101, 2000)]),
+            "planner.one",
+            CancellationToken.None));
+
+        Assert.Equal("GP% splash requires positive Total Costs in the target scope.", exception.Message);
     }
 
     [Fact]

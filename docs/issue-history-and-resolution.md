@@ -47,20 +47,19 @@ This document records the major issues encountered through the UAT build history
 | 37 | The wake/sleep controller could scale the API tier back down during warm-up | wake heartbeat and warm-up protection were added so authenticated startup can reach a ready state reliably | Yes |
 | 38 | Production support had no safe draft reset path for live regression or recovery | `POST /api/v1/draft/discard` was added as the supported production draft reset endpoint | Yes |
 | 39 | Aggregate `GP%` splash against zero-cost scopes could succeed with invalid semantics | the service now rejects aggregate `GP%` splash when the eligible scope has no positive `Total Costs` | Yes |
-| 40 | Aggregate month `GP%` restore still drifts in one live replay scenario | additional residual and equivalent-target reconciliation work is in progress; the live `MKAP` restore path remains the last known planning-accuracy warning | No |
+| 40 | Aggregate month `GP%` restore drifted in one focused live replay scenario | revenue residual reconciliation was extended, equivalent-target fallback was added, and the focused live `MKAP` forward-and-restore path now returns the expected aggregate value | Yes |
 
 ## Still Open During This Document Revision
 
-- The latest deployed planning runtime no longer shows the previous store-view aggregate read failure, year-growth hard drift, or zero-total-cost `GP%` contract bug.
-- The remaining live warning under focused replay is:
-  - aggregate month `GP%` restore exactness on the `MKAP` path
+- The latest deployed planning runtime no longer shows the previous store-view aggregate read failure, year-growth hard drift, zero-total-cost `GP%` contract bug, or focused `GP%` restore exactness warning.
+- The remaining validation priority is the broader authenticated regression matrix so other stores, branches, and lock combinations are replayed against the updated planning engine.
 
 ## Review Notes
 
 - All user-reported defects from the issue history were either fixed in code or converted into explicit tracked deployment follow-up items.
 - The remaining high-priority items are now:
-  - final aggregate month `GP%` restore exactness
   - stricter delta-only recalculation
+  - broader authenticated regression replay after planning-engine changes
   - private-subnet ECS
   - HTTPS from CloudFront to ALB
   - production-grade observability and alarms
