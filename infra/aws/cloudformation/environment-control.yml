@@ -24,7 +24,7 @@ Parameters:
     MaxValue: 2
   ServiceIdleMinutes:
     Type: Number
-    Default: 20
+    Default: 15
     MinValue: 5
     MaxValue: 240
   DatabaseIdleMinutes:
@@ -43,6 +43,9 @@ Parameters:
   IdleCheckScheduleExpression:
     Type: String
     Default: rate(5 minutes)
+  PrewarmScheduleExpression:
+    Type: String
+    Default: ""
   AllowedOrigin:
     Type: String
     Default: https://d22xc0mfhkv9bk.cloudfront.net
@@ -52,6 +55,9 @@ Parameters:
   EntraApiAudience:
     Type: String
     Default: api://557f0c81-0531-4616-b62e-0b69eb7cb86f
+
+Conditions:
+  EnablePrewarmSchedule: !Not [!Equals [!Ref PrewarmScheduleExpression, ""]]
 
 Resources:
   ControlLogGroup:
@@ -449,6 +455,10 @@ Resources:
 
           def handler(event, _context):
               try:
+                  if (event or {}).get("action") == "start":
+                      result = start_environment()
+                      return to_response(200 if result["ready"] else 202, response_body_from_environment(result, result.get("operations"), result.get("lastWakeAt")))
+
                   method = ((event or {}).get("requestContext") or {}).get("http", {}).get("method")
                   if method == "OPTIONS":
                       return to_response(204, {})
@@ -583,6 +593,27 @@ Resources:
       FunctionName: !Ref ControlFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt IdleCheckRule.Arn
+
+  PrewarmRule:
+    Type: AWS::Events::Rule
+    Condition: EnablePrewarmSchedule
+    Properties:
+      Name: sales-planning-environment-prewarm
+      ScheduleExpression: !Ref PrewarmScheduleExpression
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ControlFunction.Arn
+          Id: environmentPrewarm
+          Input: '{"action":"start"}'
+
+  PrewarmPermission:
+    Type: AWS::Lambda::Permission
+    Condition: EnablePrewarmSchedule
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ControlFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt PrewarmRule.Arn
 
 Outputs:
   ControlApiUrl:

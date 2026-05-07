@@ -34,9 +34,11 @@ The detailed target-state architecture now lives in:
 - Region target for future clean AWS posture: `ap-southeast-1` or another approved Southeast Asia region
 - During UAT keep:
   - `1` database instance
-  - `1` interactive API service instance where possible
+  - `1` warm interactive API task on wake, with autoscaling allowed between `0` and `2`
   - storage autoscaling disabled where free-tier guardrails matter
   - public DB exposure disabled
+  - ECS idle scale-down enabled after `15` minutes
+  - database stop enabled after `60` idle minutes
 
 Note:
 - Exact free-tier eligibility depends on the AWS account plan in effect at deployment time.
@@ -87,7 +89,7 @@ At the time of this document update:
 
 - the live app is running on `ECS Fargate + RDS PostgreSQL`
 - the active RDS instance is in true private subnets
-- the previous RDS instance remains only as a temporary stopped rollback buffer
+- the previous RDS instance is parked as a temporary stopped rollback buffer
 - CloudFront WAF is deployed
 - ALB HTTPS origin completion remains deferred until Route 53 + ACM are in place
 

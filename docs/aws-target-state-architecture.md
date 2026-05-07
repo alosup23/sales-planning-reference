@@ -121,12 +121,12 @@ Current live UAT differs from the final target in these ways:
 
 UAT should optimize cost while preserving interactive performance:
 
-- `1` ECS service for API
+- `1` warm ECS service task for API with autoscaling between `0` and `2`
 - `1` RDS PostgreSQL instance
 - Redis optional at first, but recommended once product/profile volume remains large
 - async import/export as a worker task, not request-time compute
 - prefer one small always-on interactive service before introducing additional worker services
-- keep non-critical off-hours scale-down options available if UAT operating hours allow them
+- keep authenticated wake-on-demand and aggressive idle scale-down enabled for periodic-use environments
 - keep one active database only once rollback retention is no longer required
 
 ### 5.2 Production

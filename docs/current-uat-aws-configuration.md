@@ -37,7 +37,7 @@ This document records the final deployed Phase 1 UAT AWS runtime, the current li
 ### 3.2 Interactive API
 
 - `Amazon ECS Fargate`
-- `1` running task in UAT
+- `1` warm task on wake, with autoscaling between `0` and `2` tasks
 - application image hosted in `Amazon ECR`
 - async job orchestration hosted in the API service
 - async job state, progress, payloads, retention, and downloadable outputs persisted in PostgreSQL
@@ -47,7 +47,7 @@ This document records the final deployed Phase 1 UAT AWS runtime, the current li
 - environment wake and idle control hosted behind a lightweight control plane:
   - CloudFront and web remain always available
   - ECS and PostgreSQL are started when authenticated usage resumes
-  - ECS is allowed to scale down to `0` after idle windows
+  - ECS is allowed to scale down to `0` after `15` idle minutes
   - PostgreSQL is stopped after a longer idle window once the API tier is already down
 
 ### 3.3 Database
@@ -58,7 +58,7 @@ This document records the final deployed Phase 1 UAT AWS runtime, the current li
 - instance class:
   - `db.t3.micro`
 - storage:
-  - `20 GB gp2`
+  - `20 GB gp3` once the in-flight storage conversion completes
 - public access:
   - disabled
 - active subnet group:
@@ -133,10 +133,10 @@ This document records the final deployed Phase 1 UAT AWS runtime, the current li
 
 ## 7. Cost-Aware UAT Decisions
 
-- one active ECS task
+- one warm ECS task on wake, with autoscaling from `0` to `2`
 - one active PostgreSQL instance
 - automatic wake on demand for authenticated usage
-- idle scale-down for ECS and delayed stop for PostgreSQL
+- idle scale-down for ECS after `15` minutes and delayed PostgreSQL stop after `60` minutes
 - one parked rollback DB only during transition windows
 - no Redis yet
 - no Route 53 custom domain yet

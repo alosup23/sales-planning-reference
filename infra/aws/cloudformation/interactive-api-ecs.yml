@@ -54,6 +54,36 @@ Parameters:
     Type: Number
     Default: 2048
     AllowedValues: [512, 1024, 2048, 3072, 4096]
+  AutoScalingMinCapacity:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    MaxValue: 2
+  AutoScalingMaxCapacity:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    MaxValue: 4
+  CpuScaleOutTarget:
+    Type: Number
+    Default: 65
+    MinValue: 20
+    MaxValue: 90
+  MemoryScaleOutTarget:
+    Type: Number
+    Default: 75
+    MinValue: 20
+    MaxValue: 90
+  ScaleInCooldownSeconds:
+    Type: Number
+    Default: 300
+    MinValue: 60
+    MaxValue: 3600
+  ScaleOutCooldownSeconds:
+    Type: Number
+    Default: 120
+    MinValue: 60
+    MaxValue: 3600
   ContainerPort:
     Type: Number
     Default: 8080
@@ -351,6 +381,42 @@ Resources:
           ContainerPort: !Ref ContainerPort
           TargetGroupArn: !Ref ApiTargetGroup
       TaskDefinition: !Ref ApiTaskDefinition
+
+  ApiServiceScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    DependsOn: ApiService
+    Properties:
+      MaxCapacity: !Ref AutoScalingMaxCapacity
+      MinCapacity: !Ref AutoScalingMinCapacity
+      ResourceId: !Sub service/${ClusterName}/${ServiceName}
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  ApiCpuTargetTrackingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: sales-planning-demo-api-cpu-target
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ApiServiceScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleInCooldown: !Ref ScaleInCooldownSeconds
+        ScaleOutCooldown: !Ref ScaleOutCooldownSeconds
+        TargetValue: !Ref CpuScaleOutTarget
+
+  ApiMemoryTargetTrackingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: sales-planning-demo-api-memory-target
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ApiServiceScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageMemoryUtilization
+        ScaleInCooldown: !Ref ScaleInCooldownSeconds
+        ScaleOutCooldown: !Ref ScaleOutCooldownSeconds
+        TargetValue: !Ref MemoryScaleOutTarget
 
 Outputs:
   EcrRepositoryUri:
