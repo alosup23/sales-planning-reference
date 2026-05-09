@@ -94,7 +94,7 @@ Recommendation:
 
 Current limitation:
 
-- the prior DB instance remains as a temporary stopped rollback copy
+- the prior rollback DB instance has been retired in favor of a final manual RDS snapshot
 
 Recommendation:
 
@@ -143,7 +143,7 @@ Remaining work:
 5. Private-subnet ECS with private secret retrieval
 6. ALB HTTPS origin completion
 7. Production observability and alerting
-8. Retire the rollback DB
+8. Apply lifecycle management to the retained rollback snapshot
 9. Phase 2 recommendation APIs and AI review workflow
 
 ## 9. Architecture, UX, Performance, And Security Review

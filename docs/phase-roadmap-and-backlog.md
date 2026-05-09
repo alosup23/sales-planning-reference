@@ -166,7 +166,7 @@ Key backlog:
 - role separation refinement
 - ALB HTTPS origin completion
 - observability finalization
-- deletion of the parked rollback DB after acceptance
+- lifecycle management of the retained rollback snapshot after acceptance
 
 ## Phase 2
 

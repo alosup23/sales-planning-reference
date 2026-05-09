@@ -137,22 +137,23 @@ This document records the final deployed Phase 1 UAT AWS runtime, the current li
 - one active PostgreSQL instance
 - automatic wake on demand for authenticated usage
 - idle scale-down for ECS after `15` minutes and delayed PostgreSQL stop after `60` minutes
-- one parked rollback DB only during transition windows
 - no Redis yet
 - no Route 53 custom domain yet
 - no ALB certificate yet
 
-## 8. Temporary Rollback State
+## 8. Rollback Snapshot State
 
-- previous DB instance:
+- retired rollback DB instance:
   - `sales-planning-demo-pg`
+- final manual snapshot:
+  - `sales-planning-demo-pg-rollback-final-20260509`
 - current state:
-  - stopped or stopping as a temporary rollback copy
+  - the temporary rollback DB instance has been snapshot and deleted
 
 Important note:
 
-- a stopped RDS instance can automatically restart after about `7` days
-- once UAT acceptance is complete, the rollback instance should be snapshotted and deleted to avoid unnecessary cost
+- the retained recovery point is now the manual RDS snapshot above
+- future rollback should restore from that snapshot rather than keeping a second DB instance running or parked
 
 ## 9. Remaining Hardening Steps
 
@@ -161,4 +162,3 @@ Important note:
 - consider moving ECS tasks into private subnets with the required NAT or endpoint strategy
 - consider replacing deployment-time DB credential injection with a private Secrets Manager or SSM retrieval path once the required endpoint strategy is available
 - add richer operational observability and alarms around job backlog, reconciliation failures, and edit latency
-- remove the stopped rollback DB when it is no longer needed

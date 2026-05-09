@@ -89,7 +89,7 @@ At the time of this document update:
 
 - the live app is running on `ECS Fargate + RDS PostgreSQL`
 - the active RDS instance is in true private subnets
-- the previous RDS instance is parked as a temporary stopped rollback buffer
+- the previous RDS instance has been retired after taking a final manual snapshot
 - CloudFront WAF is deployed
 - ALB HTTPS origin completion remains deferred until Route 53 + ACM are in place
 
@@ -106,7 +106,7 @@ Recommended target interactive runtime:
 3. Move ECS tasks into private subnets if the UAT cost model and NAT/VPC endpoint plan permit it.
 4. Convert workbook import/export to async jobs.
 5. Add reconciliation routines and operational dashboards.
-6. Retire the stopped rollback DB once acceptance is complete.
+6. Keep the final rollback snapshot lifecycle-managed and restore from snapshot only if rollback is ever needed.
 
 ## Hydration guidance
 
